@@ -1,0 +1,6 @@
+[shell_environment_policy]
+inherit = "core"
+
+[shell_environment_policy.set]
+AZURE_CONFIG_DIR = "/Users/jokick/.azure-bcp"
+KUBECONFIG = "/Users/jokick/.kube/bcp-config"

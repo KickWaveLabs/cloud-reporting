@@ -1,0 +1,11 @@
+.local/
+.claude/settings.local.json
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+.env
+.DS_Store
+results/
+__pycache__/
+reports/

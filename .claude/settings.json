@@ -1,0 +1,50 @@
+{
+  "env": {
+    "AZURE_CONFIG_DIR": "/Users/jokick/.azure-bcp",
+    "KUBECONFIG": "/Users/jokick/.kube/bcp-config"
+  },
+  "permissions": {
+    "disableBypassPermissionsMode": "disable",
+    "allow": [
+      "Bash(az account show*)",
+      "Bash(az graph query *)",
+      "Bash(az monitor metrics list *)",
+      "Bash(az advisor recommendation list *)"
+    ],
+    "ask": [
+      "Bash(az * create *)",
+      "Bash(az * update *)",
+      "Bash(az * delete *)",
+      "Bash(az * set *)",
+      "Bash(az * add *)",
+      "Bash(az * remove *)",
+      "Bash(az * assign *)",
+      "Bash(az * start *)",
+      "Bash(az * stop *)",
+      "Bash(az * restart *)",
+      "Bash(az * invoke *)",
+      "Bash(az rest *)",
+      "Bash(az keyvault secret *)",
+      "Bash(az aks get-credentials *)",
+      "Bash(az acr credential *)",
+      "Bash(az webapp config appsettings *)",
+      "Bash(az * keys list *)",
+      "Bash(az * list-keys *)",
+      "Bash(az * show-connection-string *)",
+      "Bash(tofu apply *)",
+      "Bash(tofu destroy *)",
+      "Bash(terraform apply *)",
+      "Bash(terraform destroy *)",
+      "Bash(kubectl apply *)",
+      "Bash(kubectl delete *)"
+    ],
+    "deny": [
+      "Read(~/.azure/**)",
+      "Read(~/.azure-bcp/**)",
+      "Bash(az login*)",
+      "Bash(az logout*)",
+      "Bash(az account set*)",
+      "Bash(az account get-access-token*)"
+    ]
+  }
+}
