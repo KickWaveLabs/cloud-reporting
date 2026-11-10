@@ -20,6 +20,8 @@ Guides:
 - [docs/prod-comparison.md](docs/prod-comparison.md): third-party comparison limited to production.
 - [docs/sql-deleted-database-restore.md](docs/sql-deleted-database-restore.md): what PITR and LTR keep
   after a database or server is deleted, where to see it and how to restore it.
+- [docs/backup-export.md](docs/backup-export.md): whether vault, PITR and LTR backups can be downloaded
+  or moved to another vendor, and how.
 - [docs/deck-and-prompts.md](docs/deck-and-prompts.md): slide order, the source of each slide and the
   Copilot prompts to build the deck on the corporate laptop.
 

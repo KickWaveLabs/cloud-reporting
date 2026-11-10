@@ -10,6 +10,7 @@ cost slide; the workbook gives the reference value to check it against.
    A subscription scope shows only that subscription.
 3. Date: Aug–Oct 2026 (custom). Granularity: Monthly. Chart: Column (stacked).
 4. Add the filters of the view below with "Add filter". "Service name" is the meter category.
+   Group by: Meter. Set the three donuts as listed for the view.
 5. Save each view ("Save as") with the name in the heading, so it can be reopened next month.
 6. Take the screenshot with the scope, the date, the filter chips and the "Actual cost" total visible.
 
@@ -18,15 +19,25 @@ sheet `Gasto_medido` (cost by meter) and sheet `Por_ambiente` (cost by environme
 
 ## Views
 
-| # | View | Filters | Group by |
+Every view is grouped by Meter.
+
+| # | View | Filters | Donuts |
 |---|---|---|---|
-| 1 | Backup - vaults | Service name = Backup | Meter |
-| 2 | Backup - manual disk snapshots | Resource type = microsoft.compute/snapshots | Meter |
-| 3 | Backup - Azure Backup snapshots | Resource type = microsoft.compute/restorepointcollections | Meter |
-| 4 | Backup - SQL PITR | Service name = SQL Database; Meter subcategory = Single/Elastic Pool PITR Backup Storage | Meter subcategory |
-| 5 | Backup - SQL Hyperscale PITR | Service name = SQL Database; Meter subcategory = SingleDB Hyperscale - Storage; Meter = every `Backup - ... Data Stored` | Meter |
-| 6 | Backup - SQL LTR | Service name = SQL Database; Meter subcategory = LTR Backup Storage, SingleDB Hyperscale - LTR Backup Storage | Meter subcategory |
-| 7 | Backup - PostgreSQL, MySQL, Cosmos | Service name = Azure Database for PostgreSQL, Azure Database for MySQL, Azure Cosmos DB; Meter contains "Backup" | Service name |
+| 1 | Backup - vaults | Service name = Backup | Environment, Location, default |
+| 2 | Backup - manual disk snapshots | Resource type = microsoft.compute/snapshots | Environment, Location, default |
+| 3 | Backup - Azure Backup snapshots | Resource type = microsoft.compute/restorepointcollections | Environment, Location, default |
+| 4 | Backup - SQL PITR | Service name = SQL Database; Meter subcategory = Single/Elastic Pool PITR Backup Storage | Environment, Location, default |
+| 5 | Backup - SQL Hyperscale PITR | Service name = SQL Database; Meter subcategory = SingleDB Hyperscale - Storage; Meter = every `Backup - ... Data Stored` | Environment, Location, default |
+| 6 | Backup - SQL LTR | Service name = SQL Database; Meter subcategory = LTR Backup Storage, SingleDB Hyperscale - LTR Backup Storage | Environment, Location, default |
+| 7 | Backup - PostgreSQL, MySQL, Cosmos | Service name = Azure Database for PostgreSQL, Azure Database for MySQL, Azure Cosmos DB; Meter contains "Backup" | Environment, Service name, default |
+
+Donuts:
+
+- Environment is Tag > `environment`. "Default" is the third donut as Cost analysis leaves it
+  (Subscription or Resource group); do not change it.
+- Do not use Meter or Meter subcategory in a donut: they do not render usefully there.
+- Donuts and the "Actual cost" total cover the whole date range (Aug–Oct), not October. Do not
+  compare them with the workbook, which uses October only; use the October bar for that.
 
 Notes:
 

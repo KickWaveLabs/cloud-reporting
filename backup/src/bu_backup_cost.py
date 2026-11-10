@@ -61,7 +61,11 @@ def cost_query(ctx, subscription_id, body):
                 continue
             break
         if response.status_code >= 400:
-            error = response.json().get("error", {}) if response.content else {}
+            try:
+                payload = response.json() if response.content else {}
+            except ValueError:
+                payload = {}
+            error = payload.get("error", payload) if isinstance(payload, dict) else {"message": str(payload)[:500]}
             raise common.ArmError(response.status_code, error.get("code", ""), error.get("message", ""), url)
         properties = response.json().get("properties", {})
         columns = [column["name"] for column in properties.get("columns", [])]

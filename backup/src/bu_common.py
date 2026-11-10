@@ -81,8 +81,11 @@ def yes_no(value):
 
 
 def parse_datetime(value):
-    """Parse ARM timestamps. Returns None for empty or .NET minimum values."""
-    if not value or str(value).startswith("0001-01-01"):
+    """Parse ARM timestamps. Returns None for empty or .NET minimum values.
+
+    Azure Backup reports lastBackupTime 2001-01-01T00:00:00 for items never backed up.
+    """
+    if not value or str(value).startswith(("0001-01-01", "2001-01-01T00:00:00")):
         return None
     text = str(value).replace("Z", "+00:00")
     # Trim fractional seconds beyond microseconds, which fromisoformat rejects on older Pythons.
@@ -517,9 +520,14 @@ class AzureContext:
             self.evidence.add_call("GET", url, query.get("api-version", ""), response.status_code)
             if response.status_code >= 400:
                 try:
-                    body = response.json().get("error", {})
+                    payload = response.json()
                 except ValueError:
-                    body = {}
+                    payload = {}
+                # ARM nests the error under "error"; Azure Monitor may return it flat or as a plain string.
+                if isinstance(payload, dict):
+                    body = payload.get("error", payload)
+                else:
+                    body = {"message": str(payload)[:500]}
                 raise ArmError(response.status_code, body.get("code", ""), body.get("message", response.reason), url)
             return response.json() if response.content else {}
         raise ArmError("", "RetryExhausted", "Retries exhausted", url)
