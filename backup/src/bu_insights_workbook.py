@@ -24,6 +24,7 @@ from openpyxl import Workbook
 from openpyxl.comments import Comment
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
+from openpyxl.workbook.defined_name import DefinedName
 
 BACKUP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -75,6 +76,15 @@ DETAIL_SHEETS = {
         "service_type", "subscription", "resource_group", "name", "environment", "cod_app", "engine_version",
         "sku_name", "sku_tier", "max_size_gb", "storage_gb", "native_retention_days", "native_backup_redundancy",
         "native_geo_backup", "ltr_configured", "ltr_max_days", "backup_method", "finding", "severity", "id"]),
+    "D_SQL_servidores": ("database", "database_sql_servers.csv", [
+        "subscription", "resource_group", "server_name", "location", "environment", "environment_evidence",
+        "infrastructure_class", "backup_scope", "database_count", "has_delete_lock", "lock_scope",
+        "deleted_databases_pitr", "id"]),
+    "D_BD_eliminadas": ("database", "database_deleted_backups.csv", [
+        "backup_type", "subscription", "location", "server_name", "server_exists", "environment",
+        "environment_evidence", "infrastructure_class", "backup_scope", "database_name", "database_deletion_time",
+        "backup_count", "oldest_restore_point", "newest_restore_point", "available_until",
+        "backup_storage_redundancy", "backup_id"]),
     "D_Storage": ("storage", "storage_inventory.csv", [
         "service_type", "subscription", "resource_group", "name", "environment", "cod_app", "infrastructure_class",
         "backup_scope", "kind", "sku", "redundancy", "access_tier", "capacity_gb", "used_capacity_gb", "lifecycle_policy",
@@ -153,7 +163,8 @@ NUMERIC_FIELDS = {
     "soft_delete_days", "instance_count", "hosted_sites", "capacity_gb", "unattached_days", "snapshot_count",
     "snapshot_total_gb", "blob_soft_delete_days", "pitr_days", "share_soft_delete_days", "snapshot_full_count",
     "used_capacity_gb", "monthly_cost_usd",
-    "snapshot_incremental_count", "oldest_snapshot_age_days",
+    "snapshot_incremental_count", "oldest_snapshot_age_days", "backup_count", "database_count",
+    "deleted_databases_pitr",
 }
 
 
@@ -199,6 +210,17 @@ def load_meter_costs(cost_dir):
         totals[key][0] += float(row["cost_usd"] or 0)
         totals[key][1] += float(row["usage_quantity"] or 0)
     return totals, len(subscriptions)
+
+
+def load_snapshot_spend(cost_dir):
+    """Snapshot spend split by who creates it: manual disk snapshots vs Azure Backup instant restore points."""
+    spend = {"manual": 0.0, "azure_backup": 0.0}
+    for row in read_csv(os.path.join(cost_dir, "cost_by_meter.csv")) if cost_dir else []:
+        if "snapshot" not in (row["meter"] or "").lower():
+            continue
+        key = "azure_backup" if row["resource_type"] == "microsoft.compute/restorepointcollections" else "manual"
+        spend[key] += float(row["cost_usd"] or 0)
+    return {key: round(value, 2) for key, value in spend.items()}
 
 
 def load_account_costs(pattern, csv_path=""):
@@ -677,6 +699,156 @@ MINIMUM_POLICY = [
 ]
 
 
+def build_by_environment(workbook, details, snapshot_spend):
+    """Counts and backup cost per environment tag, without platform-managed resources."""
+    sheet = workbook.create_sheet("Por_ambiente", 1)
+    sheet["A1"] = "Indicadores por ambiente"
+    sheet["A1"].font = TITLE_FONT
+    sheet["A2"] = ("Ambiente: tag environment de cada recurso. 'Sin tag': sin tag o con un valor no reconocido. "
+                   "Excluye recursos de plataformas gestionadas (Databricks, ORCA, ARO y grupos de nodos de AKS).")
+    sheet["A2"].alignment = WRAP
+    sheet.merge_cells("A2:I2")
+    sheet.row_dimensions[2].height = 30
+    sheet.append([])
+    labels = [label for _, label in ENVIRONMENTS]
+    sheet.append(["Frente", "Indicador"] + labels + ["Total", "Tipo", "Cálculo"])
+    style_header(sheet, 4, 9)
+
+    def where(detail, pairs, environment):
+        return ",".join(f'{detail.col(field)},"{value}"' for field, value in pairs + [("environment", environment)])
+
+    def count(sheet_name, *pairs):
+        detail = details.get(sheet_name)
+        return (lambda env: f"COUNTIFS({where(detail, list(pairs), env)})") if detail else None
+
+    def total(sheet_name, field, *pairs):
+        detail = details.get(sheet_name)
+        return (lambda env: f"SUMIFS({detail.col(field)},{where(detail, list(pairs), env)})") if detail else None
+
+    def plus(*parts):
+        parts = [part for part in parts if part]
+        return (lambda env: "+".join(part(env) for part in parts)) if parts else None
+
+    vm = [("infrastructure_class", "TRADITIONAL")]
+    disk = [("backup_scope", "<>EXCLUDED_PLATFORM")]
+    native = [("infrastructure_class", "TRADITIONAL")]
+    scoped = [("backup_scope", "<>EXCLUDED_PLATFORM")]
+    accounts_geo = [total("D_Storage", "monthly_cost_usd", *disk, ("service_type", service), ("redundancy", sku))
+                    for service in ("BLOB_STORAGE", "ADLS_GEN2") for sku in ("*GRS*", "*GZRS*")]
+    rows = [
+        ("Compute", "VMs tradicionales", count("D_VMs", *vm), "Medido", "Sin Databricks, ORCA ni ARO"),
+        ("Compute", "VMs con backup", count("D_VMs", *vm, ("backup_enabled", "YES")), "Medido", ""),
+        ("Compute", "VMs sin backup", count("D_VMs", *vm, ("backup_enabled", "<>YES")), "Medido", ""),
+        ("Compute", "VMs con backup y último punto de más de 48 h",
+         count("D_VMs", *vm, ("backup_enabled", "YES"), ("last_backup_age_hours", ">48")), "Medido", ""),
+        ("Compute", "VMs apagadas que siguen con backup",
+         count("D_VMs", *vm, ("backup_enabled", "YES"), ("power_state", "deallocated")), "Medido", ""),
+        ("Compute", "VMs con retención de 360 días o más",
+         count("D_VMs", *vm, ("backup_enabled", "YES"), ("retention_max_days", ">=360")), "Medido", ""),
+        ("Compute", "Clusters AKS", count("D_K8s", ("service_type", "AKS")), "Medido", ""),
+        ("Compute", "Clusters AKS con backup", count("D_K8s", ("service_type", "AKS"), ("backup_enabled", "YES")), "Medido", ""),
+        ("Compute", "Clusters AKS con GitOps (Flux)", count("D_K8s", ("service_type", "AKS"), ("gitops_flux", "YES")), "Medido", ""),
+        ("Bases de datos", "Bases y servidores", count("D_BD"), "Medido", ""),
+        ("Bases de datos", "Azure SQL DB", count("D_BD", ("service_type", "AZURE_SQL_DB")), "Medido", ""),
+        ("Bases de datos", "Azure SQL DB con backup geo-redundante",
+         plus(count("D_BD", ("service_type", "AZURE_SQL_DB"), ("native_backup_redundancy", "Geo")),
+              count("D_BD", ("service_type", "AZURE_SQL_DB"), ("native_backup_redundancy", "GeoZone"))), "Medido", ""),
+        ("Bases de datos", "Bases con retención larga (LTR)", count("D_BD", ("ltr_configured", "YES")), "Medido", ""),
+        ("Bases de datos", "Servidores SQL", count("D_SQL_servidores", *scoped), "Medido", "Sin servidores de ORCA"),
+        ("Bases de datos", "Servidores SQL sin delete lock",
+         count("D_SQL_servidores", *scoped, ("has_delete_lock", "NO")), "Medido",
+         "Borrar el servidor elimina el PITR de todas sus bases"),
+        ("Bases de datos", "Bases eliminadas con backups LTR vigentes",
+         count("D_BD_eliminadas", *scoped, ("backup_type", "LTR")), "Medido",
+         "Servidor eliminado: ambiente por sufijo del nombre (P, C o D + número)"),
+        ("Bases de datos", "Backups LTR de bases eliminadas",
+         total("D_BD_eliminadas", "backup_count", *scoped, ("backup_type", "LTR")), "Medido",
+         "Se conservan y facturan hasta su vencimiento"),
+        ("Bases de datos", "Bases eliminadas aún restaurables por PITR",
+         count("D_BD_eliminadas", *scoped, ("backup_type", "PITR")), "Medido", "Solo durante la retención PITR (días)"),
+        ("Storage", "Cuentas, shares y discos", count("D_Storage", *disk), "Medido", "Sin discos de plataformas gestionadas"),
+        ("Storage", "Sin ningún mecanismo de recuperación", count("D_Storage", *disk, ("backup_method", "NONE")), "Medido", ""),
+        ("Storage", "File shares sin Azure Backup",
+         count("D_Storage", *disk, ("service_type", "AZURE_FILES_SHARE"), ("backup_method", "<>VAULT_RSV")), "Medido", ""),
+        ("Storage", "Discos sin adjuntar", count("D_Storage", *disk, ("all_findings", "*UNATTACHED_DISK*")), "Medido", ""),
+        ("Storage", "Costo de discos sin adjuntar (USD/mes)",
+         total("D_Storage", "disk_monthly_usd", *disk, ("all_findings", "*UNATTACHED_DISK*")), "Estimado",
+         "Tarifa efectiva del tier de disco"),
+        ("Storage", "Costo de cuentas GRS/GZRS (USD/mes)", plus(*accounts_geo), "Medido (muestra)",
+         "Solo cuentas con costo por recurso en la corrida de costos"),
+        ("Nativo", "Redis Premium", count("D_Nativo", *native, ("service_type", "REDIS"), ("sku", "Premium*")), "Medido", ""),
+        ("Nativo", "Key Vault sin purge protection",
+         count("D_Nativo", *native, ("service_type", "KEY_VAULT"), ("purge_protection", "<>YES")), "Medido", ""),
+        ("Nativo", "App Service Plans vacíos", count("D_Planes", ("finding", "EMPTY_APP_SERVICE_PLAN")), "Medido", ""),
+        ("Nativo", "App Service Plans con redundancia de zona", count("D_Planes", ("zone_redundant", "YES")), "Medido", ""),
+    ]
+    first_env = 3
+    row_of = {}
+    for front, label, formula, kind, note in rows:
+        values = [f"={formula(env)}" if formula else 0 for env, _ in ENVIRONMENTS]
+        sheet.append([front, label] + values + [None, kind, note])
+        current = sheet.max_row
+        row_of[label] = current
+        sheet.cell(row=current, column=7, value=f"=SUM(C{current}:F{current})")
+        if "USD" in label:
+            for column in range(first_env, 8):
+                sheet.cell(row=current, column=column).number_format = USD
+
+    def cost_row(front, label, values, total_formula, kind, note):
+        sheet.append([front, label] + values + [total_formula, kind, note])
+        current = sheet.max_row
+        for column in range(first_env, 8):
+            sheet.cell(row=current, column=column).number_format = USD
+        return current
+
+    sheet.append([])
+    sheet.append(["Frente", "Costo de backup oct-2026 (USD/mes)"] + labels + ["Total", "Tipo", "Cálculo"])
+    style_header(sheet, sheet.max_row, 9)
+    vault_values = [f"=Costo_calibrado!{column}2" for column in VAULT_COST_COLUMNS]
+    vault_row = cost_row("Bóvedas", "Asignado por las VMs que protege cada bóveda", vault_values, None, "Medido por bóveda",
+                         "Parte no huérfana de cada bóveda, repartida por GB de disco de sus VMs en cada ambiente")
+    sheet.cell(row=vault_row, column=7, value=f"=SUM(C{vault_row}:F{vault_row})")
+    cost_row("Bóvedas", "Ítems huérfanos (recurso eliminado, sin ambiente)", [None] * 4,
+             f"=Costo_calibrado!{VAULT_ORPHAN_COST_COLUMN}2", "Medido por bóveda", "Costo de la bóveda x huérfanos / ítems")
+    cost_row("Bóvedas", "Otros ítems (file shares, blobs, AKS, sin cruce con VM)", [None] * 4,
+             f"=Costo_calibrado!E2+Costo_calibrado!F2+Costo_calibrado!G2-G{vault_row}-G{vault_row + 1}", "Medido por bóveda",
+             "Total de bóvedas menos lo asignado")
+
+    spend_row = cost_row("Snapshots", "Gasto en snapshots manuales de disco", [None] * 4, snapshot_spend["manual"],
+                         "Medido", "Cost Management: tipo de recurso snapshots y discos")
+    live_gb = total("D_Storage", "snapshot_total_gb", ("service_type", "MANAGED_DISK"))
+    gb_values = [f"={live_gb(env)}" if live_gb else 0 for env, _ in ENVIRONMENTS]
+    sheet.append(["Snapshots", "GB de snapshots de discos vivos"] + gb_values + [None, "Medido", "Ambiente del disco origen"])
+    gb_row = sheet.max_row
+    sheet.cell(row=gb_row, column=7, value=f"=SUM(C{gb_row}:F{gb_row})")
+    snapshots = details.get("D_Snapshots")
+    deleted_gb = (f'=SUMIFS({snapshots.col("snapshot_total_gb")},{snapshots.col("source_exists")},"<>YES")'
+                  if snapshots else 0)
+    sheet.append(["Snapshots", "GB de snapshots de discos eliminados (sin ambiente)", None, None, None, None, deleted_gb,
+                  "Medido", ""])
+    for row in (gb_row, gb_row + 1):
+        for column in range(first_env, 8):
+            sheet.cell(row=row, column=column).number_format = "#,##0"
+    share = f"/MAX(1,$G${gb_row}+$G${gb_row + 1})"
+    cost_row("Snapshots", "Asignado por GB del disco origen",
+             [f"=$G${spend_row}*{letter}{gb_row}{share}" for letter in "CDEF"], f"=SUM(C{gb_row + 2}:F{gb_row + 2})",
+             "Estimado", "Gasto manual x GB del ambiente / GB totales")
+    cost_row("Snapshots", "Discos eliminados", [None] * 4, f"=$G${spend_row}*$G${gb_row + 1}{share}", "Estimado", "")
+    cost_row("Snapshots", "Snapshots de restauración instantánea de Azure Backup", [None] * 4,
+             snapshot_spend["azure_backup"], "Medido", "Cost Management: tipo de recurso restorepointcollections")
+    cost_row("Bases de datos", "Backup PITR y LTR de SQL, PostgreSQL y Cosmos", [None] * 4, None, "No separable",
+             "El costo de esta corrida es por suscripción: usar Cost analysis agrupado por tag environment")
+    set_widths(sheet, [16, 52, 14, 14, 14, 14, 14, 18, 60])
+    sheet.freeze_panes = "C5"
+    # Names the production comparison guide uses, so it does not depend on row numbers.
+    retention_row = row_of["VMs con retención de 360 días o más"]
+    for name, cell in (("prod_vault_cost", f"$C${vault_row}"), ("prod_snapshot_gb", f"$C${gb_row}"),
+                       ("prod_snapshot_cost", f"$C${gb_row + 2}"), ("prod_vms_360", f"$C${retention_row}"),
+                       ("all_vms_360", f"$G${retention_row}")):
+        workbook.defined_names[name] = DefinedName(name, attr_text=f"Por_ambiente!{cell}")
+    return sheet
+
+
 def build_policy(workbook):
     sheet = workbook.create_sheet("Politica_minima", 4)
     sheet["A1"] = "Política mínima propuesta por servicio y ambiente (punto de partida para validar con Riesgos y Cumplimiento)"
@@ -693,16 +865,27 @@ def build_policy(workbook):
     set_widths(sheet, [28, 45, 32, 32, 28])
 
 
-def build_calibration(workbook, calibration):
+ENVIRONMENTS = [("PROD", "PROD"), ("CERT", "CERT"), ("DESA", "DESA"), ("UNKNOWN", "Sin tag")]
+# Costo_calibrado columns that split each vault by the environment of the VMs it protects.
+VAULT_ITEM_COLUMNS = ["K", "L", "M", "N"]
+VAULT_COST_COLUMNS = ["O", "P", "Q", "R"]
+VAULT_ORPHAN_COST_COLUMN = "S"
+
+
+def build_calibration(workbook, calibration, vms=None):
     sheet = workbook.create_sheet("Costo_calibrado")
     headers = ["Bóveda", "Redundancia", "Ítems", "Ítems huérfanos", "Almacenamiento (USD)", "Instancias (USD)", "Otros (USD)",
                "Almacenamiento atribuible a huérfanos (USD)", "Proporción huérfanos",
                "Costo de bóvedas 100% huérfanas (USD, medido)"]
+    headers += [f"GB de VMs {label} protegidas" for _, label in ENVIRONMENTS]
+    headers += [f"Costo {label} (USD)" for _, label in ENVIRONMENTS] + ["Costo huérfanos (USD)"]
     sheet.append(headers)
     style_header(sheet, 1, len(headers))
     # Row 2 holds the totals the opportunity formulas reference.
     sheet.append(["TOTAL", "", "=SUM(C3:C1000)", "=SUM(D3:D1000)", "=SUM(E3:E1000)", "=SUM(F3:F1000)", "=SUM(G3:G1000)",
-                  "=SUM(H3:H1000)", "=IF(C2=0,0,D2/C2)", "=SUM(J3:J1000)"])
+                  "=SUM(H3:H1000)", "=IF(C2=0,0,D2/C2)", "=SUM(J3:J1000)"]
+                 + [f"=SUM({column}3:{column}1000)" for column in VAULT_ITEM_COLUMNS + VAULT_COST_COLUMNS]
+                 + [f"=SUM({VAULT_ORPHAN_COST_COLUMN}3:{VAULT_ORPHAN_COST_COLUMN}1000)"])
     for cell in sheet[2]:
         cell.font = BOLD
     for row in calibration:
@@ -712,8 +895,19 @@ def build_calibration(workbook, calibration):
         sheet.cell(row=current, column=8, value=f"=IF(C{current}=0,0,E{current}*D{current}/C{current})")
         sheet.cell(row=current, column=9, value=f"=IF(C{current}=0,0,D{current}/C{current})")
         sheet.cell(row=current, column=10, value=f"=IF(AND(C{current}>0,D{current}=C{current}),E{current}+F{current}+G{current},0)")
+        # Orphans take their share of the vault by item count; the rest goes to each environment by the disk GB of
+        # the VMs it protects there, since stored data drives most of the vault cost.
+        total = f"($E{current}+$F{current}+$G{current})"
+        live_gb = f"SUM(${VAULT_ITEM_COLUMNS[0]}{current}:${VAULT_ITEM_COLUMNS[-1]}{current})"
+        for (environment, _), items, cost in zip(ENVIRONMENTS, VAULT_ITEM_COLUMNS, VAULT_COST_COLUMNS):
+            sheet[f"{items}{current}"] = (f'=SUMIFS({vms.col("total_disk_gb")},{vms.col("vault_name")},$A{current},'
+                                          f'{vms.col("environment")},"{environment}",{vms.col("backup_enabled")},"YES")'
+                                          if vms else 0)
+            sheet[f"{cost}{current}"] = (f"=IF(OR($C{current}=0,{live_gb}=0),0,"
+                                         f"{total}*($C{current}-$D{current})/$C{current}*{items}{current}/{live_gb})")
+        sheet[f"{VAULT_ORPHAN_COST_COLUMN}{current}"] = f"=IF($C{current}=0,0,{total}*$D{current}/$C{current})"
     for row in sheet.iter_rows(min_row=2):
-        for index in (5, 6, 7, 8, 10):
+        for index in (5, 6, 7, 8, 10, 15, 16, 17, 18, 19):
             row[index - 1].number_format = USD
         row[8].number_format = "0.0%"
     note_row = sheet.max_row + 2
@@ -1152,7 +1346,7 @@ def main():
     workbook.calculation.fullCalcOnLoad = True
     for detail in details.values():
         write_detail(workbook, detail)
-    build_calibration(workbook, calibration)
+    build_calibration(workbook, calibration, details.get("D_VMs"))
     build_meter_sheet(workbook, meters, meter_subscriptions)
     assumptions, names = build_assumptions(workbook, calibration, quantities)
     disk_row = names["disk_gb_usd"].split("$")[-1]
@@ -1165,6 +1359,7 @@ def main():
     fill_formula_assumptions(assumptions, names, details)
     build_risks(workbook, details)
     build_long_term(workbook, details, versions)
+    build_by_environment(workbook, details, load_snapshot_spend(os.path.join(args.results, "backup-cost")))
     build_policy(workbook)
     build_third_party(workbook)
     build_sources(workbook)
@@ -1179,7 +1374,7 @@ def main():
     for row in summary_sheet.iter_rows(min_row=5):
         if isinstance(row[2].value, str) and "{total}" in row[2].value:
             row[2].value = row[2].value.replace("{total}", str(total_row))
-    order = ["Resumen", "Fuentes", "Oportunidades", "Riesgos", "Restauracion_LP", "Politica_minima", "Comparacion_terceros",
+    order = ["Resumen", "Fuentes", "Por_ambiente", "Oportunidades", "Riesgos", "Restauracion_LP", "Politica_minima", "Comparacion_terceros",
              "Supuestos", "Gasto_por_categoria", "Gasto_medido",
              "Costo_calibrado", "Consultas"]
     workbook._sheets.sort(key=lambda ws: order.index(ws.title) if ws.title in order else len(order))

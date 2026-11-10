@@ -723,6 +723,71 @@ def resource_group_id(subscription_id, resource_group):
     return f"/subscriptions/{subscription_id}/resourcegroups/{resource_group}".lower()
 
 
+NAME_SUFFIX_ENVIRONMENTS = {"p": "PROD", "c": "CERT", "d": "DESA"}
+
+
+def environment_from_name(name):
+    """Environment from the naming convention: P, C or D plus digits at the end (msqleu2appxp01 -> PROD).
+
+    Fallback for resources without an environment tag, such as servers that no longer exist.
+    """
+    match = re.search(r"([pcd])\d+$", str(name or "").lower())
+    return NAME_SUFFIX_ENVIRONMENTS[match.group(1)] if match else ""
+
+
+LOCKS_API = "2020-05-01"
+
+
+class LockIndex:
+    """Delete-blocking locks (CanNotDelete and ReadOnly) by scope, from one ARM GET per subscription."""
+
+    MARKER = "/providers/microsoft.authorization/locks/"
+
+    def __init__(self):
+        self.scopes = {}
+        self.loaded_subscriptions = set()
+        self.enabled = False
+
+    def load(self, ctx):
+        self.enabled = True
+        subscriptions = [value["id"] for value in ctx.subscriptions.values()]
+
+        def fetch(subscription_id):
+            path = f"/subscriptions/{subscription_id}/providers/Microsoft.Authorization/locks"
+            return subscription_id, ctx.try_arm("locks", subscription_id, ctx.arm_list, path, LOCKS_API)
+
+        for result in ctx.parallel(fetch, subscriptions, label="locks"):
+            if not result or result[1] is None:
+                continue
+            subscription_id, locks = result
+            self.loaded_subscriptions.add(normalize(subscription_id))
+            for lock in locks:
+                lock_id = normalize(lock.get("id"))
+                if self.MARKER not in lock_id:
+                    continue
+                scope = lock_id.split(self.MARKER)[0]
+                self.scopes[scope] = safe_get(lock, "properties", "level", default="")
+        LOG.info("Locks: %d scopes in %d subscriptions", len(self.scopes), len(self.loaded_subscriptions))
+
+    def lookup(self, resource_id, subscription_id, resource_group):
+        """Return (has_delete_lock, lock_scope)."""
+        if not self.enabled or normalize(subscription_id) not in self.loaded_subscriptions:
+            return "UNKNOWN", ""
+        resource_id = normalize(resource_id)
+        if resource_id in self.scopes:
+            return "YES", f"RESOURCE:{self.scopes[resource_id]}"
+        for parent in parent_resource_ids(resource_id):
+            if parent in self.scopes:
+                return "YES", f"PARENT:{self.scopes[parent]}"
+        rg_id = resource_group_id(subscription_id, resource_group)
+        if rg_id in self.scopes:
+            return "YES", f"RESOURCE_GROUP:{self.scopes[rg_id]}"
+        sub_id = f"/subscriptions/{normalize(subscription_id)}"
+        if sub_id in self.scopes:
+            return "YES", f"SUBSCRIPTION:{self.scopes[sub_id]}"
+        return "NO", ""
+
+
 BASE_FIELDS = [
     "subscription", "subscription_id", "resource_group", "name", "id", "location",
     "environment", "environment_evidence", "cod_app", "operation_raw", "operation_normalized",

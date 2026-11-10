@@ -29,7 +29,6 @@ import bu_common as bu
 from bu_common import LOG
 
 DEFAULT_OUTPUT_DIR = bu.results_path("backup-native")
-LOCKS_API = "2020-05-01"
 MESSAGING_API = "2021-11-01"
 REDIS_API = "2024-03-01"
 REDIS_ENTERPRISE_API = "2024-10-01"
@@ -142,61 +141,6 @@ NETWORK_SPECS = {
         "DDOS_PROTECTION_PLAN", True,
         "pack('virtual_networks', array_length(properties.virtualNetworks))"),
 }
-
-
-# ---------------------------------------------------------------------------
-# Locks
-# ---------------------------------------------------------------------------
-
-
-class LockIndex:
-    """Delete-blocking locks (CanNotDelete and ReadOnly) by scope, from one ARM GET per subscription."""
-
-    MARKER = "/providers/microsoft.authorization/locks/"
-
-    def __init__(self):
-        self.scopes = {}
-        self.loaded_subscriptions = set()
-        self.enabled = False
-
-    def load(self, ctx):
-        self.enabled = True
-        subscriptions = [value["id"] for value in ctx.subscriptions.values()]
-
-        def fetch(subscription_id):
-            path = f"/subscriptions/{subscription_id}/providers/Microsoft.Authorization/locks"
-            return subscription_id, ctx.try_arm("locks", subscription_id, ctx.arm_list, path, LOCKS_API)
-
-        for result in ctx.parallel(fetch, subscriptions, label="locks"):
-            if not result or result[1] is None:
-                continue
-            subscription_id, locks = result
-            self.loaded_subscriptions.add(bu.normalize(subscription_id))
-            for lock in locks:
-                lock_id = bu.normalize(lock.get("id"))
-                if self.MARKER not in lock_id:
-                    continue
-                scope = lock_id.split(self.MARKER)[0]
-                self.scopes[scope] = bu.safe_get(lock, "properties", "level", default="")
-        LOG.info("Locks: %d scopes in %d subscriptions", len(self.scopes), len(self.loaded_subscriptions))
-
-    def lookup(self, resource_id, subscription_id, resource_group):
-        """Return (has_delete_lock, lock_scope)."""
-        if not self.enabled or bu.normalize(subscription_id) not in self.loaded_subscriptions:
-            return "UNKNOWN", ""
-        resource_id = bu.normalize(resource_id)
-        if resource_id in self.scopes:
-            return "YES", f"RESOURCE:{self.scopes[resource_id]}"
-        for parent in bu.parent_resource_ids(resource_id):
-            if parent in self.scopes:
-                return "YES", f"PARENT:{self.scopes[parent]}"
-        rg_id = bu.resource_group_id(subscription_id, resource_group)
-        if rg_id in self.scopes:
-            return "YES", f"RESOURCE_GROUP:{self.scopes[rg_id]}"
-        sub_id = f"/subscriptions/{bu.normalize(subscription_id)}"
-        if sub_id in self.scopes:
-            return "YES", f"SUBSCRIPTION:{self.scopes[sub_id]}"
-        return "NO", ""
 
 
 # ---------------------------------------------------------------------------
@@ -826,7 +770,7 @@ def main():
     ctx = bu.AzureContext(args)
     ctx.load_subscriptions()
 
-    locks = LockIndex()
+    locks = bu.LockIndex()
     with ThreadPoolExecutor(max_workers=3) as pool:
         locks_job = pool.submit(locks.load, ctx) if args.include_locks and not args.skip_arm else None
         managed_job = pool.submit(bu.load_managed_resource_groups, ctx)

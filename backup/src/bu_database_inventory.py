@@ -12,6 +12,10 @@ Outputs (in --output-dir):
   database_orphan_backup_items.csv    vault items whose database or VM no longer exists
   database_backup_policies.csv
   database_backup_vaults.csv
+  database_sql_servers.csv            one row per Azure SQL logical server: environment, delete lock and
+                                      how many deleted databases can still be restored (PITR)
+  database_deleted_backups.csv        backups that outlive a deleted Azure SQL database: PITR on servers
+                                      that still exist and LTR (kept until expiry, even if the server is gone)
   database_errors.csv
   database_summary.json
   database_inventory.xlsx             with --xlsx
@@ -21,7 +25,7 @@ Dependencies:
 """
 
 import sys
-from collections import defaultdict
+from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
 
 import bu_common as c
@@ -63,10 +67,21 @@ WORKLOAD_ITEM_FIELDS = [
     "recovery_point_count", "item_id",
 ]
 
+SQL_SERVER_FIELDS = [
+    "subscription", "subscription_id", "resource_group", "server_name", "location", "environment",
+    "environment_evidence", "infrastructure_class", "backup_scope", "database_count", "has_delete_lock", "lock_scope",
+    "deleted_databases_pitr", "id",
+]
+DELETED_BACKUP_FIELDS = [
+    "backup_type", "subscription", "subscription_id", "location", "server_name", "server_exists", "environment",
+    "environment_evidence", "infrastructure_class", "backup_scope", "database_name", "database_deletion_time", "backup_count", "oldest_restore_point",
+    "newest_restore_point", "available_until", "backup_storage_redundancy", "backup_id",
+]
+
 QUERIES = {
     "sql_servers": (
         "resources | where type =~ 'microsoft.sql/servers'"
-        " | project id, name, tags, version = tostring(properties.version)"
+        " | project id, name, subscriptionId, resourceGroup, location, tags, version = tostring(properties.version)"
     ),
     "sql_dbs": (
         "resources | where type =~ 'microsoft.sql/servers/databases' and name !~ 'master'"
@@ -656,6 +671,97 @@ def assign_method_and_findings(row, index, args):
 # ---------------------------------------------------------------------------
 
 
+def server_environment(rows):
+    """Environment of a SQL server: majority of its databases' tags, else the name suffix."""
+    votes = defaultdict(Counter)
+    for row in rows:
+        if row["service_type"] == "AZURE_SQL_DB" and row["environment"] != "UNKNOWN" and row.get("server_name"):
+            votes[(c.normalize(row["subscription_id"]), c.normalize(row["server_name"]))][row["environment"]] += 1
+
+    def lookup(subscription_id, server_name):
+        counter = votes.get((c.normalize(subscription_id), c.normalize(server_name)))
+        if counter:
+            return counter.most_common(1)[0][0], "DATABASE_TAGS"
+        guess = c.environment_from_name(server_name)
+        return (guess, "NAME_SUFFIX") if guess else ("UNKNOWN", "")
+    return lookup
+
+
+def build_server_protection(ctx, data, rows):
+    """SQL server delete locks, and the backups of deleted databases: PITR per server, LTR per region."""
+    environment_of = server_environment(rows)
+    locks = c.LockIndex()
+    locks.load(ctx)
+    servers = data["sql_servers"]
+    database_count = Counter(c.normalize(db["id"]).split("/databases/")[0] for db in data["sql_dbs"])
+    dropped = ctx.parallel(lambda server: ctx.try_arm(
+        "sql-dropped", server["subscriptionId"], ctx.arm_list, f"{server['id']}/restorableDroppedDatabases",
+        SQL_API_VERSIONS[-1]), servers, label="sql_dropped_databases")
+
+    server_rows, deleted, classes = [], [], {}
+    for server, items in zip(servers, dropped):
+        environment, evidence = environment_of(server["subscriptionId"], server["name"])
+        has_lock, lock_scope = locks.lookup(server["id"], server["subscriptionId"], server["resourceGroup"])
+        infrastructure, scope, _ = c.classify_infrastructure(server.get("tags"), server["name"], server["resourceGroup"])
+        common = {"subscription": ctx.subscription_name(server["subscriptionId"]),
+                  "subscription_id": server["subscriptionId"], "server_name": server["name"],
+                  "environment": environment, "environment_evidence": evidence,
+                  "infrastructure_class": infrastructure, "backup_scope": scope}
+        classes[(c.normalize(server["subscriptionId"]), c.normalize(server["name"]))] = (infrastructure, scope, "")
+        server_rows.append(dict(common, resource_group=server["resourceGroup"], location=server["location"],
+                                database_count=database_count.get(c.normalize(server["id"]), 0),
+                                has_delete_lock=has_lock, lock_scope=lock_scope,
+                                deleted_databases_pitr=len(items) if items is not None else "", id=server["id"]))
+        for item in items or []:
+            properties = item.get("properties", {})
+            deleted.append(dict(common, backup_type="PITR", location=server["location"], server_exists="YES",
+                                database_name=properties.get("databaseName", ""),
+                                database_deletion_time=properties.get("deletionDate", ""), backup_count="",
+                                oldest_restore_point=properties.get("earliestRestoreDate", ""),
+                                newest_restore_point=properties.get("deletionDate", ""), available_until="",
+                                backup_storage_redundancy=properties.get("backupStorageRedundancy", ""),
+                                backup_id=item.get("id", "")))
+
+    # LTR backups are not in Resource Graph and outlive their server, so ask every subscription and region.
+    existing = {(c.normalize(server["subscriptionId"]), c.normalize(server["name"])) for server in servers}
+    locations = sorted({server["location"] for server in servers})
+    targets = [(subscription_id, location) for subscription_id in ctx.subscription_filter or list(ctx.subscriptions)
+               for location in locations]
+
+    def fetch_ltr(target):
+        subscription_id, location = target
+        path = f"/subscriptions/{subscription_id}/providers/Microsoft.Sql/locations/{location}/longTermRetentionBackups"
+        items = ctx.try_arm("sql-ltr-deleted", subscription_id, ctx.arm_list, path, SQL_API_VERSIONS[-1],
+                            {"databaseState": "Deleted", "onlyLatestPerDatabase": "false"})
+        return [(subscription_id, location, item) for item in items or []]
+
+    backups = defaultdict(list)
+    for result in ctx.parallel(fetch_ltr, targets, label="sql_ltr_deleted"):
+        for subscription_id, location, item in result or []:
+            properties = item.get("properties", {})
+            key = (c.normalize(subscription_id), location, c.normalize(properties.get("serverName")),
+                   properties.get("databaseName") or "", properties.get("databaseDeletionTime") or "")
+            backups[key].append((properties, item.get("id", "")))
+    for (subscription_id, location, server, database, deleted_at), items in sorted(backups.items()):
+        newest, newest_id = max(items, key=lambda pair: pair[0].get("backupTime") or "")
+        environment, evidence = environment_of(subscription_id, server)
+        live = classes.get((subscription_id, server))
+        infrastructure, scope, _ = live or c.classify_infrastructure({}, server, "")
+        deleted.append({
+            "backup_type": "LTR", "subscription": ctx.subscription_name(subscription_id),
+            "subscription_id": subscription_id, "location": location, "server_name": server,
+            "server_exists": "YES" if (subscription_id, server) in existing else "NO",
+            "environment": environment, "environment_evidence": evidence, "infrastructure_class": infrastructure,
+            "backup_scope": scope, "database_name": database,
+            "database_deletion_time": deleted_at, "backup_count": len(items),
+            "oldest_restore_point": min(properties.get("backupTime") or "" for properties, _ in items),
+            "newest_restore_point": newest.get("backupTime") or "",
+            "available_until": max(properties.get("backupExpirationTime") or "" for properties, _ in items),
+            "backup_storage_redundancy": newest.get("backupStorageRedundancy") or "", "backup_id": newest_id,
+        })
+    return server_rows, deleted
+
+
 def main():
     parser = c.build_parser(__doc__.splitlines()[0], c.results_path("backup-database"))
     parser.add_argument("--min-prod-retention-days", type=float, default=7,
@@ -720,6 +826,7 @@ def main():
     rows.sort(key=lambda row: (row["service_type"], row["subscription"], row["resource_group"], row["name"]))
 
     workload_rows = build_workload_item_rows(ctx, index, protectable, managed_rgs, data)
+    sql_servers, deleted_backups = build_server_protection(ctx, data, rows) if not args.skip_arm else ([], [])
 
     existing = {c.normalize(row["id"]) for key in ("sql_dbs", "sql_mi_dbs", "oss_servers", "cosmos", "vms")
                 for row in data[key]}
@@ -747,6 +854,8 @@ def main():
     output.csv("database_orphan_backup_items.csv", orphans, c.ORPHAN_FIELDS)
     output.csv("database_backup_policies.csv", policies)
     output.csv("database_backup_vaults.csv", vaults)
+    output.csv("database_sql_servers.csv", sql_servers, SQL_SERVER_FIELDS)
+    output.csv("database_deleted_backups.csv", deleted_backups, DELETED_BACKUP_FIELDS)
     output.csv("database_errors.csv", ctx.errors.rows, c.ErrorLog.FIELDS)
     output.json("database_summary.json", c.run_metadata(ctx, {
         "rows": len(rows),
@@ -762,6 +871,8 @@ def main():
         },
         "orphan_backup_items": c.count_by(orphans, "orphan_reason", "workload_type"),
         "unused_db_policies": sum(1 for policy in policies if policy["unused_policy"] == "YES"),
+        "sql_servers_by_delete_lock": c.count_by(sql_servers, "environment", "has_delete_lock"),
+        "deleted_database_backups": c.count_by(deleted_backups, "backup_type", "server_exists"),
     }))
     if args.xlsx:
         output.xlsx("database_inventory.xlsx")

@@ -13,6 +13,19 @@ slide decks.
 | `results/backup-<front>/` | CSV and JSON written by each inventory script | No |
 | `reports/<date>-backup/` | `backup_insights.xlsx`, `metrics.json`, the two `.pptx` and a README with that run's scope | No |
 
+Guides:
+
+- [docs/cost-screenshots.md](docs/cost-screenshots.md): Cost analysis views for each backup cost, overall
+  and by environment tag.
+- [docs/prod-comparison.md](docs/prod-comparison.md): third-party comparison limited to production.
+- [docs/sql-deleted-database-restore.md](docs/sql-deleted-database-restore.md): what PITR and LTR keep
+  after a database or server is deleted, where to see it and how to restore it.
+- [docs/deck-and-prompts.md](docs/deck-and-prompts.md): slide order, the source of each slide and the
+  Copilot prompts to build the deck on the corporate laptop.
+
+The workbook's `Por_ambiente` sheet splits every indicator and the vault and snapshot cost by the
+`environment` tag (PROD, CERT, DESA, untagged), without Databricks, ORCA, ARO or AKS node resources.
+
 `results/` and `reports/` hold estate data, so they stay on the machine that ran the scripts. Every
 script writes to these folders by default, wherever it is run from; `--output-dir`, `--results` and
 `--workbook` override them.
@@ -51,7 +64,7 @@ Without Node on the laptop, run step 3 in Azure Cloud Shell: clone the repositor
 `metrics.json`, run the three commands with that path, and download the two `.pptx`. Only
 `metrics.json` leaves the laptop; steps 1 and 2 must still run where Excel is.
 
-Runtime on 350 subscriptions: compute ~1.5 min, database ~3 min, native ~1 min, restore <1 min,
+Runtime on 350 subscriptions: compute ~1.5 min, database ~4 min (includes SQL server locks and backups of deleted databases), native ~1 min, restore <1 min,
 storage ~25 min, cost ~70 min (Cost Management throttles; the cost script caches per subscription and
 resumes if interrupted).
 
