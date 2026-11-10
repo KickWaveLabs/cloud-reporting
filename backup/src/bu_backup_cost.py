@@ -72,7 +72,7 @@ def cost_query(ctx, subscription_id, body):
 
 
 def main():
-    parser = common.build_parser(__doc__.splitlines()[0], "./results/backup-cost")
+    parser = common.build_parser(__doc__.splitlines()[0], common.results_path("backup-cost"))
     parser.add_argument("--from-date", default=None, help="Start date (YYYY-MM-DD). Default: first day of last month")
     parser.add_argument("--to-date", default=None, help="End date (YYYY-MM-DD). Default: last day of last month")
     parser.add_argument("--pause", type=float, default=1.0, help="Seconds each worker waits between queries")

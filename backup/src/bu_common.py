@@ -30,6 +30,14 @@ from azure.identity import DefaultAzureCredential
 from azure.mgmt.resourcegraph import ResourceGraphClient
 from azure.mgmt.resourcegraph.models import QueryRequest, QueryRequestOptions, ResultFormat
 
+# Default outputs go to backup/results, wherever the scripts are run from.
+RESULTS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "results")
+
+
+def results_path(*parts):
+    return os.path.join(RESULTS_DIR, *parts)
+
+
 ARM_ENDPOINT = "https://management.azure.com"
 ARM_SCOPE = "https://management.azure.com/.default"
 

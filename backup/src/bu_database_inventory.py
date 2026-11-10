@@ -657,7 +657,7 @@ def assign_method_and_findings(row, index, args):
 
 
 def main():
-    parser = c.build_parser(__doc__.splitlines()[0], "./results/backup-database")
+    parser = c.build_parser(__doc__.splitlines()[0], c.results_path("backup-database"))
     parser.add_argument("--min-prod-retention-days", type=float, default=7,
                         help="PROD native retention below this is a finding")
     args = parser.parse_args()

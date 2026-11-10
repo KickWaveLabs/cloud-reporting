@@ -9,3 +9,5 @@
 results/
 __pycache__/
 reports/
+node_modules/
+package-lock.json

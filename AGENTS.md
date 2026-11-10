@@ -13,6 +13,12 @@ Azure today. AWS and GCP get their own section when work on them starts.
 - Say when a result is partial: throttling, missing access, row limits.
 - Reply in Spanish. Scripts, comments, commits and docs in English.
 
+## Layout
+
+- One folder per topic: `backup/` today; new reporting topics get their own (for example `aks-aca/`).
+- Inside each: `src/` (scripts), `results/` (raw output), `reports/`, and a `README.md` with the run
+  order. `results/` and `reports/` are gitignored, so the README is the only tracked description.
+
 ## Access
 
 - The user is Reader on most subscriptions, not all of them. Report access errors as gaps.
@@ -60,11 +66,11 @@ Azure today. AWS and GCP get their own section when work on them starts.
 - `summarize` first. Fetch rows only for the part that matters.
 - Project only needed fields and use `-o tsv`. `--first` stops at 1000; page with `--skip-token`.
 - Write long output to `.local/` and search it. Do not print it into the conversation.
-- A query needed twice becomes a script in `scripts/`.
+- A query needed twice becomes a script in `<topic>/src/`.
 
 ## Reports
 
-- Write to `reports/` as Markdown, with date, scope and the query used. Do not push them to a remote.
+- Write to `<topic>/reports/` as Markdown, with date, scope and the query used. Do not push them to a remote.
 - Each opportunity states the resource count, the estimated saving and what would need to change.
 
 ## Maintaining This File

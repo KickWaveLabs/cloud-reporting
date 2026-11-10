@@ -25,6 +25,8 @@ from openpyxl.comments import Comment
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
+BACKUP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 FONT = "Arial"
 BLUE = Font(name=FONT, color="0000FF")
 BOLD = Font(name=FONT, bold=True)
@@ -1107,11 +1109,12 @@ def build_summary(workbook, details, metrics):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--results", default="./results", help="Folder with backup-<front> result folders")
+    parser.add_argument("--results", default=os.path.join(BACKUP_DIR, "results"),
+                        help="Folder with backup-<front> result folders")
     parser.add_argument("--cost-cache", default="", help="Glob of cached vault cost query JSON files (optional)")
     parser.add_argument("--versions", default="", help="Optional JSON with restore-compatibility counts")
     parser.add_argument("--account-costs", default="", help="Glob of per-storage-account cost query JSON files (optional)")
-    parser.add_argument("--output-dir", default="./reports")
+    parser.add_argument("--output-dir", default=os.path.join(BACKUP_DIR, "reports"))
     args = parser.parse_args()
 
     folders = {"compute": "backup-compute", "database": "backup-database", "storage": "backup-storage",

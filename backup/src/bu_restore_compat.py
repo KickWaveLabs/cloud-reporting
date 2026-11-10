@@ -24,8 +24,8 @@ MIN_SUPPORTED_AKS_MINOR = 32
 
 
 def main():
-    parser = common.build_parser(__doc__.splitlines()[0], "./results/backup-restore")
-    parser.add_argument("--compute-inventory", default="./results/backup-compute/compute_vm_inventory.csv",
+    parser = common.build_parser(__doc__.splitlines()[0], common.results_path("backup-restore"))
+    parser.add_argument("--compute-inventory", default=common.results_path("backup-compute", "compute_vm_inventory.csv"),
                         help="compute_vm_inventory.csv, to count only VMs with an active backup")
     args = parser.parse_args()
     common.setup_logging(args.verbose)

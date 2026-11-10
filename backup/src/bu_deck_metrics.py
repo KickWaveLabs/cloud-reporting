@@ -13,6 +13,8 @@ from collections import Counter
 
 from openpyxl import load_workbook
 
+BACKUP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 
 def read_csv(path):
     if not os.path.exists(path):
@@ -23,6 +25,14 @@ def read_csv(path):
 
 def sheet_rows(workbook, name, first_row):
     return [row for row in workbook[name].iter_rows(min_row=first_row, values_only=True) if row[0]]
+
+
+def require_recalculated(workbook, path):
+    """Stop if formulas have no stored results: openpyxl writes formulas, only Excel computes them."""
+    annual = [row[5] for row in sheet_rows(workbook, "Oportunidades", 5) if str(row[0]).startswith("O")]
+    if not annual or any(value is None for value in annual):
+        raise SystemExit(f"{path} has formulas without computed values. "
+                         "Open it in Excel, save it, close it, and run this command again.")
 
 
 def as_int(value):
@@ -104,7 +114,7 @@ def top_storage_accounts(pattern, storage, limit=6, storage_path=""):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--results", default="./results")
+    parser.add_argument("--results", default=os.path.join(BACKUP_DIR, "results"))
     parser.add_argument("--workbook", required=True, help="Recalculated backup_insights.xlsx")
     parser.add_argument("--account-costs", default="", help="Glob of per-storage-account cost JSON files (optional)")
     parser.add_argument("--output", required=True)
@@ -122,6 +132,7 @@ def main():
     storage = read_csv(f"{base}/backup-storage/storage_inventory.csv")
     snapshots = read_csv(f"{base}/backup-storage/storage_snapshots_by_source.csv")
     workbook = load_workbook(args.workbook, data_only=True)
+    require_recalculated(workbook, args.workbook)
 
     traditional = [row for row in vm if row["infrastructure_class"] == "TRADITIONAL"]
     active = [row for row in vm if row["backup_enabled"] == "YES"]

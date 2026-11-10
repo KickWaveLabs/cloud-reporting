@@ -1,6 +1,6 @@
-// Builds the two backup decks from metrics.json (see scripts/bu_deck_metrics.py).
+// Builds the two backup decks from metrics.json (see ../bu_deck_metrics.py).
+//   npm install            (once, in this folder)
 //   node build_decks.js <metrics.json> <output_dir> [apply_theme.js]
-// Requires pptxgenjs (NODE_PATH may point to a node_modules folder that has it).
 
 const fs = require("fs");
 const path = require("path");

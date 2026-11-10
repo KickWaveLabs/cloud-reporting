@@ -630,7 +630,7 @@ def snapshot_rows(raw_rows, disks):
 
 
 def main():
-    parser = c.build_parser(__doc__.splitlines()[0], "./results/backup-storage")
+    parser = c.build_parser(__doc__.splitlines()[0], c.results_path("backup-storage"))
     parser.set_defaults(workers=32, arm_rps=40.0)
     parser.add_argument("--skip-capacity", action="store_true",
                         help="Skip the UsedCapacity metric call per storage account")

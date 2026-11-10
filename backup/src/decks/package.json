@@ -1,0 +1,11 @@
+{
+  "name": "backup-decks",
+  "private": true,
+  "description": "Builds the backup slide decks from metrics.json",
+  "scripts": {
+    "build": "node build_decks.js"
+  },
+  "dependencies": {
+    "pptxgenjs": "4.0.1"
+  }
+}

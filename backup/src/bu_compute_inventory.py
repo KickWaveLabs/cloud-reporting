@@ -21,7 +21,7 @@ from collections import Counter
 
 import bu_common as bu
 
-DEFAULT_OUTPUT_DIR = "./results/backup-compute"
+DEFAULT_OUTPUT_DIR = bu.results_path("backup-compute")
 CONTAINER_TYPES = ("MAB", "DPM", "AzureBackupServer")
 
 VM_FIELDS = (

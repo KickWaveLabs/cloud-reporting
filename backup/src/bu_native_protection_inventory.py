@@ -28,7 +28,7 @@ from concurrent.futures import ThreadPoolExecutor
 import bu_common as bu
 from bu_common import LOG
 
-DEFAULT_OUTPUT_DIR = "./results/backup-native"
+DEFAULT_OUTPUT_DIR = bu.results_path("backup-native")
 LOCKS_API = "2020-05-01"
 MESSAGING_API = "2021-11-01"
 REDIS_API = "2024-03-01"
