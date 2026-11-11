@@ -51,7 +51,10 @@ RED_FILL = PatternFill("solid", fgColor="FFC7CE")
 USD = '"$"#,##0;("$"#,##0);"-"'
 USD2 = '"$"#,##0.00'
 WRAP = Alignment(wrap_text=True, vertical="top")
-MAX_MICROSERVICES = 30
+# One by one up to 30, then wide steps to show there is no crossing further out.
+MODEL_POINTS = list(range(1, 31)) + [50, 100, 150, 200, 300, 500]
+MAX_MICROSERVICES = MODEL_POINTS[-1]
+MAP_MAX_MICROSERVICES = 30  # the heat map stays readable
 REQUEST_LEVELS = [1_000_000, 5_000_000, 10_000_000, 25_000_000, 50_000_000, 95_040_000, 200_000_000]
 
 
@@ -351,7 +354,7 @@ def build_model(workbook, r):
     sheet.append(headers)
     style_header(sheet, 4, len(headers))
     req = f"Supuestos!{r['req_month']}"
-    for n in range(1, MAX_MICROSERVICES + 1):
+    for n in MODEL_POINTS:
         row = sheet.max_row + 1
         sheet.cell(row=row, column=1, value=n)
         sheet.cell(row=row, column=2, value="=" + aca_formula(r, f"$A{row}", req))
@@ -480,7 +483,7 @@ def build_map(workbook, r):
         cell.fill = INPUT_FILL
         cell.font = Font(name=FONT, bold=True, color="0000FF")
     row_for_15 = None
-    for n in range(1, MAX_MICROSERVICES + 1):
+    for n in range(1, MAP_MAX_MICROSERVICES + 1):
         row = sheet.max_row + 1
         sheet.cell(row=row, column=1, value=n)
         if n == 15:
@@ -1088,18 +1091,18 @@ def build_summary(workbook, breakeven, measured_refs, r, kclusters=None):
          "Estimado", "Modelo", USD),
         ("ACA por microservicio (horario ADT)", f"={breakeven['Costo ACA por microservicio al mes (horario ADT)']}",
          "Estimado", "Modelo", USD2),
-        ("Microservicios en que ACA supera a AKS (lista)",
+        ("Microservicios desde los que ACA cuesta más que AKS (lista)",
          f"={breakeven['Microservicios en que ACA (horario ADT) supera a AKS lista']}", "Estimado", "Equilibrio", "0"),
-        ("Microservicios en que ACA supera a AKS (efectivo)",
+        ("Microservicios desde los que ACA cuesta más que AKS (efectivo)",
          f"={breakeven['Microservicios en que ACA (horario ADT) supera a AKS efectivo']}", "Estimado", "Equilibrio", "0"),
-        ("Microservicios en que ACA 24/7 supera a AKS (lista)",
+        ("Microservicios desde los que ACA 24/7 cuesta más que AKS (lista)",
          f"={breakeven['Microservicios en que ACA 24/7 supera a AKS lista']}", "Estimado", "Equilibrio", "0"),
     ]
     for label, formula, kind, origin, fmt in rows:
         sheet.append([label, formula, kind, origin])
         sheet.cell(row=sheet.max_row, column=2).number_format = fmt
-    sheet.append([f'">{MAX_MICROSERVICES}" = en todo el rango del modelo (1 a {MAX_MICROSERVICES} microservicios) ACA '
-                  "cuesta menos; no significa que AKS gane desde ahí."])
+    sheet.append([f'">{MAX_MICROSERVICES}" = no hay cruce: de 1 a 30 y en 50, 100, 150, 200, 300 y {MAX_MICROSERVICES} microservicios ACA cuesta menos, porque '
+                  "AKS suma nodos al crecer. AKS gana por tiempo activo o cluster compartido (hoja Equilibrio)."])
     if kclusters is not None and "bia" in kclusters.fields:
         build_summary_by_bia(sheet, kclusters)
     set_widths(sheet, [52, 16, 18, 36, 18, 22, 16])
