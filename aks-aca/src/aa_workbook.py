@@ -56,6 +56,7 @@ WRAP = Alignment(wrap_text=True, vertical="top")
 MODEL_POINTS = list(range(1, 31)) + [50, 100, 150, 200, 300, 500]
 MAX_MICROSERVICES = MODEL_POINTS[-1]
 ACA_MAX_VCPU = 4
+ACA_MIN_VCPU = 0.25  # smallest Consumption allocation
 USE_HEADROOM = 1.5
 MAP_MAX_MICROSERVICES = 30  # the heat map stays readable
 REQUEST_LEVELS = [1_000_000, 5_000_000, 10_000_000, 25_000_000, 50_000_000, 95_040_000, 200_000_000]
@@ -150,7 +151,7 @@ ASSUMPTIONS = [
     ("office_seconds", "Segundos de oficina por mes", None, "Fórmula: días hábiles × horas × 3600."),
     ("n_ref", "Microservicios del caso de referencia", 10, "Se usa en los umbrales de horas, réplicas y peticiones."),
     (None, "Microservicio en Container Apps (Consumption)", None, None),
-    ("cpu_rep", "vCPU por réplica", 0.5, "Combinaciones válidas de ACA: 0.25 vCPU/0.5 GiB hasta 4 vCPU/8 GiB. ADT_019: más de 4 vCPU/8 GiB va a AKS."),
+    ("cpu_rep", "vCPU por réplica", 0.5, "Supuesto del modelo. ACA permite de 0.25 vCPU / 0.5 GiB a 4 vCPU / 8 GiB; el ADT_019 solo fija el máximo: más de 4 vCPU / 8 GB va a AKS."),
     ("mem_rep", "Memoria por réplica (GiB)", 1.0, "En ACA la memoria es 2 GiB por vCPU."),
     ("min_rep_office", "Réplicas mínimas en horario de oficina", 1, "ADT_019: 1 réplica de 8 a 20 en días hábiles; fuera de horario escala a cero."),
     ("req_month", "Peticiones por microservicio al mes", 1_000_000, "Referencia: mediana de peticiones mensuales por API en APIM."),
@@ -1121,7 +1122,7 @@ def build_traffic_profile(workbook, profile, traffic):
 
 def aca_allocation(cpu, mem_gib):
     """Smallest Consumption allocation (0.25 vCPU steps, 2 GiB per vCPU) that covers the request."""
-    need = max(cpu or 0, (mem_gib or 0) / 2, 0.25)
+    need = max(cpu or 0, (mem_gib or 0) / 2, ACA_MIN_VCPU)
     return math.ceil(need * 4 - 1e-9) / 4
 
 
@@ -1192,7 +1193,8 @@ def build_aca_by_cluster(workbook, r, clusters, workloads, cost, cost_months):
           f"Réplicas medidas por Container Insights (promedio de {', '.join(full)}), workloads de aplicación (ReplicaSet). "
           "Tamaño ACA: la menor combinación que cubre el request o el uso. Peor caso para ACA: tarifa activa todo el "
           "tiempo, precio de lista sin descuento, sin la concesión gratuita; el request incluye los sidecars de Istio. "
-          "Tamaño por uso = uso promedio + 50%. Los workloads de más de 4 vCPU quedan fuera del costo ACA.", 12)
+          "Tamaño por uso = uso promedio + 50%. ACA va de 0,25 vCPU / 0,5 GiB a 4 vCPU / 8 GiB; el ADT_019 manda a AKS "
+          "lo que pase de 4 vCPU / 8 GB, así que esos workloads quedan fuera del costo ACA.", 12)
     sheet.append([])
     headers = ["Cluster", "Workloads", "No caben en ACA", "Réplicas promedio oficina", "Réplicas promedio fuera de horario",
                "Costo AKS hoy (USD/mes)", "ACA mismas réplicas, tamaño por request (peor caso)",
