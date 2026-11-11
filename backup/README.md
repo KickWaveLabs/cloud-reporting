@@ -41,6 +41,7 @@ Commands run from the repository root and work the same in PowerShell and bash.
 uv pip install -r backup/src/requirements.txt
 python backup/src/bu_compute_inventory.py
 python backup/src/bu_database_inventory.py
+python backup/src/bu_database_used_storage.py   # optional, after the database inventory: used GB per SQL DB
 python backup/src/bu_storage_inventory.py
 python backup/src/bu_native_protection_inventory.py
 python backup/src/bu_restore_compat.py
