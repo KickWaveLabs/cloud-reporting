@@ -563,6 +563,11 @@ def build_measured(workbook, clusters, usage, cost, workloads, services, months)
         ("vCPU asignables PROD sin usar en oficina", f'=SUMIFS($G$5:$G${last},$B$5:$B${last},"PROD")-'
                                                     f'SUMIFS($H$5:$H${last},$B$5:$B${last},"PROD")', "0"),
     ]
+    if usage:
+        prod = f'{usage.col("environment")},"PROD"'
+        summary.append(("Uso de memoria promedio en oficina, PROD",
+                        f'=IFERROR(SUMIFS({usage.col("mem_used_office_avg_gib")},{prod})/'
+                        f'SUMIFS({usage.col("mem_allocatable_avg_gib")},{prod}),"")', "0%"))
     refs = {}
     for label, formula, fmt in summary:
         sheet.append([label, formula])
@@ -1295,6 +1300,9 @@ def build_summary(workbook, breakeven, measured_refs, r, kclusters=None):
         ("Costo mensual total AKS PROD", f"={measured_refs['Costo mensual total AKS PROD (USD)']}", "Medido",
          "Medido_AKS; Cost Management", USD),
         ("Uso de CPU en horario de oficina, PROD", f"={measured_refs['Uso de CPU promedio en oficina, PROD']}", "Medido",
+         "Medido_AKS; métricas de plataforma", "0%"),
+        ("Uso de memoria en horario de oficina, PROD",
+         f"={measured_refs.get('Uso de memoria promedio en oficina, PROD', chr(34) * 2)}", "Medido",
          "Medido_AKS; métricas de plataforma", "0%"),
         ("Descuento real de nodos (efectivo / lista)", f"={s['discount']}", "Derivado", "Supuestos; Cost Management", "0.00"),
         ("Cluster AKS mínimo (4 nodos) a precio de lista", f"={breakeven['Costo del cluster AKS mínimo al mes (lista)']}",
