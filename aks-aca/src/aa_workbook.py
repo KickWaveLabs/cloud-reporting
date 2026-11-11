@@ -842,7 +842,7 @@ def build_patterns(workbook, deploy, hpa, kclusters, capabilities, taken_on):
     sheet.cell(row=sheet.max_row, column=3).number_format = "0%"
     sheet.append(["Costo mensual de clusters PROD con 3 microservicios o menos", "", "",
                   f'=SUMIFS({k.col("cost_month_usd")},{",".join(base + [k.col("microservices"), chr(34) + "<=3" + chr(34)])})',
-                  "Costo amortizado real (Cost Management), promedio de los meses con costo"])
+                  "Costo amortizado real (Cost Management), último mes completo del periodo"])
     sheet.cell(row=sheet.max_row, column=4).number_format = USD
 
     if hpa:
@@ -1166,7 +1166,7 @@ def aca_workloads(workloads, names):
     return out, sorted(full)
 
 
-def build_aca_by_cluster(workbook, r, clusters, workloads, cost, cost_months):
+def build_aca_by_cluster(workbook, r, clusters, workloads, cost, cost_month):
     names = {row["name"] for row in clusters.rows if row["environment"] == "PROD"}
     rows, full = aca_workloads(workloads, names)
     if not rows:
@@ -1197,7 +1197,7 @@ def build_aca_by_cluster(workbook, r, clusters, workloads, cost, cost_months):
           "lo que pase de 4 vCPU / 8 GB, así que esos workloads quedan fuera del costo ACA.", 12)
     sheet.append([])
     headers = ["Cluster", "Workloads", "No caben en ACA", "Réplicas promedio oficina", "Réplicas promedio fuera de horario",
-               "Costo AKS hoy (USD/mes)", "ACA mismas réplicas, tamaño por request (peor caso)",
+               f"Costo AKS {cost_month} (USD)", "ACA mismas réplicas, tamaño por request (peor caso)",
                "ACA mismas réplicas, tamaño por uso", "ACA regla ADT, tamaño por uso (fuera de horario en 0)",
                "AKS hoy − ACA por uso", "Más barato (AKS hoy vs ACA por uso)", "Id"]
     sheet.append(["Total de los clusters con datos"])
@@ -1219,7 +1219,8 @@ def build_aca_by_cluster(workbook, r, clusters, workloads, cost, cost_months):
                    ).number_format = "0.0"
         if cost:
             sheet.cell(row=row, column=6, value=f'=SUMIFS({cost.col("cost_usd")},{cost.col("owner_id")},L{row},'
-                                                f'{cost.col("owner_type")},"AKS")/{cost_months}').number_format = USD
+                                                f'{cost.col("owner_type")},"AKS",{cost.col("month")},"{cost_month}")'
+                       ).number_format = USD
         for column, field in ((7, "aca_same_replicas_request_usd"), (8, "aca_same_replicas_use_usd"), (9, "aca_adt_use_usd")):
             sheet.cell(row=row, column=column, value=f'=SUMIFS({d.col(field)},{by})').number_format = USD
         sheet.cell(row=row, column=10, value=f'=IF(B{row}=0,"",F{row}-H{row})').number_format = '"$"#,##0;[Red]-"$"#,##0'
@@ -1460,6 +1461,7 @@ def main():
                 if row["namespace"] not in aa.SYSTEM_NAMESPACES and not row["namespace"].startswith("aks-istio")]
     cost = load(args.results, "aa-cost", "cost_by_resource.csv")
     profile = [row for row in load(args.results, "aa-metrics", "apim_hourly_profile.csv") if row["api_id"] != "__Empty"]
+    last_cost_month = max((row["month"] for row in cost), default="")
     hpas = load(args.results, "aa-k8s-snapshot", "hpa_snapshot.csv")
     deployments = load(args.results, "aa-k8s-snapshot", "deployment_snapshot.csv")
     k8s_clusters = load(args.results, "aa-k8s-snapshot", "cluster_snapshot.csv")
@@ -1510,12 +1512,12 @@ def main():
         usage_extra = ["nodes_avg", "cpu_allocatable_avg", "cpu_used_office_avg"] if d_usage else []
         d_kclusters = Detail(workbook, "D_K8s_clusters", k8s_clusters, list(k8s_clusters[0].keys()),
                              extra=["cost_month_usd"] + usage_extra)
-        cost_months = max(1, distinct_months(cost))
         usage_months = max(1, distinct_months(usage))
         for index in range(2, len(k8s_clusters) + 2):
+            # Last full month, not the average: clusters created inside the period would look cheaper.
             d_kclusters.sheet[f"{d_kclusters.letter('cost_month_usd')}{index}"] = (
-                f'=SUMIFS({d_cost.col("cost_usd")},{d_cost.col("owner")},$A{index},{d_cost.col("owner_type")},"AKS")'
-                f'/{cost_months}' if d_cost else "")
+                f'=SUMIFS({d_cost.col("cost_usd")},{d_cost.col("owner")},$A{index},{d_cost.col("owner_type")},"AKS",'
+                f'{d_cost.col("month")},"{last_cost_month}")' if d_cost else "")
             for field in usage_extra:
                 d_kclusters.sheet[f"{d_kclusters.letter(field)}{index}"] = (
                     f'=SUMIFS({d_usage.col(field)},{d_usage.col("cluster")},$A{index})/{usage_months}')
@@ -1532,7 +1534,7 @@ def main():
     if profile:
         build_traffic_profile(workbook, profile, d_traffic)
     if d_clusters and workloads:
-        build_aca_by_cluster(workbook, r, d_clusters, workloads, d_cost, max(1, distinct_months(cost)))
+        build_aca_by_cluster(workbook, r, d_clusters, workloads, d_cost, last_cost_month)
     if d_clusters:
         measured_refs, _ = build_measured(workbook, d_clusters, d_usage, d_cost, d_workloads, d_services, months)
         build_config(workbook, d_clusters)
