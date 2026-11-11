@@ -1067,7 +1067,7 @@ def build_traffic_profile(workbook, profile, traffic):
     """Classify each API by when its traffic happens; windows and threshold are editable cells."""
     d = Detail(workbook, "D_Perfil_horario", profile, ["apim", "api_id", "day_type", "hour", "avg_requests_per_hour"])
     sheet = workbook.create_sheet("Perfil_trafico")
-    title(sheet, "Perfil de tráfico por API: oficina, horario extendido o 24/7",
+    title(sheet, "Propuesta: perfil de tráfico por API (oficina, horario extendido o 24/7)",
           "Peticiones promedio por hora de APIM (días hábiles y fin de semana, hora de Lima) en la ventana de métricas. "
           "Las celdas amarillas son editables: al cambiarlas se reclasifica todo sin volver a consultar Azure.", 7)
     sheet.append([])
@@ -1189,7 +1189,7 @@ def build_aca_by_cluster(workbook, r, clusters, workloads, cost, cost_month):
         d.sheet[f"{letter['aca_adt_use_usd']}{index}"] = (
             f"=IF({fits},{office}*3600*{rate('aca_vcpu_by_use', 'aca_mem_gib_by_use')},0)")
     sheet = workbook.create_sheet("ACA_por_cluster")
-    title(sheet, "Cada cluster PROD: costo AKS hoy vs Container Apps con sus réplicas reales",
+    title(sheet, "Propuesta: cada cluster PROD, costo AKS hoy vs Container Apps con sus réplicas reales",
           f"Réplicas medidas por Container Insights (promedio de {', '.join(full)}), workloads de aplicación (ReplicaSet). "
           "Tamaño ACA: la menor combinación que cubre el request o el uso. Peor caso para ACA: tarifa activa todo el "
           "tiempo, precio de lista sin descuento, sin la concesión gratuita; el request incluye los sidecars de Istio. "
@@ -1561,7 +1561,7 @@ def main():
     build_sources(workbook, snapshot_sources)
     build_queries(workbook, args.results)
 
-    order = ["Resumen", "Patrones", "Criterios_tecnicos", "ACA_por_cluster", "Perfil_trafico", "Supuestos", "Modelo", "Equilibrio", "Mapa", "Medido_AKS", "Trafico_APIM", "Workloads",
+    order = ["Resumen", "Patrones", "Criterios_tecnicos", "Supuestos", "Modelo", "Equilibrio", "Mapa", "ACA_por_cluster", "Perfil_trafico", "Medido_AKS", "Trafico_APIM", "Workloads",
              "Config_AKS", "Config_K8s", "Fuentes", "Precios", "Candidatos_BIA"]
     workbook._sheets.sort(key=lambda ws: order.index(ws.title) if ws.title in order
                           else (len(order) + 1 if ws.title == "Consultas" else len(order)))
