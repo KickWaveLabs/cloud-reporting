@@ -23,6 +23,7 @@ the curve, the break-even points and the map.
 """
 
 import argparse
+import math
 import json
 import os
 from calendar import monthrange
@@ -54,6 +55,8 @@ WRAP = Alignment(wrap_text=True, vertical="top")
 # One by one up to 30, then wide steps to show there is no crossing further out.
 MODEL_POINTS = list(range(1, 31)) + [50, 100, 150, 200, 300, 500]
 MAX_MICROSERVICES = MODEL_POINTS[-1]
+ACA_MAX_VCPU = 4
+USE_HEADROOM = 1.5
 MAP_MAX_MICROSERVICES = 30  # the heat map stays readable
 REQUEST_LEVELS = [1_000_000, 5_000_000, 10_000_000, 25_000_000, 50_000_000, 95_040_000, 200_000_000]
 
@@ -308,12 +311,12 @@ def build_assumptions(workbook, refs, apis_sheet, workloads_sheet, cost, usage=N
 # ---------------------------------------------------------------------------
 
 
-def aca_formula(r, n, req, warm="ADT"):
+def aca_formula(r, n, req, warm="ADT", rps_rep=None):
     """ACA monthly cost for n microservices with req requests each (Excel expressions)."""
     os_ = f"Supuestos!{r['office_seconds']}"
     s = {key: f"Supuestos!{value}" for key, value in r.items()}
     rps = f"({req}*{s['office_req_share']}/{os_})"
-    replicas = f"MAX({s['min_rep_office']},CEILING({rps}/{s['rps_rep']},1))"
+    replicas = f"MAX({s['min_rep_office']},CEILING({rps}/{rps_rep or s['rps_rep']},1))"
     extra = f"({replicas}-{s['min_rep_office']})*{os_}*{s['rate_active']}"
     if warm == "ADT":
         warm_cost = (f"{s['min_rep_office']}*{os_}*({s['office_active_share']}*{s['rate_active']}"
@@ -327,10 +330,10 @@ def aca_formula(r, n, req, warm="ADT"):
     return f"MAX(0,{n}*{per_ms}-{s['aca_grant']})+{s['aca_env_month']}"
 
 
-def aks_nodes_formula(r, n, req):
+def aks_nodes_formula(r, n, req, rps_rep=None):
     s = {key: f"Supuestos!{value}" for key, value in r.items()}
     rps = f"({req}*{s['office_req_share']}/{s['office_seconds']})"
-    peak = f"MAX({s['aks_min_rep']},CEILING({rps}*{s['peak_factor']}/{s['rps_rep']},1))"
+    peak = f"MAX({s['aks_min_rep']},CEILING({rps}*{s['peak_factor']}/{rps_rep or s['rps_rep']},1))"
     return (f"MAX({s['user_nodes_min']},CEILING({n}*{peak}*({s['cpu_rep']}+{s['sidecar_cpu']})/{s['user_cpu_node']},1),"
             f"CEILING({n}*{peak}*({s['mem_rep']}+{s['sidecar_mem']})/{s['user_mem_node']},1))")
 
@@ -1026,6 +1029,211 @@ def build_bia(workbook, kclusters):
     set_widths(sheet, [16, 16, 12, 16, 20, 16, 18, 18])
 
 
+SENSITIVITY_RPS = [5, 10, 25, 50, 100]
+SENSITIVITY_REQUESTS = [1_000_000, 10_000_000, 50_000_000, 200_000_000]
+
+
+def build_sensitivity(workbook, r):
+    """How much the peticiones-por-réplica assumption moves the result, for the reference case (n_ref)."""
+    sheet = workbook["Equilibrio"]
+    s = {key: f"Supuestos!{value}" for key, value in r.items()}
+    n = s["n_ref"]
+    sheet.append([])
+    sheet.append(["Sensibilidad: peticiones por segundo que atiende una réplica (caso de referencia: n_ref microservicios)"])
+    sheet.cell(row=sheet.max_row, column=1).font = BOLD
+    sheet.append(["El valor de Supuestos es un supuesto sin prueba de carga. Columna A editable. Con pocas peticiones "
+                  "casi no influye; con muchas, más réplicas encarecen ACA y también AKS."])
+    for label, kind in (("ACA horario ADT (USD/mes)", "aca"), ("AKS efectivo (USD/mes)", "aks")):
+        header(sheet, [label] + [f"{level / 1_000_000:g} M peticiones/mes por microservicio" for level in SENSITIVITY_REQUESTS])
+        for rps in SENSITIVITY_RPS:
+            sheet.append([rps])
+            row = sheet.max_row
+            sheet.cell(row=row, column=1).fill = INPUT_FILL
+            for column, level in enumerate(SENSITIVITY_REQUESTS, 2):
+                if kind == "aca":
+                    formula = aca_formula(r, n, str(level), rps_rep=f"$A{row}")
+                else:
+                    formula = aks_formula(r, aks_nodes_formula(r, n, str(level), rps_rep=f"$A{row}"), "effective")
+                sheet.cell(row=row, column=column, value="=" + formula).number_format = USD
+
+
+PROFILE_CLASSES = [("OFICINA", "90% o más de las peticiones en horario de oficina"),
+                   ("EXTENDIDO", "90% o más en la ventana extendida, todos los días"),
+                   ("24/7", "Tráfico repartido en el día y la noche"), ("SIN TRÁFICO", "Sin peticiones en el periodo")]
+
+
+def build_traffic_profile(workbook, profile, traffic):
+    """Classify each API by when its traffic happens; windows and threshold are editable cells."""
+    d = Detail(workbook, "D_Perfil_horario", profile, ["apim", "api_id", "day_type", "hour", "avg_requests_per_hour"])
+    sheet = workbook.create_sheet("Perfil_trafico")
+    title(sheet, "Perfil de tráfico por API: oficina, horario extendido o 24/7",
+          "Peticiones promedio por hora de APIM (días hábiles y fin de semana, hora de Lima) en la ventana de métricas. "
+          "Las celdas amarillas son editables: al cambiarlas se reclasifica todo sin volver a consultar Azure.", 7)
+    sheet.append([])
+    inputs = [("Oficina: hora de inicio (lunes a viernes)", 8), ("Oficina: hora de fin", 20),
+              ("Extendido: hora de inicio (todos los días)", 6), ("Extendido: hora de fin", 22),
+              ("Umbral para clasificar", 0.9)]
+    cells = {}
+    for label, value in inputs:
+        sheet.append([label, value])
+        sheet.cell(row=sheet.max_row, column=2).fill = INPUT_FILL
+        cells[label] = f"$B${sheet.max_row}"
+    sheet.cell(row=sheet.max_row, column=2).number_format = "0%"
+    office_start, office_end, ext_start, ext_end, threshold = cells.values()
+    apis = sorted({(row["apim"], row["api_id"]) for row in profile})
+    sheet.append([])
+    header(sheet, ["Clase", "APIs", "% de las peticiones", "", "Criterio"])
+    summary_first = sheet.max_row + 1
+    table_header = summary_first + len(PROFILE_CLASSES) + 1
+    first, last = table_header + 1, table_header + len(apis)
+    for code, meaning in PROFILE_CLASSES:
+        sheet.append([code, f'=COUNTIF($F${first}:$F${last},A{sheet.max_row + 1})',
+                      f'=IFERROR(SUMIF($F${first}:$F${last},A{sheet.max_row + 1},$C${first}:$C${last})/'
+                      f'SUM($C${first}:$C${last}),"")', "", meaning])
+        sheet.cell(row=sheet.max_row, column=3).number_format = "0%"
+    sheet.append([])
+    header(sheet, ["APIM", "API", "Peticiones por semana", "% en oficina", "% en ventana extendida", "Clase", "Pico tps (5 min)"])
+    assert sheet.max_row == table_header
+    for apim, api_id in apis:
+        sheet.append([apim, api_id])
+        row = sheet.max_row
+        api = f'{d.col("apim")},$A{row},{d.col("api_id")},$B{row}'
+        value = d.col("avg_requests_per_hour")
+
+        def hours(day_type, start=None, end=None):
+            window = f',{d.col("hour")},">="&{start},{d.col("hour")},"<"&{end}' if start else ""
+            return f'SUMIFS({value},{api},{d.col("day_type")},"{day_type}"{window})'
+
+        sheet.cell(row=row, column=3, value=f"=5*{hours('weekday')}+2*{hours('weekend')}").number_format = "#,##0"
+        sheet.cell(row=row, column=4, value=f'=IFERROR(5*{hours("weekday", office_start, office_end)}/C{row},"")'
+                   ).number_format = "0%"
+        sheet.cell(row=row, column=5, value=f'=IFERROR((5*{hours("weekday", ext_start, ext_end)}+2*'
+                                            f'{hours("weekend", ext_start, ext_end)})/C{row},"")').number_format = "0%"
+        sheet.cell(row=row, column=6, value=f'=IF(N(C{row})=0,"SIN TRÁFICO",IF(D{row}>={threshold},"OFICINA",'
+                                            f'IF(E{row}>={threshold},"EXTENDIDO","24/7")))')
+        if traffic:
+            sheet.cell(row=row, column=7, value=f'=IFERROR(_xlfn.MAXIFS({traffic.col("peak_5min_requests")},'
+                                                f'{traffic.col("apim")},$A{row},{traffic.col("api_id")},$B{row})/300,"")'
+                       ).number_format = "0.0"
+    set_widths(sheet, [44, 40, 18, 14, 18, 14, 14])
+    sheet.freeze_panes = f"C{first}"
+
+
+def aca_allocation(cpu, mem_gib):
+    """Smallest Consumption allocation (0.25 vCPU steps, 2 GiB per vCPU) that covers the request."""
+    need = max(cpu or 0, (mem_gib or 0) / 2, 0.25)
+    return math.ceil(need * 4 - 1e-9) / 4
+
+
+def aca_workloads(workloads, names):
+    """One row per PROD application workload: replica-hours per month (office / off-hours) and ACA size.
+
+    Replica-hours use the full months only (the first and last month of the window are partial).
+    """
+    rows = [row for row in workloads if row["environment"] == "PROD" and row["system_namespace"] == "NO"
+            and row["kind"] == "ReplicaSet" and row["cluster"] in names]
+    months = sorted({row["month"] for row in rows})
+    full = set(months[1:-1]) if len(months) >= 3 else set(months)
+    grouped = defaultdict(list)
+    for row in rows:
+        grouped[(row["cluster"], row["namespace"], row["workload"])].append(row)
+    out = []
+    for (cluster, namespace, workload), items in sorted(grouped.items()):
+        def replica_hours(period):
+            total = sum(float(item["replicas_avg"] or 0) * float(item["hours"] or 0)
+                        for item in items if item["period"] == period and item["month"] in full)
+            return round(total / max(1, len(full)), 1)
+
+        def weighted(field):
+            pairs = [(float(item.get(field) or 0), float(item["hours"] or 0)) for item in items]
+            hours = sum(weight for _, weight in pairs)
+            return sum(value * weight for value, weight in pairs) / hours if hours else 0
+
+        cpu_used, mem_used = weighted("cpu_used_per_replica"), weighted("mem_used_gib_per_replica")
+        cpu = max(weighted("cpu_request_per_replica"), cpu_used)
+        mem = max(weighted("mem_request_gib_per_replica"), mem_used)
+        vcpu = aca_allocation(cpu, mem)
+        # Sized by use: average use plus 50% headroom, which is what a migration would request.
+        vcpu_use = min(vcpu, aca_allocation(cpu_used * USE_HEADROOM, mem_used * USE_HEADROOM))
+        out.append({"cluster": cluster, "namespace": namespace, "workload": workload,
+                    "office_replica_hours_month": replica_hours("OFFICE"),
+                    "offhours_replica_hours_month": replica_hours("OFFHOURS"),
+                    "cpu_request_or_use": round(cpu, 3), "mem_gib_request_or_use": round(mem, 3),
+                    "cpu_used": round(cpu_used, 3), "mem_gib_used": round(mem_used, 3),
+                    "aca_vcpu": vcpu, "aca_mem_gib": vcpu * 2, "aca_vcpu_by_use": vcpu_use,
+                    "aca_mem_gib_by_use": vcpu_use * 2, "fits_aca": "SÍ" if vcpu_use <= ACA_MAX_VCPU else "NO"})
+    return out, sorted(full)
+
+
+def build_aca_by_cluster(workbook, r, clusters, workloads, cost, cost_months):
+    names = {row["name"] for row in clusters.rows if row["environment"] == "PROD"}
+    rows, full = aca_workloads(workloads, names)
+    if not rows:
+        return
+    s = {key: f"Supuestos!{value}" for key, value in r.items()}
+    d = Detail(workbook, "D_ACA_cargas", rows, list(rows[0].keys()),
+               extra=["aca_same_replicas_request_usd", "aca_same_replicas_use_usd", "aca_adt_use_usd"])
+    letter = {field: d.letter(field) for field in d.fields}
+    for index in range(2, len(rows) + 2):
+        def rate(vcpu, mem):
+            return f"(${letter[vcpu]}{index}*{s['p_vcpu_active']}+${letter[mem]}{index}*{s['p_mem_active']})"
+
+        fits = f'${letter["fits_aca"]}{index}="SÍ"'
+        office = f"${letter['office_replica_hours_month']}{index}"
+        all_hours = f"({office}+${letter['offhours_replica_hours_month']}{index})"
+        d.sheet[f"{letter['aca_same_replicas_request_usd']}{index}"] = (
+            f"=IF({fits},{all_hours}*3600*{rate('aca_vcpu', 'aca_mem_gib')},0)")
+        d.sheet[f"{letter['aca_same_replicas_use_usd']}{index}"] = (
+            f"=IF({fits},{all_hours}*3600*{rate('aca_vcpu_by_use', 'aca_mem_gib_by_use')},0)")
+        d.sheet[f"{letter['aca_adt_use_usd']}{index}"] = (
+            f"=IF({fits},{office}*3600*{rate('aca_vcpu_by_use', 'aca_mem_gib_by_use')},0)")
+    sheet = workbook.create_sheet("ACA_por_cluster")
+    title(sheet, "Cada cluster PROD: costo AKS hoy vs Container Apps con sus réplicas reales",
+          f"Réplicas medidas por Container Insights (promedio de {', '.join(full)}), workloads de aplicación (ReplicaSet). "
+          "Tamaño ACA: la menor combinación que cubre el request o el uso. Peor caso para ACA: tarifa activa todo el "
+          "tiempo, precio de lista sin descuento, sin la concesión gratuita; el request incluye los sidecars de Istio. "
+          "Tamaño por uso = uso promedio + 50%. Los workloads de más de 4 vCPU quedan fuera del costo ACA.", 12)
+    sheet.append([])
+    headers = ["Cluster", "Workloads", "No caben en ACA", "Réplicas promedio oficina", "Réplicas promedio fuera de horario",
+               "Costo AKS hoy (USD/mes)", "ACA mismas réplicas, tamaño por request (peor caso)",
+               "ACA mismas réplicas, tamaño por uso", "ACA regla ADT, tamaño por uso (fuera de horario en 0)",
+               "AKS hoy − ACA por uso", "Más barato (AKS hoy vs ACA por uso)", "Id"]
+    total_row = 5
+    sheet.append(["Total clusters con datos"])
+    sheet.cell(row=total_row, column=1).font = BOLD
+    header(sheet, headers)
+    first = sheet.max_row + 1
+    office_hours = f"({s['office_seconds']}/3600)"
+    off_hours = f"({s['hours_month']}-{s['office_seconds']}/3600)"
+    for cluster in sorted((row for row in clusters.rows if row["environment"] == "PROD"), key=lambda row: row["name"]):
+        sheet.append([cluster["name"]])
+        row = sheet.max_row
+        by = f'{d.col("cluster")},$A{row}'
+        sheet.cell(row=row, column=2, value=f"=COUNTIFS({by})")
+        sheet.cell(row=row, column=3, value=f'=COUNTIFS({by},{d.col("fits_aca")},"NO")')
+        sheet.cell(row=row, column=4, value=f'=IFERROR(SUMIFS({d.col("office_replica_hours_month")},{by})/{office_hours},"")'
+                   ).number_format = "0.0"
+        sheet.cell(row=row, column=5, value=f'=IFERROR(SUMIFS({d.col("offhours_replica_hours_month")},{by})/{off_hours},"")'
+                   ).number_format = "0.0"
+        if cost:
+            sheet.cell(row=row, column=6, value=f'=SUMIFS({cost.col("cost_usd")},{cost.col("owner_id")},L{row},'
+                                                f'{cost.col("owner_type")},"AKS")/{cost_months}').number_format = USD
+        for column, field in ((7, "aca_same_replicas_request_usd"), (8, "aca_same_replicas_use_usd"), (9, "aca_adt_use_usd")):
+            sheet.cell(row=row, column=column, value=f'=SUMIFS({d.col(field)},{by})').number_format = USD
+        sheet.cell(row=row, column=10, value=f'=IF(B{row}=0,"",F{row}-H{row})').number_format = '"$"#,##0;[Red]-"$"#,##0'
+        sheet.cell(row=row, column=11, value=f'=IF(B{row}=0,"Sin datos",IF(H{row}<F{row},"ACA","AKS"))')
+        sheet.cell(row=row, column=12, value=cluster.get("id", ""))
+    last = sheet.max_row
+    for column in (6, 7, 8, 9, 10):
+        col = get_column_letter(column)
+        sheet.cell(row=total_row, column=column, value=f'=SUMIFS({col}{first}:{col}{last},$B{first}:$B{last},">0")'
+                   ).number_format = USD
+    sheet.cell(row=total_row, column=2, value=f'=COUNTIFS(B{first}:B{last},">0")')
+    sheet.cell(row=total_row, column=11, value=f'=COUNTIFS(K{first}:K{last},"ACA")&" de "&B{total_row}&" más baratos en ACA"')
+    set_widths(sheet, [30, 11, 11, 13, 15, 16, 18, 16, 20, 16, 16, 40])
+    sheet.freeze_panes = f"B{first}"
+
+
 # ---------------------------------------------------------------------------
 # Resumen, Fuentes, Consultas
 # ---------------------------------------------------------------------------
@@ -1248,6 +1456,7 @@ def main():
     services = [row for row in load(args.results, "aa-container-insights", "aks_services.csv")
                 if row["namespace"] not in aa.SYSTEM_NAMESPACES and not row["namespace"].startswith("aks-istio")]
     cost = load(args.results, "aa-cost", "cost_by_resource.csv")
+    profile = [row for row in load(args.results, "aa-metrics", "apim_hourly_profile.csv") if row["api_id"] != "__Empty"]
     hpas = load(args.results, "aa-k8s-snapshot", "hpa_snapshot.csv")
     deployments = load(args.results, "aa-k8s-snapshot", "deployment_snapshot.csv")
     k8s_clusters = load(args.results, "aa-k8s-snapshot", "cluster_snapshot.csv")
@@ -1316,6 +1525,11 @@ def main():
     model = build_model(workbook, r)
     map_info = build_map(workbook, r)
     breakeven = build_breakeven(workbook, r, model, map_info)
+    build_sensitivity(workbook, r)
+    if profile:
+        build_traffic_profile(workbook, profile, d_traffic)
+    if d_clusters and workloads:
+        build_aca_by_cluster(workbook, r, d_clusters, workloads, d_cost, max(1, distinct_months(cost)))
     if d_clusters:
         measured_refs, _ = build_measured(workbook, d_clusters, d_usage, d_cost, d_workloads, d_services, months)
         build_config(workbook, d_clusters)
@@ -1342,7 +1556,7 @@ def main():
     build_sources(workbook, snapshot_sources)
     build_queries(workbook, args.results)
 
-    order = ["Resumen", "Patrones", "Criterios_tecnicos", "Supuestos", "Modelo", "Equilibrio", "Mapa", "Medido_AKS", "Trafico_APIM", "Workloads",
+    order = ["Resumen", "Patrones", "Criterios_tecnicos", "ACA_por_cluster", "Perfil_trafico", "Supuestos", "Modelo", "Equilibrio", "Mapa", "Medido_AKS", "Trafico_APIM", "Workloads",
              "Config_AKS", "Config_K8s", "Fuentes", "Precios", "Candidatos_BIA"]
     workbook._sheets.sort(key=lambda ws: order.index(ws.title) if ws.title in order
                           else (len(order) + 1 if ws.title == "Consultas" else len(order)))
