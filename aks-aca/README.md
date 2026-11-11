@@ -122,6 +122,8 @@ python aks-aca/src/aa_workbook.py
    Container Insights measured (sized by request and by use, 24/7 and with the ADT_019 schedule).
    `Perfil_trafico` classifies each API as office, extended or 24/7 from `apim_hourly_profile.csv`; the
    windows and threshold are editable cells, so reclassifying needs no new Azure query.
+10. Optional: `aa_deck.py` builds `aks_patrones.pptx` (summary and patterns 1, 2 and 4, native charts)
+    from the workbook's calculated values, so open the workbook in Excel and save it first.
 9. `aa_workbook.py` writes `reports/<date>-aks-aca/aks_aca_comparison.xlsx`. Add a `README.md` next to
    it with the scope and gaps of the run (see `reports/2026-11-10-aks-aca/README.md` on the machine that
    ran it).
