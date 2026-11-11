@@ -565,9 +565,19 @@ def build_measured(workbook, clusters, usage, cost, workloads, services, months)
     ]
     if usage:
         prod = f'{usage.col("environment")},"PROD"'
-        summary.append(("Uso de memoria promedio en oficina, PROD",
-                        f'=IFERROR(SUMIFS({usage.col("mem_used_office_avg_gib")},{prod})/'
-                        f'SUMIFS({usage.col("mem_allocatable_avg_gib")},{prod}),"")', "0%"))
+        def share(used, allocatable):
+            return f'=IFERROR(SUMIFS({usage.col(used)},{prod})/SUMIFS({usage.col(allocatable)},{prod}),"")'
+
+        # p95 and maximum are per pool and month; summed over clusters they are an upper bound,
+        # because the peaks of different clusters do not happen at the same hour.
+        summary += [
+            ("Uso de memoria promedio en oficina, PROD", share("mem_used_office_avg_gib", "mem_allocatable_avg_gib"), "0%"),
+            ("Uso de CPU percentil 95 por hora, PROD", share("cpu_used_p95", "cpu_allocatable_avg"), "0%"),
+            ("Uso de CPU máximo (pico de cada cluster sumado), PROD", share("cpu_used_max", "cpu_allocatable_avg"), "0%"),
+            ("Uso de memoria percentil 95 por hora, PROD", share("mem_used_p95_gib", "mem_allocatable_avg_gib"), "0%"),
+            ("Uso de memoria máximo (pico de cada cluster sumado), PROD", share("mem_used_max_gib", "mem_allocatable_avg_gib"),
+             "0%"),
+        ]
     refs = {}
     for label, formula, fmt in summary:
         sheet.append([label, formula])
@@ -1303,6 +1313,18 @@ def build_summary(workbook, breakeven, measured_refs, r, kclusters=None):
          "Medido_AKS; métricas de plataforma", "0%"),
         ("Uso de memoria en horario de oficina, PROD",
          f"={measured_refs.get('Uso de memoria promedio en oficina, PROD', chr(34) * 2)}", "Medido",
+         "Medido_AKS; métricas de plataforma", "0%"),
+        ("Uso de CPU, percentil 95 por hora (todo el día)",
+         f"={measured_refs.get('Uso de CPU percentil 95 por hora, PROD', chr(34) * 2)}", "Medido",
+         "Medido_AKS; métricas de plataforma", "0%"),
+        ("Uso de CPU, máximo (cota superior: picos de cada cluster sumados)",
+         f"={measured_refs.get('Uso de CPU máximo (pico de cada cluster sumado), PROD', chr(34) * 2)}", "Medido",
+         "Medido_AKS; métricas de plataforma", "0%"),
+        ("Uso de memoria, percentil 95 por hora (todo el día)",
+         f"={measured_refs.get('Uso de memoria percentil 95 por hora, PROD', chr(34) * 2)}", "Medido",
+         "Medido_AKS; métricas de plataforma", "0%"),
+        ("Uso de memoria, máximo (cota superior: picos de cada cluster sumados)",
+         f"={measured_refs.get('Uso de memoria máximo (pico de cada cluster sumado), PROD', chr(34) * 2)}", "Medido",
          "Medido_AKS; métricas de plataforma", "0%"),
         ("Descuento real de nodos (efectivo / lista)", f"={s['discount']}", "Derivado", "Supuestos; Cost Management", "0.00"),
         ("Cluster AKS mínimo (4 nodos) a precio de lista", f"={breakeven['Costo del cluster AKS mínimo al mes (lista)']}",
