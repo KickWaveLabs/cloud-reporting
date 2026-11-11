@@ -34,6 +34,7 @@ A microservice is a deployment outside platform namespaces (PLATFORM_NAMESPACES,
 import argparse
 import csv
 import glob
+import io
 import os
 from collections import defaultdict
 from datetime import date, datetime
@@ -152,11 +153,14 @@ def read_rows(path):
         rows = sheet.iter_rows(values_only=True)
         header = [str(cell or "").strip() for cell in next(rows)]
         return [dict(zip(header, ["" if cell is None else cell for cell in row])) for row in rows if any(row)]
-    with open(path, encoding="utf-8-sig", newline="") as handle:
-        sample = handle.read(4096)
-        handle.seek(0)
-        delimiter = max(";,\t", key=sample.split("\n")[0].count)
-        return list(csv.DictReader(handle, delimiter=delimiter))
+    with open(path, "rb") as handle:
+        raw = handle.read()
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:  # exports saved by Excel on Windows use cp1252
+        text = raw.decode("cp1252")
+    delimiter = max(";,\t", key=text.split("\n")[0].count)
+    return list(csv.DictReader(io.StringIO(text, newline=""), delimiter=delimiter))
 
 
 def select(rows, columns, path):
