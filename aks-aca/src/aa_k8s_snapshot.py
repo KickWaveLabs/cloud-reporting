@@ -16,6 +16,11 @@ A cluster is a technical fit for Container Apps when it has 1 to 15 microservice
 Apps replica by its request (4 vCPU / 8 GiB) and Container Insights shows no StatefulSet outside platform
 namespaces. Requests per second per application are not part of the rule (APIs are not mapped to clusters).
 
+HPA behaviour over 3 months uses the office-hours average of replicas, not the hourly maximum: Container
+Insights counts the pods seen in each hour, so every rolling deployment briefly adds the new pods to the old
+ones and the hourly maximum overstates scaling. At the minimum = average <= 110% of minReplicas; near the
+maximum = average >= 90% of maxReplicas.
+
 Units as exported: CPU in millicores; memory in MB (10^6 bytes, so 2Gi shows as 2147.483648).
 
 Outputs (in --output-dir):
@@ -104,6 +109,22 @@ def capabilities_of(deployment):
     words = set(name.split("-"))
     return [capability for capability, keys in CAPABILITIES.items()
             if any((key in name) if "-" in key else (key in words) for key in keys)]
+
+
+AT_MIN_FACTOR, NEAR_MAX_FACTOR = 1.1, 0.9
+
+
+def behaviour_from_average(average, low, high):
+    """Same codes as behaviour(), from the office-hours average of replicas."""
+    if None in (low, high):
+        return "SIN_DATO"
+    if low >= high:
+        return "FIJO"
+    if average in (None, ""):
+        return "SIN_DATO"
+    if average <= low * AT_MIN_FACTOR:
+        return "NUNCA_ESCALA"
+    return "LLEGA_AL_MAX" if average >= high * NEAR_MAX_FACTOR else "ESCALA"
 
 
 def behaviour(peak, low, high):
@@ -256,10 +277,8 @@ def hpa_rows(rows, history, inventory, taken_on):
             "trend_never_above_min": yes(not fixed and None not in (trend_max, low) and trend_max <= low),
             "min_two_or_more": yes(low is not None and low >= 2),
             "ci_matched": yes(bool(ci)),
-            "ci_reached_max": yes(bool(ci) and high is not None and ci["ci_replicas_max"] >= high),
-            "ci_never_above_min": yes(bool(ci) and not fixed and low is not None and ci["ci_replicas_max"] <= low),
             "behaviour_export": behaviour(trend_max, low, high),
-            "behaviour_ci": behaviour(ci.get("ci_replicas_max"), low, high),
+            "behaviour_ci": behaviour_from_average(ci.get("ci_replicas_avg_office"), low, high),
         }
         out.append(record)
     return out
@@ -410,7 +429,9 @@ def main():
         "clusters_not_in_inventory": sorted({row["cluster"] for row in hpas + deployments if row["in_inventory"] == "NO"}),
         "hpa_without_ci_history": sum(row["ci_matched"] == "NO" for row in hpas),
         "hpa_prod": flag_counts(hpas, ["fixed_min_equals_max", "at_max_now", "trend_reached_max", "trend_never_above_min",
-                                       "min_two_or_more", "ci_reached_max", "ci_never_above_min"]),
+                                       "min_two_or_more"]),
+        "hpa_prod_behaviour_ci": {code: sum(row["behaviour_ci"] == code for row in hpas if row["environment"] == "PROD")
+                                  for code in ("NUNCA_ESCALA", "ESCALA", "LLEGA_AL_MAX", "FIJO", "SIN_DATO")},
         "deployment_prod": flag_counts(deployments, ["has_hpa", "no_usage_in_ci", "request_over_3x_used",
                                                      "used_over_request", "limit_10x_request", "fits_aca_by_request"]),
     })

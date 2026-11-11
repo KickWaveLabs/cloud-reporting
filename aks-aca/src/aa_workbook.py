@@ -721,10 +721,10 @@ HPA_FINDINGS = [
     ("HPA con mínimo de 2 o más réplicas", "min_two_or_more", "SÍ",
      "Capacidad que se paga 24/7; en Container Apps fuera de horario el mínimo es 0"),
     ("HPA al máximo el día de la foto", "at_max_now", "SÍ", "Réplicas actuales = máximo del HPA"),
-    ("HPA que llegó a su máximo en los meses medidos", "ci_reached_max", "SÍ",
-     "Máximo de réplicas por hora en Container Insights ≥ máximo del HPA"),
-    ("HPA que nunca pasó de su mínimo en los meses medidos", "ci_never_above_min", "SÍ",
-     "Máximo de réplicas por hora en Container Insights ≤ mínimo del HPA"),
+    ("HPA que se queda en su mínimo en los meses medidos", "behaviour_ci", "NUNCA_ESCALA",
+     "Promedio de réplicas en oficina (Container Insights) ≤ 110% del mínimo del HPA"),
+    ("HPA cerca de su máximo en los meses medidos", "behaviour_ci", "LLEGA_AL_MAX",
+     "Promedio de réplicas en oficina (Container Insights) ≥ 90% del máximo del HPA"),
     ("HPA sin historia en Container Insights", "ci_matched", "NO",
      "Cluster sin el add-on o workload sin pods en los meses medidos"),
 ]
@@ -773,8 +773,8 @@ MICROSERVICE_BUCKETS = [("0 (sin deployments en el export)", 0, 0), ("1", 1, 1),
 REPLICA_BUCKETS = [("0 (posible zombi)", 0, 0), ("1", 1, 1), ("2 a 3", 2, 3), ("4 a 5", 4, 5), ("6 a 10", 6, 10),
                    ("11 a 20", 11, 20), ("21 a 50", 21, 50), ("Más de 50", 51, 10 ** 9)]
 LAYER_ORDER = ["business", "channel", "app", "async", "support", "core", "otros"]
-BEHAVIOURS = [("NUNCA_ESCALA", "Nunca pasa de su mínimo"), ("ESCALA", "Escala entre mínimo y máximo"),
-              ("LLEGA_AL_MAX", "Llega a su máximo"), ("FIJO", "Mínimo = máximo"), ("SIN_DATO", "Sin datos")]
+BEHAVIOURS = [("NUNCA_ESCALA", "Se queda en su mínimo"), ("ESCALA", "Escala entre mínimo y máximo"),
+              ("LLEGA_AL_MAX", "Llega o se acerca a su máximo"), ("FIJO", "Mínimo = máximo"), ("SIN_DATO", "Sin datos")]
 
 
 def section(sheet, text, span=5):
@@ -850,7 +850,8 @@ def build_patterns(workbook, deploy, hpa, kclusters, capabilities, taken_on):
             sheet.cell(row=row, column=3, value=f'=IFERROR(B{row}/SUM($B${first}:$B${first + len(REPLICA_BUCKETS) - 1}),"")'
                        ).number_format = "0%"
         sheet.append([])
-        header(sheet, ["Comportamiento del HPA", "Según ValTrend (días)", "%", "Según Container Insights (3 meses)", "%"])
+        header(sheet, ["Comportamiento del HPA", "Según ValTrend (máximo, pocos días)", "%",
+                       "Según Container Insights (promedio en oficina, 3 meses)", "%"])
         first = sheet.max_row + 1
         for code, label in BEHAVIOURS:
             sheet.append([label])
@@ -860,69 +861,119 @@ def build_patterns(workbook, deploy, hpa, kclusters, capabilities, taken_on):
             sheet.cell(row=row, column=3, value=f'=IFERROR(B{row}/SUM($B${first}:$B${end}),"")').number_format = "0%"
             sheet.cell(row=row, column=4, value=f'=COUNTIFS({",".join(prod_hpa)},{hpa.col("behaviour_ci")},"{code}")')
             sheet.cell(row=row, column=5, value=f'=IFERROR(D{row}/SUM($D${first}:$D${end}),"")').number_format = "0%"
+        sheet.append(["Container Insights: promedio de réplicas en oficina; en su mínimo = hasta 110% del mínimo, cerca del "
+                      "máximo = desde 90% del máximo. No se usa el máximo por hora porque cada despliegue suma por unos "
+                      "minutos los pods nuevos a los viejos."])
     set_widths(sheet, [52, 16, 14, 22, 70])
 
 
+LEARN = "https://learn.microsoft.com/azure/"
+ADT = "ADT_019 (Confluence)"
+NOTE_FONT = Font(name=FONT, color="C00000", italic=True)
+
+
 def build_criteria(workbook, clusters, kclusters, deploy, hpa, traffic, workloads_last, traffic_month):
-    """Technical criteria to choose a platform, each with the measured PROD figure that answers it."""
+    """Technical criteria to choose a platform, each with the measured PROD figure, its source and any caveat."""
     sheet = workbook.create_sheet("Criterios_tecnicos")
     title(sheet, "Criterios técnicos AKS vs Container Apps, con el dato medido en PROD",
-          "Cada fila: qué favorece a cada plataforma y cuánto del parque actual cae de cada lado. Límites de Container "
-          "Apps según Microsoft Learn (cuotas, 9-oct-2026; escalado, 19-may-2026).", 6)
+          "Cada fila: qué favorece a cada plataforma, cuánto del parque actual cae de cada lado y de dónde sale el "
+          "criterio. Las notas en rojo son puntos discutibles. Microsoft Learn revisado el 11-nov-2026.", 8)
     sheet.append([])
-    header(sheet, ["Criterio", "Favorece Container Apps", "Favorece AKS", "Dato medido (PROD)", "Valor", "De un total de"])
+    header(sheet, ["Criterio", "Favorece Container Apps", "Favorece AKS", "Dato medido (PROD)", "Valor", "De un total de",
+                   "Fuente", "Nota"])
 
-    def add(criterion, aca, aks, measure, value="", total=""):
-        sheet.append([criterion, aca, aks, measure, value, total])
-        for column in range(1, 5):
-            sheet.cell(row=sheet.max_row, column=column).alignment = WRAP
+    def add(criterion, aca, aks, measure, value="", total="", source="", note=""):
+        sheet.append([criterion, aca, aks, measure, value, total, source, note])
+        row = sheet.max_row
+        for column in (1, 2, 3, 4, 7, 8):
+            sheet.cell(row=row, column=column).alignment = WRAP
+        sheet.cell(row=row, column=8).font = NOTE_FONT
+        return row
 
-    if kclusters:
-        k = kclusters
-        base = f'{k.col("environment")},"PROD",{k.col("in_inventory")},"SÍ"'
-        add("Microservicios por aplicación", "15 o menos (ADT_019)", "Más de 15, o una plataforma compartida por varias apps",
-            "Clusters con 15 microservicios o menos", f'=COUNTIFS({base},{k.col("microservices")},"<=15")', f"=COUNTIFS({base})")
+    k_base = f'{kclusters.col("environment")},"PROD",{kclusters.col("in_inventory")},"SÍ"' if kclusters else ""
+    add("Microservicios por aplicación", "15 o menos", "Más de 15, o una plataforma compartida por varias apps",
+        "Clusters con 15 microservicios o menos",
+        f'=COUNTIFS({k_base},{kclusters.col("microservices")},"<=15")' if kclusters else "",
+        f"=COUNTIFS({k_base})" if kclusters else "", ADT,
+        "El umbral de 15 es del ADT; Microsoft no publica uno.")
     if traffic and traffic_month:
         t = traffic
         month = f'{t.col("month")},"{traffic_month}"'
-        add("Transacciones por segundo", "Menos de 100 tps, o tráfico con picos y valles",
-            "Más de 100 tps sostenidos (ADT_019)", f"APIs con pico de más de 100 tps en {traffic_month} (promedio de 5 min)",
-            f'=COUNTIFS({month},{t.col("peak_5min_requests")},">30000")', f"=COUNTIFS({month})")
-        add("Patrón horario", "Uso concentrado en horario de oficina; escala a 0 fuera de él",
-            "Uso constante 24/7 (más de 10 h al día, ADT_019)", f"Peticiones fuera de horario / total, {traffic_month}",
-            f'=IFERROR(SUMIFS({t.col("offhours_requests")},{month})/SUMIFS({t.col("requests")},{month}),"")')
-        sheet.cell(row=sheet.max_row, column=5).number_format = "0%"
+        add("Transacciones por segundo y patrón de tráfico", "Menos de 100 tps, o tráfico con picos y valles",
+            "Más de 100 tps sostenidos", f"APIs con pico de más de 100 tps en {traffic_month}",
+            f'=COUNTIFS({month},{t.col("peak_5min_requests")},">30000")', f"=COUNTIFS({month})",
+            f"{ADT}; métricas de APIM (Requests)",
+            "Pico por API promediado en 5 min: el pico real por segundo es algo mayor. Es por API, no por aplicación.")
+        row = add("Patrón horario", "Uso concentrado en horario de oficina; escala a 0 fuera de él",
+                  "Uso constante 24/7 (más de 10 h al día)", f"Peticiones fuera de horario / total, {traffic_month}",
+                  f'=IFERROR(SUMIFS({t.col("offhours_requests")},{month})/SUMIFS({t.col("requests")},{month}),"")', "",
+                  f"{ADT}; {LEARN}container-apps/billing")
+        sheet.cell(row=row, column=5).number_format = "0%"
     if hpa:
         h = hpa
         base = f'{h.col("environment")},"PROD",{h.col("platform_component")},"NO"'
-        add("Réplicas y autoescalado", "Escala a 0 y por eventos (KEDA integrado); hasta 1.000 réplicas por revisión",
-            "Densidad de pods alta y constante", "HPA que nunca pasó de su mínimo en 3 meses",
-            f'=COUNTIFS({base},{h.col("behaviour_ci")},"NUNCA_ESCALA")', f"=COUNTIFS({base})")
+        add("Escalado y escalado a cero", "Escala a 0 y por eventos de forma nativa; hasta 1.000 réplicas por revisión",
+            "Densidad de pods alta y constante; hoy en PROD no escala a 0 (ver escenario con KEDA abajo)",
+            "HPA que se queda en su mínimo (promedio en oficina, 3 meses)",
+            f'=COUNTIFS({base},{h.col("behaviour_ci")},"NUNCA_ESCALA")', f"=COUNTIFS({base})",
+            f"{LEARN}container-apps/scale-app")
     if deploy:
         d = deploy
         base = f'{d.col("environment")},"PROD",{d.col("platform_component")},"NO"'
-        add("Tamaño por réplica", "Hasta 4 vCPU / 8 GiB (ADT_019)", "Réplicas más grandes o VMs especiales (memoria, GPU, red)",
+        add("Tamaño por réplica", "Hasta 4 vCPU / 8 GiB", "Réplicas más grandes o VMs especiales (memoria, GPU, red)",
             "Microservicios que caben por su request", f'=COUNTIFS({base},{d.col("fits_aca_by_request")},"SÍ")',
-            f"=COUNTIFS({base})")
-    if workloads_last:
-        add("Tipo de carga", "HTTP, eventos y jobs cortos", "StatefulSet, DaemonSet propios, batch largo",
-            "Workloads StatefulSet en namespaces de aplicación", '=COUNTIFS(Workloads!$B:$B,"PROD",Workloads!$E:$E,"StatefulSet")',
-            '=COUNTIFS(Workloads!$B:$B,"PROD")')
+            f"=COUNTIFS({base})", f"{ADT}; {LEARN}container-apps/containers",
+            "En environments solo de consumo el máximo baja a 2 vCPU / 4 GiB; los del banco usan workload profiles.")
+    add("Tipo de carga y arquitectura", "HTTP, APIs, eventos y jobs cortos",
+        "StatefulSet, DaemonSet propios, batch largo, contenedores privilegiados", "Workloads StatefulSet en namespaces de aplicación",
+        '=COUNTIFS(Workloads!$B:$B,"PROD",Workloads!$E:$E,"StatefulSet")' if workloads_last else "",
+        '=COUNTIFS(Workloads!$B:$B,"PROD")' if workloads_last else "",
+        f"{LEARN}container-apps/compare-options; {LEARN}container-apps/containers",
+        "Container Apps no permite contenedores privilegiados ni imágenes que no sean Linux x86-64.")
     if clusters:
         c = clusters
         base = f'{c.col("environment")},"PROD"'
-        add("Control de la plataforma", "No necesita kubectl, CRDs ni operadores propios",
+        add("Acceso a la API de Kubernetes y control de la plataforma",
+            "No necesita kubectl, CRDs ni operadores propios (la API está oculta)",
             "Service mesh, operadores, CRDs y políticas de red propias", "Clusters con Istio gestionado",
-            f'=COUNTIFS({base},{c.col("service_mesh")},"Istio")', f"=COUNTIFS({base})")
-        add("", "", "", "Clusters con GitOps (Flux)", f'=COUNTIFS({base},{c.col("gitops_flux")},"YES")', f"=COUNTIFS({base})")
-        add("Esfuerzo operativo", "La plataforma actualiza runtime, nodos y parches",
-            "Upgrades de versión y nodos a cargo de cada equipo", "Clusters sin upgrade automático de versión",
-            f'=COUNTIFS({base},{c.col("upgrade_channel")},"none")', f"=COUNTIFS({base})")
+            f'=COUNTIFS({base},{c.col("service_mesh")},"Istio")', f"=COUNTIFS({base})",
+            f"{LEARN}container-apps/compare-options; {LEARN}aks/istio-about",
+            "Solo cuenta el Istio gestionado por Azure; un Istio instalado por la app no aparece.")
+        add("", "", "", "Clusters con GitOps (Flux)", f'=COUNTIFS({base},{c.col("gitops_flux")},"YES")',
+            f"=COUNTIFS({base})", f"{LEARN}azure-arc/kubernetes/conceptual-gitops-flux2")
+        add("Curva de aprendizaje y esfuerzo operativo", "La plataforma actualiza runtime, nodos y parches",
+            "Upgrades de versión y nodos a cargo de cada equipo; requiere experiencia en Kubernetes",
+            "Clusters sin upgrade automático de versión", f'=COUNTIFS({base},{c.col("upgrade_channel")},"none")',
+            f"=COUNTIFS({base})", f"{LEARN}aks/auto-upgrade-cluster; {LEARN}aks/istio-about",
+            "El add-on de Istio no se actualiza solo: cada revisión se sube a mano. Las horas-hombre no se cuantifican.")
     add("Límites de escala", "Cores de consumo por environment (cuota ampliable a pedido); 1.000 réplicas por revisión",
-        "Miles de pods por cluster; límites del tamaño de nodo y de la subred", "Sin dato medido: límite documentado")
-    add("Costo", "Pago por segundo activo; ver Modelo y Equilibrio", "Nodos reservados con uso alto y constante",
-        "Ver hojas Modelo, Equilibrio y Mapa")
-    set_widths(sheet, [24, 38, 38, 44, 12, 14])
+        "5.000 nodos por cluster, 250 pods por nodo, 100 node pools", "Sin dato medido: límite documentado", "", "",
+        f"{LEARN}container-apps/quotas; {LEARN}aks/quotas-skus-regions",
+        "La página de cuotas de Container Apps (9-oct-2026) no publica un tope de 100 o 200 apps por environment.")
+    if kclusters and "bia" in kclusters.fields:
+        add("Criticidad del negocio (BIA) y cumplimiento", "BIA media o baja",
+            "BIA alta o muy alta: identidad por servicio, mTLS y controles de red propios (ver sección de seguridad)",
+            "Clusters con BIA alta o muy alta", f'=COUNTIFS({k_base},{kclusters.col("bia")},"MUY ALTA")'
+            f'+COUNTIFS({k_base},{kclusters.col("bia")},"ALTA")', f"=COUNTIFS({k_base})",
+            "Export de deployments (bia); hoja Candidatos_BIA",
+            "Qué niveles de BIA exigen AKS es una decisión a validar con seguridad y arquitectura.")
+    add("Costo", "Pago por segundo activo", "Nodos reservados con uso alto y constante", "Ver hojas Modelo, Equilibrio y Mapa",
+        "", "", "https://azure.microsoft.com/pricing/details/container-apps/; Azure Retail Prices API; Cost Management")
+    sheet.append([])
+    sheet.append(["Escenario aparte: AKS con KEDA (no está en PROD, no cuenta en la tabla de arriba)"])
+    for column in range(1, 9):
+        sheet.cell(row=sheet.max_row, column=column).fill = SECTION_FILL
+    sheet.cell(row=sheet.max_row, column=1).font = BOLD
+    add("Qué cambiaría", "", "Con el add-on de KEDA, AKS escala pods a 0 por eventos; los nodos mínimos del cluster se "
+        "siguen pagando, así que el ahorro depende de que el node pool también baje", "", "", "",
+        f"{LEARN}aks/keda-about")
+    if clusters:
+        c = clusters
+        add("Estado en el banco", "", "Iniciativa de KEDA con autoscaler predictivo; no está en PROD porque Microsoft no "
+            "puede asegurar la capacidad", "Clusters PROD con KEDA", f'=COUNTIFS({c.col("environment")},"PROD",'
+            f'{c.col("keda")},"SÍ")', f'=COUNTIFS({c.col("environment")},"PROD")', "Equipo de plataforma",
+            "Dato del equipo de plataforma; confirmar el estado de la iniciativa antes de presentarlo.")
+    set_widths(sheet, [24, 34, 34, 36, 10, 12, 40, 44])
 
 
 BIA_LEVELS = ["MUY ALTA", "ALTA", "MEDIA", "BAJA", "MUY BAJA", "SIN BIA"]
