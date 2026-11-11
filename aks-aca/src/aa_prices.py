@@ -30,7 +30,7 @@ import requests
 
 import aa_common as aa
 
-bu = aa.bu
+azure = aa.azure
 ENDPOINT = "https://prices.azure.com/api/retail/prices"
 API = "2023-01-01-preview"
 
@@ -137,7 +137,7 @@ def main():
     parser.add_argument("--delimiter", default=",")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
-    bu.setup_logging(args.verbose)
+    azure.setup_logging(args.verbose)
 
     sizes = {size.strip() for size in args.vm_sizes.split(",") if size.strip()}
     sizes |= {canonical_vm_size(row["vm_size"])
@@ -167,17 +167,17 @@ def main():
             items = [item for item in fetch(filter_text, session) if predicate is None or predicate(item)]
             queries.append({"group": group, "region": "Global" if global_meter else region, "filter": filter_text,
                             "rows": len(items)})
-            bu.LOG.info("%-20s %-10s %3d meters", group, region, len(items))
+            azure.LOG.info("%-20s %-10s %3d meters", group, region, len(items))
             for item in items:
                 # Global meters are listed once per region so the workbook can look them up by region.
                 for target in (regions if global_meter else [region]):
                     rows.append(row_for(group, item, target, filter_text))
 
-    output = bu.Output(args.output_dir, args.delimiter)
+    output = azure.Output(args.output_dir, args.delimiter)
     output.csv("prices.csv", rows)
     missing = [query for query in queries if not query["rows"]]
     output.json("prices_summary.json", {
-        "generated_at": bu.iso(bu.utc_now()), "source": ENDPOINT, "api_version": API, "currency": "USD",
+        "generated_at": azure.iso(azure.utc_now()), "source": ENDPOINT, "api_version": API, "currency": "USD",
         "regions": regions, "vm_sizes": sorted(sizes), "queries": queries, "queries_without_rows": missing,
         "note": "List prices (pay-as-you-go and reservations). Contract discounts are not included.",
     })

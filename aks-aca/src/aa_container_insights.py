@@ -26,7 +26,7 @@ import requests
 
 import aa_common as aa
 
-bu = aa.bu
+azure = aa.azure
 
 LOGS_ENDPOINT = "https://api.loganalytics.io/v1"
 LOGS_SCOPE = "https://api.loganalytics.io/.default"
@@ -101,13 +101,13 @@ class LogsClient:
             self.ctx.evidence.add_call("GET", url, "logs-v1", response.status_code)
             if response.status_code >= 400:
                 error = response.json().get("error", {}) if response.content else {}
-                raise bu.ArmError(response.status_code, error.get("code", ""), error.get("message", response.reason), url)
+                raise azure.ArmError(response.status_code, error.get("code", ""), error.get("message", response.reason), url)
             tables = response.json().get("tables", [])
             if not tables:
                 return []
             columns = [column["name"] for column in tables[0]["columns"]]
             return [dict(zip(columns, row)) for row in tables[0]["rows"]]
-        raise bu.ArmError("", "RetryExhausted", "Retries exhausted", url)
+        raise azure.ArmError("", "RetryExhausted", "Retries exhausted", url)
 
 
 def month_windows(start, end):
@@ -142,14 +142,14 @@ def workload_rows(cluster, rows):
 
 
 def main():
-    parser = bu.build_parser(__doc__.splitlines()[0], aa.results_path("aa-container-insights"))
+    parser = azure.build_parser(__doc__.splitlines()[0], aa.results_path("aa-container-insights"))
     aa.add_common_arguments(parser)
     parser.add_argument("--start", default=None, help="First day (YYYY-MM-DD, Lima). Default: 92 days before --end")
     parser.add_argument("--end", default=None, help="Last day (YYYY-MM-DD, Lima). Default: yesterday")
     parser.add_argument("--clusters", default="", help="Comma-separated cluster names. Default: clusters in --environments")
     parser.add_argument("--pause", type=float, default=2.0, help="Seconds between Log Analytics queries")
     args = parser.parse_args()
-    bu.setup_logging(args.verbose)
+    azure.setup_logging(args.verbose)
     start, end = aa.metrics_window(args.start, args.end)
     environments = aa.wanted_environments(args)
 
@@ -163,7 +163,7 @@ def main():
     without = [row["name"] for row in clusters if row.get("container_insights", "").lower() != "true"]
     clusters = [row for row in clusters if row.get("container_insights", "").lower() == "true"]
 
-    ctx = bu.AzureContext(args)
+    ctx = azure.AzureContext(args)
     for name in without:
         ctx.errors.add("container-insights", name, "inventory", code="NotEnabled",
                        message="Container Insights add-on is not enabled on this cluster")
@@ -187,20 +187,20 @@ def main():
 
     ctx.evidence.queries.append({"source": "Log Analytics (Container Insights)", "label": "workloads",
                                  "query": " ".join(WORKLOADS_QUERY.split()), "rows": len(workloads),
-                                 "subscriptions": "", "seconds": "", "timestamp": bu.iso(bu.utc_now())})
+                                 "subscriptions": "", "seconds": "", "timestamp": azure.iso(azure.utc_now())})
     ctx.evidence.queries.append({"source": "Log Analytics (Container Insights)", "label": "services",
                                  "query": " ".join(SERVICES_QUERY.split()), "rows": len(services),
-                                 "subscriptions": "", "seconds": "", "timestamp": bu.iso(bu.utc_now())})
-    output = bu.Output(args.output_dir, args.delimiter)
+                                 "subscriptions": "", "seconds": "", "timestamp": azure.iso(azure.utc_now())})
+    output = azure.Output(args.output_dir, args.delimiter)
     output.csv("aks_workloads_monthly.csv", workloads)
     output.csv("aks_services.csv", services)
     output.csv("ci_coverage.csv", coverage)
-    output.csv("ci_errors.csv", ctx.errors.rows, bu.ErrorLog.FIELDS)
-    output.json("ci_summary.json", bu.run_metadata(ctx, {
+    output.csv("ci_errors.csv", ctx.errors.rows, azure.ErrorLog.FIELDS)
+    output.json("ci_summary.json", azure.run_metadata(ctx, {
         "window_utc": {"from": aa.iso_z(start), "to": aa.iso_z(end)},
         "clusters_queried": [row["name"] for row in clusters],
         "clusters_without_container_insights": without,
-        "coverage": bu.count_by(coverage, "status"),
+        "coverage": azure.count_by(coverage, "status"),
     }))
 
 

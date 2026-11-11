@@ -14,8 +14,9 @@ and one slide deck built with Copilot.
 | `results/aa-<source>/` | CSV and JSON written by each script | No |
 | `reports/<date>-aks-aca/` | `aks_aca_comparison.xlsx` and a README with that run's scope | No |
 
-`aa_common.py` reuses the Azure client of `backup/src/bu_common.py` (Resource Graph paging, ARM GET
-with retries, error log, query evidence), and `aa_cost.py` reuses its Cost Management query.
+The folder is self-contained: it does not need `backup/` or any other topic. `aa_azure.py` is the Azure
+client (Resource Graph paging, ARM GET with retries, Cost Management query, error log, query evidence);
+`aa_common.py` adds the metrics call, the office-hours calendar and the paths of this topic.
 
 Guides:
 

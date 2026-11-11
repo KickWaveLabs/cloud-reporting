@@ -19,15 +19,12 @@ Outputs (in --output-dir):
 
 import json
 import os
-import sys
 import time
 from datetime import date, timedelta
 
 import aa_common as aa
 
-bu = aa.bu
-sys.path.insert(0, os.path.join(os.path.dirname(aa.TOPIC_DIR), "backup", "src"))
-from bu_backup_cost import cost_query  # noqa: E402  (same Cost Management client as backup)
+azure = aa.azure
 
 
 def last_three_months():
@@ -79,7 +76,7 @@ def owners(clusters, environments, apps):
 
 
 def main():
-    parser = bu.build_parser(__doc__.splitlines()[0], aa.results_path("aa-cost"))
+    parser = azure.build_parser(__doc__.splitlines()[0], aa.results_path("aa-cost"))
     aa.add_common_arguments(parser)
     parser.set_defaults(environments="ALL")
     parser.add_argument("--from-date", default=None, help="Start date (YYYY-MM-DD). Default: first day, three months ago")
@@ -89,7 +86,7 @@ def main():
     parser.add_argument("--cost-type", default="AmortizedCost", choices=["AmortizedCost", "ActualCost"],
                         help="AmortizedCost spreads reservations and savings plans over the resources that use them")
     args = parser.parse_args()
-    bu.setup_logging(args.verbose)
+    azure.setup_logging(args.verbose)
     start, end = last_three_months()
     start, end = args.from_date or start, args.to_date or end
     environments = aa.wanted_environments(args)
@@ -105,7 +102,7 @@ def main():
     by_group, by_resource = owners(clusters, aca_envs, apps)
     subscriptions = sorted({row["subscription_id"] for row in clusters + aca_envs})
 
-    ctx = bu.AzureContext(args)
+    ctx = azure.AzureContext(args)
     period = {"type": args.cost_type, "timeframe": "Custom", "timePeriod": {"from": start, "to": end}}
     cache_dir = os.path.join(args.output_dir, "_cache", f"{args.cost_type}_{start}_{end}")
     os.makedirs(cache_dir, exist_ok=True)
@@ -129,7 +126,7 @@ def main():
                          {"type": "Dimension", "name": "Meter"}],
             "filter": {"or": filters} if len(filters) > 1 else filters[0],
         })
-        result = ctx.try_arm("cost-by-resource", sub_id, cost_query, ctx, sub_id, body)
+        result = ctx.try_arm("cost-by-resource", sub_id, azure.cost_query, ctx, sub_id, body)
         if result is None:
             return None
         columns, rows = result
@@ -144,7 +141,7 @@ def main():
     for sub_id, records in zip(subscriptions, results):
         for record in records or []:
             resource_id = str(record.get("ResourceId", "")).lower()
-            parts = bu.parse_resource_id(resource_id)
+            parts = azure.parse_resource_id(resource_id)
             owner = by_resource.get(resource_id) or by_group.get((sub_id.lower(), parts["resource_group"]))
             if not owner:
                 unmatched += 1
@@ -156,10 +153,10 @@ def main():
                              cost_usd=round(record.get("CostUSD", 0) or 0, 4),
                              usage_quantity=round(record.get("UsageQuantity", 0) or 0, 4)))
 
-    output = bu.Output(args.output_dir, args.delimiter)
+    output = azure.Output(args.output_dir, args.delimiter)
     output.csv("cost_by_resource.csv", rows)
-    output.csv("cost_errors.csv", ctx.errors.rows, bu.ErrorLog.FIELDS)
-    output.json("cost_summary.json", bu.run_metadata(ctx, {
+    output.csv("cost_errors.csv", ctx.errors.rows, azure.ErrorLog.FIELDS)
+    output.json("cost_summary.json", azure.run_metadata(ctx, {
         "period": {"from": start, "to": end},
         "cost_type": args.cost_type,
         "subscriptions_queried": len(subscriptions),

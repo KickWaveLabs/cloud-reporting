@@ -1,21 +1,19 @@
 """Shared helpers for the AKS vs ACA scripts (aa_*.py).
 
-Reuses the Azure context of the backup topic (backup/src/bu_common.py): Resource Graph paging,
-read-only ARM GET with retries, rate limiting, error log and evidence of every query. Adds the
-aks-aca results folder, the office-hours calendar and the Azure Monitor metrics call.
+The Azure client (Resource Graph paging, read-only ARM GET with retries, rate limiting, error log and
+evidence of every query) lives in aa_azure.py. This module adds the aks-aca results folder, the
+office-hours calendar and the Azure Monitor metrics call.
 """
 
 import csv
 import os
 import re
-import sys
 from datetime import date, datetime, timedelta, timezone
+
+import aa_azure as azure
 
 SRC_DIR = os.path.dirname(os.path.abspath(__file__))
 TOPIC_DIR = os.path.dirname(SRC_DIR)
-sys.path.insert(0, os.path.join(os.path.dirname(TOPIC_DIR), "backup", "src"))
-
-import bu_common as bu  # noqa: E402  (path set above)
 
 RESULTS_DIR = os.path.join(TOPIC_DIR, "results")
 
@@ -65,7 +63,7 @@ def metrics_window(start=None, end=None):
     first_day = date.fromisoformat(start) if start else last_day - timedelta(days=METRICS_RETENTION_DAYS - 2)
     oldest = today - timedelta(days=METRICS_RETENTION_DAYS - 1)
     if first_day < oldest:
-        bu.LOG.warning("Start %s is older than the metrics retention; using %s", first_day, oldest)
+        azure.LOG.warning("Start %s is older than the metrics retention; using %s", first_day, oldest)
         first_day = oldest
     begin = datetime(first_day.year, first_day.month, first_day.day, tzinfo=LIMA).astimezone(timezone.utc)
     finish = datetime(last_day.year, last_day.month, last_day.day, tzinfo=LIMA) + timedelta(days=1)
@@ -112,7 +110,7 @@ def get_metrics_split(ctx, resource_id, names, start, end, interval, aggregation
     """
     try:
         return [get_metrics(ctx, resource_id, names, start, end, interval, aggregation, metric_filter, top)]
-    except bu.ArmError as error:
+    except azure.ArmError as error:
         step = INTERVALS[interval]
         if "exceeded maximum limit" not in str(error.message) or end - start < 2 * MIN_SPLIT_STEPS * step:
             raise
@@ -128,7 +126,7 @@ def series_points(series, aggregation):
         value = point.get(key)
         if value is None:
             continue
-        yield bu.parse_datetime(point["timeStamp"]), value
+        yield azure.parse_datetime(point["timeStamp"]), value
 
 
 def series_dimensions(series):
@@ -137,13 +135,13 @@ def series_dimensions(series):
 
 def cluster_environment(row, subscription_name=""):
     """Environment from the tag, then the name suffix (P/C/D + digits), then the subscription name."""
-    environment, evidence = bu.normalize_environment(row.get("tags"), "")
+    environment, evidence = azure.normalize_environment(row.get("tags"), "")
     if environment != "UNKNOWN":
         return environment, evidence
-    from_name = bu.environment_from_name(row.get("name"))
+    from_name = azure.environment_from_name(row.get("name"))
     if from_name:
         return from_name, "NAME_SUFFIX"
-    return bu.normalize_environment({}, subscription_name)
+    return azure.normalize_environment({}, subscription_name)
 
 
 def is_poc_subscription(name):

@@ -18,6 +18,7 @@ Azure today. AWS and GCP get their own section when work on them starts.
 - One folder per topic: `backup/` today; new reporting topics get their own (for example `aks-aca/`).
 - Inside each: `src/` (scripts), `results/` (raw output), `reports/`, and a `README.md` with the run
   order. `results/` and `reports/` are gitignored, so the README is the only tracked description.
+- Each topic runs on its own: no imports from another topic's `src/`. Copy shared code instead.
 - Cross-topic guides go in `docs/` at the root (for example, how to present findings).
 
 ## Access

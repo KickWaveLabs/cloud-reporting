@@ -29,7 +29,7 @@ from datetime import timedelta
 
 import aa_common as aa
 
-bu = aa.bu
+azure = aa.azure
 
 NODE_METRICS = ["node_cpu_usage_millicores", "node_memory_working_set_bytes"]
 ALLOCATABLE_METRICS = ["kube_node_status_allocatable_cpu_cores", "kube_node_status_allocatable_memory_bytes"]
@@ -232,7 +232,7 @@ def day_counts(start, end):
 
 
 def main():
-    parser = bu.build_parser(__doc__.splitlines()[0], aa.results_path("aa-metrics"))
+    parser = azure.build_parser(__doc__.splitlines()[0], aa.results_path("aa-metrics"))
     aa.add_common_arguments(parser)
     parser.add_argument("--start", default=None, help="First day (YYYY-MM-DD, Lima). Default: 92 days before --end")
     parser.add_argument("--end", default=None, help="Last day (YYYY-MM-DD, Lima). Default: yesterday")
@@ -247,7 +247,7 @@ def main():
                         help="Seconds a Container App replica stays up after the last request (scale rule cooldown)")
     parser.set_defaults(arm_rps=2.0, workers=2)
     args = parser.parse_args()
-    bu.setup_logging(args.verbose)
+    azure.setup_logging(args.verbose)
     start, end = aa.metrics_window(args.start, args.end)
     environments = aa.wanted_environments(args)
 
@@ -265,9 +265,9 @@ def main():
                 if (names and any(name in row["name"].lower() for name in names))
                 or (not names and (environments is None or row["environment"] in environments))]
 
-    ctx = bu.AzureContext(args)
-    bu.LOG.info("Window %s to %s (UTC); %d clusters, %d APIM", aa.iso_z(start), aa.iso_z(end), len(clusters), len(services))
-    output = bu.Output(args.output_dir, args.delimiter)
+    ctx = azure.AzureContext(args)
+    azure.LOG.info("Window %s to %s (UTC); %d clusters, %d APIM", aa.iso_z(start), aa.iso_z(end), len(clusters), len(services))
+    output = azure.Output(args.output_dir, args.delimiter)
 
     usage_rows = []
     if not args.skip_aks:
@@ -290,8 +290,8 @@ def main():
         output.csv("apim_api_monthly.csv", api_rows)
         output.csv("apim_hourly_profile.csv", profile_rows)
 
-    output.csv("metrics_errors.csv", ctx.errors.rows, bu.ErrorLog.FIELDS)
-    output.json("metrics_summary.json", bu.run_metadata(ctx, {
+    output.csv("metrics_errors.csv", ctx.errors.rows, azure.ErrorLog.FIELDS)
+    output.json("metrics_summary.json", azure.run_metadata(ctx, {
         "window_utc": {"from": aa.iso_z(start), "to": aa.iso_z(end)},
         "office_hours": "Monday-Friday 08:00-20:00 America/Lima (UTC-5), holidays not excluded",
         "cooldown_seconds": args.cooldown,

@@ -23,7 +23,7 @@ from urllib.parse import urlparse
 
 import aa_common as aa
 
-bu = aa.bu
+azure = aa.azure
 APIM_API = "2022-08-01"
 
 QUERIES = {
@@ -132,7 +132,7 @@ def base_row(ctx, row):
         "location": row["location"],
         "environment": environment,
         "environment_evidence": evidence,
-        "cod_app": bu.normalize_cod_app(row.get("tags")),
+        "cod_app": azure.normalize_cod_app(row.get("tags")),
     }
 
 
@@ -159,7 +159,7 @@ def pool_rows(cluster, pools):
             "encryption_at_host": text(pool.get("enableEncryptionAtHost")),
             "fips": text(pool.get("enableFIPS")),
             "orchestrator_version": pool.get("currentOrchestratorVersion") or pool.get("orchestratorVersion", ""),
-            "power_state": bu.safe_get(pool, "powerState", "code", default=""),
+            "power_state": azure.safe_get(pool, "powerState", "code", default=""),
             "spot": "YES" if pool.get("scaleSetPriority") == "Spot" else "NO",
         })
     return rows
@@ -266,8 +266,8 @@ def build_aca(ctx, environments, apps):
                 rule.get("custom", {}).get("type", "") if "custom" in rule else next(iter(set(rule) - {"name"}), "")
                 for rule in row.get("ruleTypes") or []})),
             "containers": len(containers),
-            "cpu": round(sum(float(bu.safe_get(c, "resources", "cpu", default=0) or 0) for c in containers), 3),
-            "memory_gib": round(sum(float(str(bu.safe_get(c, "resources", "memory", default="0")).rstrip("Gi") or 0)
+            "cpu": round(sum(float(azure.safe_get(c, "resources", "cpu", default=0) or 0) for c in containers), 3),
+            "memory_gib": round(sum(float(str(azure.safe_get(c, "resources", "memory", default="0")).rstrip("Gi") or 0)
                                     for c in containers), 3),
             "ingress_external": row.get("ingressExternal", ""),
             "revisions_mode": row.get("revisionsMode", ""),
@@ -327,7 +327,7 @@ def build_apim(ctx, services, args):
 
 
 def main():
-    parser = bu.build_parser(__doc__.splitlines()[0], aa.results_path("aa-inventory"))
+    parser = azure.build_parser(__doc__.splitlines()[0], aa.results_path("aa-inventory"))
     aa.add_common_arguments(parser)
     parser.add_argument("--apim-names", default="",
                         help="Comma-separated name fragments of the APIM services whose APIs are listed "
@@ -335,9 +335,9 @@ def main():
     parser.add_argument("--include-poc", action="store_true",
                         help="Keep resources in POC subscriptions (left out by default)")
     args = parser.parse_args()
-    bu.setup_logging(args.verbose)
+    azure.setup_logging(args.verbose)
 
-    ctx = bu.AzureContext(args)
+    ctx = azure.AzureContext(args)
     ctx.load_subscriptions()
     results = ctx.queries(QUERIES)
     poc = set()
@@ -355,19 +355,19 @@ def main():
     environments, apps = build_aca(ctx, results["aca_environments"], results["aca_apps"])
     services, apis = build_apim(ctx, results["apim"], args)
 
-    output = bu.Output(args.output_dir, args.delimiter)
+    output = azure.Output(args.output_dir, args.delimiter)
     output.csv("aks_clusters.csv", clusters)
     output.csv("aks_node_pools.csv", pools)
     output.csv("aca_environments.csv", environments)
     output.csv("aca_apps.csv", apps)
     output.csv("apim_services.csv", services)
     output.csv("apim_apis.csv", apis)
-    output.csv("inventory_errors.csv", ctx.errors.rows, bu.ErrorLog.FIELDS)
-    output.json("inventory_summary.json", bu.run_metadata(ctx, {
+    output.csv("inventory_errors.csv", ctx.errors.rows, azure.ErrorLog.FIELDS)
+    output.json("inventory_summary.json", azure.run_metadata(ctx, {
         "aks_by_environment": dict(Counter(row["environment"] for row in clusters)),
-        "aks_nodes_by_environment": bu.count_by(clusters, "environment", "vm_sizes"),
+        "aks_nodes_by_environment": azure.count_by(clusters, "environment", "vm_sizes"),
         "aks_service_mesh": dict(Counter(row["service_mesh"] for row in clusters)),
-        "aks_monitoring": bu.count_by(clusters, "container_insights", "managed_prometheus"),
+        "aks_monitoring": azure.count_by(clusters, "container_insights", "managed_prometheus"),
         "aca_apps_by_environment": dict(Counter(row["environment"] for row in apps)),
         "apim_services": [{"name": row["name"], "environment": row["environment"], "sku": row["sku"],
                            "custom_domains": row["custom_domains"]} for row in services],
