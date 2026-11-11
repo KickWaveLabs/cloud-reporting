@@ -883,6 +883,20 @@ def build_patterns(workbook, deploy, hpa, kclusters, capabilities, taken_on):
             sheet.cell(row=row, column=3, value=f'=IFERROR(B{row}/SUM($B${first}:$B${end}),"")').number_format = "0%"
             sheet.cell(row=row, column=4, value=f'=COUNTIFS({",".join(prod_hpa)},{hpa.col("behaviour_ci")},"{code}")')
             sheet.cell(row=row, column=5, value=f'=IFERROR(D{row}/SUM($D${first}:$D${end}),"")').number_format = "0%"
+        if "min_above_need" in hpa.fields:
+            at_min = f'{",".join(prod_hpa)},{hpa.col("behaviour_ci")},"NUNCA_ESCALA"'
+            sheet.append([])
+            header(sheet, ["De los HPA que se quedan en su mínimo", "HPA", "% de los que se quedan en su mínimo", "",
+                           "Cómo se calcula"])
+            for label, field, how in (
+                    ("Su mínimo supera las réplicas que pide su CPU", "min_above_need",
+                     "Réplicas necesarias = CPU usada en oficina / (request por réplica × 70%)"),
+                    ("Su mínimo supera eso aun dejando 2 réplicas por alta disponibilidad", "min_above_need_beyond_ha",
+                     "Mínimo mayor que el máximo entre 2 y las réplicas necesarias")):
+                sheet.append([label, f'=COUNTIFS({at_min},{hpa.col(field)},"SÍ")'])
+                row = sheet.max_row
+                sheet.cell(row=row, column=3, value=f'=IFERROR(B{row}/COUNTIFS({at_min}),"")').number_format = "0%"
+                sheet.cell(row=row, column=5, value=how).alignment = WRAP
         sheet.append(["Container Insights: promedio de réplicas en oficina; en su mínimo = hasta 110% del mínimo, cerca del "
                       "máximo = desde 90% del máximo. No se usa el máximo por hora porque cada despliegue suma por unos "
                       "minutos los pods nuevos a los viejos."])

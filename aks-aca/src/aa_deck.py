@@ -98,6 +98,10 @@ def read_patterns(book):
         elif section == "p4":
             if label in [code for code, _, _ in BEHAVIOURS]:
                 data["behaviour"][label] = {"export": row[1], "ci": row[3]}
+            elif label.startswith("Su mínimo supera eso aun dejando"):
+                data["inflated_beyond_ha"] = row[2]
+            elif label.startswith("Su mínimo supera"):
+                data["inflated"] = row[2]
             elif isinstance(row[1], (int, float)):
                 data["replicas"].append((label, row[1], row[2]))
     match = re.search(r"\(configuración al ([0-9-]+)\)", data["title"])
@@ -383,8 +387,11 @@ def slide_pattern4(deck, p, source):
     for index, ((_, label, color), count) in enumerate(zip(BEHAVIOURS, counts)):
         legend_item(slide, Inches(10.75), Inches(2.0 + index * 0.55), color,
                     f"{label}: {percent(count / total if total else None)}", width=Inches(2.3))
-    callout(slide, Inches(7.2), Inches(5.95), Inches(5.7), Inches(0.75),
-            "Los mínimos de réplicas son capacidad que se paga 24/7", size=13)
+    message = "Los mínimos de réplicas son capacidad que se paga 24/7"
+    if isinstance(p.get("inflated"), (int, float)):
+        message = (f"En el {percent(p['inflated'])} de esos HPA el mínimo supera lo que pide su CPU "
+                   f"({percent(p.get('inflated_beyond_ha'))} aun dejando 2 réplicas por alta disponibilidad)")
+    callout(slide, Inches(7.2), Inches(5.95), Inches(5.7), Inches(0.75), message, size=12)
 
 
 def main():

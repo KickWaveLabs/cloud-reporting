@@ -16,6 +16,10 @@ A cluster is a technical fit for Container Apps when it has 1 to 15 microservice
 Apps replica by its request (4 vCPU / 8 GiB) and Container Insights shows no StatefulSet outside platform
 namespaces. Requests per second per application are not part of the rule (APIs are not mapped to clusters).
 
+Replicas needed by CPU = office CPU used by all replicas / (request per replica x 70%, a typical HPA target).
+A minimum above it is more than the load asks for; above max(2, needed) it is more even keeping two replicas
+for availability.
+
 HPA behaviour over 3 months uses the office-hours average of replicas, not the hourly maximum: Container
 Insights counts the pods seen in each hour, so every rolling deployment briefly adds the new pods to the old
 ones and the hourly maximum overstates scaling. At the minimum = average <= 110% of minReplicas; near the
@@ -40,6 +44,7 @@ import argparse
 import csv
 import glob
 import io
+import math
 import os
 from collections import defaultdict
 from datetime import date, datetime
@@ -112,6 +117,9 @@ def capabilities_of(deployment):
 
 
 AT_MIN_FACTOR, NEAR_MAX_FACTOR = 1.1, 0.9
+# Replicas the load needs: CPU used in office hours over the request at a typical HPA target utilization.
+CPU_TARGET = 0.7
+HA_REPLICAS = 2
 
 
 def behaviour_from_average(average, low, high):
@@ -125,6 +133,15 @@ def behaviour_from_average(average, low, high):
     if average <= low * AT_MIN_FACTOR:
         return "NUNCA_ESCALA"
     return "LLEGA_AL_MAX" if average >= high * NEAR_MAX_FACTOR else "ESCALA"
+
+
+def replicas_needed(ci):
+    """Replicas the measured office CPU needs at CPU_TARGET of the request, or None without data."""
+    used, request, replicas = (ci.get(key) for key in ("ci_cpu_used_per_replica", "ci_cpu_request_per_replica",
+                                                       "ci_replicas_avg_office"))
+    if not all(isinstance(value, (int, float)) for value in (used, request, replicas)) or request <= 0:
+        return None
+    return max(1, math.ceil(used * replicas / (request * CPU_TARGET) - 1e-9))
 
 
 def behaviour(peak, low, high):
@@ -279,6 +296,9 @@ def hpa_rows(rows, history, inventory, taken_on):
             "ci_matched": yes(bool(ci)),
             "behaviour_export": behaviour(trend_max, low, high),
             "behaviour_ci": behaviour_from_average(ci.get("ci_replicas_avg_office"), low, high),
+            "replicas_needed_by_cpu": "" if (needed := replicas_needed(ci)) is None else needed,
+            "min_above_need": yes(needed is not None and low is not None and low > needed),
+            "min_above_need_beyond_ha": yes(needed is not None and low is not None and low > max(HA_REPLICAS, needed)),
         }
         out.append(record)
     return out
