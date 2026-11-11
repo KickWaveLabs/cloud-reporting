@@ -512,7 +512,7 @@ def build_measured(workbook, clusters, usage, cost, workloads, services, months)
     sheet.append([])
     headers = ["Cluster", "Ambiente", "Nodos sistema", "Nodos user", "Tamaños de VM", "Costo mensual (USD)",
                "vCPU asignables", "vCPU usados oficina", "Uso CPU oficina", "vCPU pico", "GiB usados oficina",
-               "Workloads (sin sistema)", "Services", "Malla"]
+               "Workloads (sin sistema)", "Services", "Malla", "Id"]
     sheet.append(headers)
     style_header(sheet, 4, len(headers))
     cost_months = max(1, months.get("cost", 1))
@@ -523,7 +523,8 @@ def build_measured(workbook, clusters, usage, cost, workloads, services, months)
                       row_data["vm_sizes"]])
         row = sheet.max_row
         if cost:
-            sheet.cell(row=row, column=6, value=f'=SUMIFS({cost.col("cost_usd")},{cost.col("owner")},A{row},'
+            # By resource id: two subscriptions can hold clusters with the same name.
+            sheet.cell(row=row, column=6, value=f'=SUMIFS({cost.col("cost_usd")},{cost.col("owner_id")},O{row},'
                                                 f'{cost.col("owner_type")},"AKS")/{cost_months}').number_format = USD
         if usage:
             sheet.cell(row=row, column=7, value=f'=SUMIFS({usage.col("cpu_allocatable_avg")},{usage.col("cluster")},A{row})'
@@ -540,6 +541,7 @@ def build_measured(workbook, clusters, usage, cost, workloads, services, months)
         if services:
             sheet.cell(row=row, column=13, value=f'=COUNTIFS({services.col("cluster")},A{row})')
         sheet.cell(row=row, column=14, value=row_data.get("service_mesh", ""))
+        sheet.cell(row=row, column=15, value=row_data.get("id", ""))
     last = sheet.max_row
     sheet.append([])
     sheet.append(["Resumen PROD"])
@@ -567,7 +569,7 @@ def build_measured(workbook, clusters, usage, cost, workloads, services, months)
             sheet.append([env_name, f'=SUMIFS({cost.col("cost_usd")},{cost.col("owner")},A{sheet.max_row + 1},'
                                     f'{cost.col("owner_type")},"ACA")/{cost_months}'])
             sheet.cell(row=sheet.max_row, column=2).number_format = USD
-    set_widths(sheet, [34, 12, 10, 10, 22, 16, 12, 14, 12, 10, 12, 14, 10, 10])
+    set_widths(sheet, [34, 12, 10, 10, 22, 16, 12, 14, 12, 10, 12, 14, 10, 10, 40])
     sheet.freeze_panes = "B5"
     return refs, last
 
@@ -972,7 +974,42 @@ def build_bia(workbook, kclusters):
 # ---------------------------------------------------------------------------
 
 
-def build_summary(workbook, breakeven, measured_refs, r):
+def build_summary_by_bia(sheet, kclusters):
+    """Clusters, cost, nodes, microservices and office CPU use per BIA level, PROD only."""
+    k = kclusters
+    sheet.append([])
+    sheet.append(["Por criticidad (BIA), PROD"])
+    sheet.cell(row=sheet.max_row, column=1).font = BOLD
+    headers = ["BIA", "Clusters", "Costo mensual total", "Costo promedio por cluster", "Nodos promedio por cluster",
+               "Microservicios promedio por cluster", "Uso de CPU en oficina"]
+    sheet.append(headers)
+    style_header(sheet, sheet.max_row, len(headers))
+    present = {row["bia"] for row in k.rows if row["environment"] == "PROD"}
+    levels = [level for level in BIA_LEVELS if level in present] + sorted(present - set(BIA_LEVELS))
+    first = sheet.max_row + 1
+    for level in levels + ["Total"]:
+        sheet.append([level])
+        row = sheet.max_row
+        criteria = f'{k.col("environment")},"PROD",{k.col("in_inventory")},"SÍ"'
+        if level != "Total":
+            criteria += f',{k.col("bia")},$A{row}'
+        sheet.cell(row=row, column=2, value=f"=COUNTIFS({criteria})")
+        sheet.cell(row=row, column=3, value=f"=SUMIFS({k.col('cost_month_usd')},{criteria})").number_format = USD
+        sheet.cell(row=row, column=4, value=f'=IFERROR(C{row}/B{row},"")').number_format = USD
+        if "nodes_avg" in k.fields:
+            sheet.cell(row=row, column=5, value=f'=IFERROR(SUMIFS({k.col("nodes_avg")},{criteria})/B{row},"")'
+                       ).number_format = "0.0"
+            sheet.cell(row=row, column=7, value=f'=IFERROR(SUMIFS({k.col("cpu_used_office_avg")},{criteria})/'
+                                                f'SUMIFS({k.col("cpu_allocatable_avg")},{criteria}),"")').number_format = "0%"
+        sheet.cell(row=row, column=6, value=f'=IFERROR(AVERAGEIFS({k.col("microservices")},{criteria}),"")'
+                   ).number_format = "0.0"
+    sheet.cell(row=sheet.max_row, column=1).font = BOLD
+    sheet.append(["El BIA de un cluster es el más alto entre sus microservicios (export de deployments). Costo: "
+                  "Cost Management, amortizado; uso: métricas de plataforma, lunes a viernes 8-20."])
+    return first
+
+
+def build_summary(workbook, breakeven, measured_refs, r, kclusters=None):
     sheet = workbook.create_sheet("Resumen", 0)
     title(sheet, "AKS vs Azure Container Apps: resumen", None)
     sheet.append([f"Generado: {date.today().isoformat()}. USD por mes. Tipo: medido (Azure), derivado (cálculo sobre "
@@ -1007,7 +1044,11 @@ def build_summary(workbook, breakeven, measured_refs, r):
     for label, formula, kind, origin, fmt in rows:
         sheet.append([label, formula, kind, origin])
         sheet.cell(row=sheet.max_row, column=2).number_format = fmt
-    set_widths(sheet, [52, 16, 12, 36])
+    sheet.append([f'">{MAX_MICROSERVICES}" = en todo el rango del modelo (1 a {MAX_MICROSERVICES} microservicios) ACA '
+                  "cuesta menos; no significa que AKS gane desde ahí."])
+    if kclusters is not None and "bia" in kclusters.fields:
+        build_summary_by_bia(sheet, kclusters)
+    set_widths(sheet, [52, 16, 18, 36, 18, 22, 16])
 
 
 SOURCE_ROWS = [
@@ -1197,13 +1238,18 @@ def main():
     d_deploy = Detail(workbook, "D_Deploy", deployments, list(deployments[0].keys())) if deployments else None
     d_kclusters = None
     if k8s_clusters:
-        d_kclusters = Detail(workbook, "D_K8s_clusters", k8s_clusters, list(k8s_clusters[0].keys()), extra=["cost_month_usd"])
-        letter = d_kclusters.letter("cost_month_usd")
+        usage_extra = ["nodes_avg", "cpu_allocatable_avg", "cpu_used_office_avg"] if d_usage else []
+        d_kclusters = Detail(workbook, "D_K8s_clusters", k8s_clusters, list(k8s_clusters[0].keys()),
+                             extra=["cost_month_usd"] + usage_extra)
         cost_months = max(1, distinct_months(cost))
+        usage_months = max(1, distinct_months(usage))
         for index in range(2, len(k8s_clusters) + 2):
-            d_kclusters.sheet[f"{letter}{index}"] = (
+            d_kclusters.sheet[f"{d_kclusters.letter('cost_month_usd')}{index}"] = (
                 f'=SUMIFS({d_cost.col("cost_usd")},{d_cost.col("owner")},$A{index},{d_cost.col("owner_type")},"AKS")'
                 f'/{cost_months}' if d_cost else "")
+            for field in usage_extra:
+                d_kclusters.sheet[f"{d_kclusters.letter(field)}{index}"] = (
+                    f'=SUMIFS({d_usage.col(field)},{d_usage.col("cluster")},$A{index})/{usage_months}')
 
     months = {"cost": distinct_months(cost), "usage": distinct_months(usage)}
     apis_last = build_traffic(workbook, d_traffic, apis, distinct_months(traffic)) if d_traffic else None
@@ -1235,7 +1281,7 @@ def main():
                                                "Costo mensual total AKS PROD (USD)", "Uso de CPU promedio en oficina, PROD")}
     build_criteria(workbook, d_clusters, d_kclusters, d_deploy, d_hpa, d_traffic, workloads_last,
                    max((row["month"] for row in traffic if row["month"] < date.today().strftime("%Y-%m")), default=""))
-    build_summary(workbook, breakeven, measured_refs, r)
+    build_summary(workbook, breakeven, measured_refs, r, d_kclusters)
     build_sources(workbook, snapshot_sources)
     build_queries(workbook, args.results)
 
