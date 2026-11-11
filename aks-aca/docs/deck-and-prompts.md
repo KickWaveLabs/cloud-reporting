@@ -24,7 +24,7 @@ Inputs, all on the corporate laptop:
 Figures below name the workbook sheet they come from. Label every figure from the HPA and deployment
 exports with the export date ("configuración al 10-nov-2026").
 
-## Deck 1: Diagnóstico y criterios técnicos (11 slides)
+## Deck 1: Diagnóstico y criterios técnicos (10 slides)
 
 | # | Slide title (conclusion) | Content | Source |
 |---|---|---|---|
@@ -35,12 +35,13 @@ exports with the export date ("configuración al 10-nov-2026").
 | 5 | Patrón 4: [X]% de los HPA es fijo o nunca pasó de su mínimo en 3 meses | Replicas histogram; HPA behaviour by the export trend vs by 3 months of Container Insights | Patrones §4; Config_K8s |
 | 6 | La configuración se fragmenta y mantenerla cuesta horas-hombre: [N] clusters difieren en [M] propiedades, [Z]% no cumple la LBS | Top differing properties; LBS level from the guidelines team; upgrades manual in [N] PROD (qualitative, no amounts) | Config_AKS; Criterios_tecnicos; guidelines team |
 | 7 | Qué decide la plataforma, con el dato de PROD | Table: criterion, favours ACA, favours AKS, measured figure; Container Apps limits (consumption cores per environment, 1,000 replicas per revision) | Criterios_tecnicos |
-| 8 | Técnicamente [N] clusters PROD podrían pasar a ACA; por BIA se quedan [M] en AKS y pasarían [K] (US$[X]/mes hoy) | Table by BIA level: clusters, technical fit, current cost, move vs stay; state which BIA levels stay on AKS | Candidatos_BIA |
-| 9 | Con los mínimos de AKS del banco, ACA cuesta menos en infraestructura; AKS gana si el cluster se comparte o el servicio está activo más del ~60% del tiempo | ADT_019 model (1 replica 8–20, scale to zero); line chart AKS vs ACA | Supuestos; Modelo; Equilibrio |
-| 10 | Peticiones y umbrales del ADT_019 no cambian la decisión hasta [X] M peticiones/mes | Heat map microservices × requests; table rule, threshold, model result | Mapa; Equilibrio |
-| 11 | Hoja de ruta y decisiones | Quick wins (consolidate small clusters, right-size HPA minimums and requests), ACA where it wins, guidelines baseline; approvals with owner and date | Patrones; Config_K8s |
+| 8 | Con los mínimos de AKS del banco, ACA cuesta menos en infraestructura; AKS gana si el cluster se comparte o el servicio está activo más del ~60% del tiempo | ADT_019 model (1 replica 8–20, scale to zero); line chart AKS vs ACA | Supuestos; Modelo; Equilibrio |
+| 9 | Peticiones y umbrales del ADT_019 no cambian la decisión hasta [X] M peticiones/mes | Heat map microservices × requests; table rule, threshold, model result | Mapa; Equilibrio |
+| 10 | Hoja de ruta y decisiones | Quick wins (consolidate small clusters, right-size HPA minimums and requests), ACA where it wins, guidelines baseline; approvals with owner and date | Patrones; Config_K8s |
 
-Annex, outside the count: where each figure comes from (Fuentes, Consultas, Supuestos).
+Annex, outside the count: where each figure comes from (Fuentes, Consultas, Supuestos), and, for
+information only, the same figures by business criticality (BIA): the summary's BIA table and the
+Candidatos_BIA sheet. The main deck stays technical.
 
 ## Deck 2: Frente estratégico (5 slides)
 

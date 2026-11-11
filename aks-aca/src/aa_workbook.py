@@ -950,13 +950,6 @@ def build_criteria(workbook, clusters, kclusters, deploy, hpa, traffic, workload
         "5.000 nodos por cluster, 250 pods por nodo, 100 node pools", "Sin dato medido: límite documentado", "", "",
         f"{LEARN}container-apps/quotas; {LEARN}aks/quotas-skus-regions",
         "La página de cuotas de Container Apps (9-oct-2026) no publica un tope de 100 o 200 apps por environment.")
-    if kclusters and "bia" in kclusters.fields:
-        add("Criticidad del negocio (BIA) y cumplimiento", "BIA media o baja",
-            "BIA alta o muy alta: identidad por servicio, mTLS y controles de red propios (ver sección de seguridad)",
-            "Clusters con BIA alta o muy alta", f'=COUNTIFS({k_base},{kclusters.col("bia")},"MUY ALTA")'
-            f'+COUNTIFS({k_base},{kclusters.col("bia")},"ALTA")', f"=COUNTIFS({k_base})",
-            "Export de deployments (bia); hoja Candidatos_BIA",
-            "Qué niveles de BIA exigen AKS es una decisión a validar con seguridad y arquitectura.")
     add("Costo", "Pago por segundo activo", "Nodos reservados con uso alto y constante", "Ver hojas Modelo, Equilibrio y Mapa",
         "", "", "https://azure.microsoft.com/pricing/details/container-apps/; Azure Retail Prices API; Cost Management")
     sheet.append([])
@@ -973,6 +966,16 @@ def build_criteria(workbook, clusters, kclusters, deploy, hpa, traffic, workload
             "puede asegurar la capacidad", "Clusters PROD con KEDA", f'=COUNTIFS({c.col("environment")},"PROD",'
             f'{c.col("keda")},"SÍ")', f'=COUNTIFS({c.col("environment")},"PROD")', "Equipo de plataforma",
             "Dato del equipo de plataforma; confirmar el estado de la iniciativa antes de presentarlo.")
+    if kclusters and "bia" in kclusters.fields:
+        sheet.append([])
+        sheet.append(["Aparte, informativo: criticidad del negocio (BIA). No forma parte de los criterios técnicos"])
+        for column in range(1, 9):
+            sheet.cell(row=sheet.max_row, column=column).fill = SECTION_FILL
+        sheet.cell(row=sheet.max_row, column=1).font = BOLD
+        add("Criticidad (BIA)", "BIA media o baja", "BIA alta o muy alta", "Clusters con BIA alta o muy alta",
+            f'=COUNTIFS({k_base},{kclusters.col("bia")},"MUY ALTA")+COUNTIFS({k_base},{kclusters.col("bia")},"ALTA")',
+            f"=COUNTIFS({k_base})", "Export de deployments (bia); hoja Candidatos_BIA",
+            "Solo para conocimiento; qué niveles de BIA exigen AKS lo deciden seguridad y arquitectura.")
     set_widths(sheet, [24, 34, 34, 36, 10, 12, 40, 44])
 
 
@@ -982,7 +985,7 @@ BIA_REQUIRES_AKS = ("MUY ALTA", "ALTA")
 
 def build_bia(workbook, kclusters):
     sheet = workbook.create_sheet("Candidatos_BIA")
-    title(sheet, "Clusters PROD que podrían pasar a Container Apps: criterio técnico y luego criticidad (BIA)",
+    title(sheet, "Anexo informativo: clusters PROD aptos para Container Apps, separados por criticidad (BIA)",
           "Apto técnicamente = 1 a 15 microservicios, todos caben en una réplica de Container Apps por su request "
           "(4 vCPU / 8 GiB) y sin StatefulSet de aplicación. La columna B (editable) dice qué niveles de BIA se quedan "
           "en AKS por cumplimiento. No incluye peticiones por segundo por aplicación. Detalle en D_K8s_clusters.", 8)
@@ -1029,7 +1032,7 @@ def build_summary_by_bia(sheet, kclusters):
     """Clusters, cost, nodes, microservices and office CPU use per BIA level, PROD only."""
     k = kclusters
     sheet.append([])
-    sheet.append(["Por criticidad (BIA), PROD"])
+    sheet.append(["Anexo informativo: por criticidad (BIA), PROD. No cambia las cifras de arriba"])
     sheet.cell(row=sheet.max_row, column=1).font = BOLD
     headers = ["BIA", "Clusters", "Costo mensual total", "Costo promedio por cluster", "Nodos promedio por cluster",
                "Microservicios promedio por cluster", "Uso de CPU en oficina"]
@@ -1336,8 +1339,8 @@ def main():
     build_sources(workbook, snapshot_sources)
     build_queries(workbook, args.results)
 
-    order = ["Resumen", "Patrones", "Criterios_tecnicos", "Candidatos_BIA", "Supuestos", "Modelo", "Equilibrio", "Mapa", "Medido_AKS", "Trafico_APIM", "Workloads",
-             "Config_AKS", "Config_K8s", "Fuentes", "Precios"]
+    order = ["Resumen", "Patrones", "Criterios_tecnicos", "Supuestos", "Modelo", "Equilibrio", "Mapa", "Medido_AKS", "Trafico_APIM", "Workloads",
+             "Config_AKS", "Config_K8s", "Fuentes", "Precios", "Candidatos_BIA"]
     workbook._sheets.sort(key=lambda ws: order.index(ws.title) if ws.title in order
                           else (len(order) + 1 if ws.title == "Consultas" else len(order)))
     for sheet in workbook.worksheets:
