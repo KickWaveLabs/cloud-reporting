@@ -1200,8 +1200,8 @@ def build_aca_by_cluster(workbook, r, clusters, workloads, cost, cost_months):
                "Costo AKS hoy (USD/mes)", "ACA mismas réplicas, tamaño por request (peor caso)",
                "ACA mismas réplicas, tamaño por uso", "ACA regla ADT, tamaño por uso (fuera de horario en 0)",
                "AKS hoy − ACA por uso", "Más barato (AKS hoy vs ACA por uso)", "Id"]
-    total_row = 5
-    sheet.append(["Total clusters con datos"])
+    sheet.append(["Total de los clusters con datos"])
+    total_row = sheet.max_row
     sheet.cell(row=total_row, column=1).font = BOLD
     header(sheet, headers)
     first = sheet.max_row + 1
@@ -1233,6 +1233,7 @@ def build_aca_by_cluster(workbook, r, clusters, workloads, cost, cost_months):
     sheet.cell(row=total_row, column=2, value=f'=COUNTIFS(B{first}:B{last},">0")')
     sheet.cell(row=total_row, column=11, value=f'=COUNTIFS(K{first}:K{last},"ACA")&" de "&B{total_row}&" más baratos en ACA"')
     set_widths(sheet, [30, 11, 11, 13, 15, 16, 18, 16, 20, 16, 16, 40])
+    sheet.column_dimensions["L"].hidden = True  # resource id, only used to match the cost
     sheet.freeze_panes = f"B{first}"
 
 
