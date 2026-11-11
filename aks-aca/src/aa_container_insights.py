@@ -169,7 +169,10 @@ def main():
                        message="Container Insights add-on is not enabled on this cluster")
     client = LogsClient(ctx, args.pause)
     workloads, services, coverage = [], [], []
-    for cluster in clusters:  # sequential: Log Analytics allows few concurrent queries per user
+    started = time.monotonic()
+    for number, cluster in enumerate(clusters, 1):  # sequential: Log Analytics allows few concurrent queries per user
+        azure.LOG.info("Container Insights %d/%d %s (%.0f min)", number, len(clusters), cluster["name"],
+                       (time.monotonic() - started) / 60)
         for month, begin, finish in month_windows(start, end):
             timespan = f"{aa.iso_z(begin)}/{aa.iso_z(finish)}"
             kql = WORKLOADS_QUERY.format(start=aa.iso_z(begin), end=aa.iso_z(finish))

@@ -714,6 +714,215 @@ def build_config(workbook, clusters):
     set_widths(sheet, [26, 60, 22, 14, 10, 18, 14])
 
 
+HPA_FINDINGS = [
+    ("HPA que no puede escalar (mín. = máx.)", "fixed_min_equals_max", "SÍ", "Mínimo y máximo iguales en el export"),
+    ("HPA con mínimo de 2 o más réplicas", "min_two_or_more", "SÍ",
+     "Capacidad que se paga 24/7; en Container Apps fuera de horario el mínimo es 0"),
+    ("HPA al máximo el día de la foto", "at_max_now", "SÍ", "Réplicas actuales = máximo del HPA"),
+    ("HPA que llegó a su máximo en los meses medidos", "ci_reached_max", "SÍ",
+     "Máximo de réplicas por hora en Container Insights ≥ máximo del HPA"),
+    ("HPA que nunca pasó de su mínimo en los meses medidos", "ci_never_above_min", "SÍ",
+     "Máximo de réplicas por hora en Container Insights ≤ mínimo del HPA"),
+    ("HPA sin historia en Container Insights", "ci_matched", "NO",
+     "Cluster sin el add-on o workload sin pods en los meses medidos"),
+]
+DEPLOYMENT_FINDINGS = [
+    ("Deployments sin HPA", "has_hpa", "NO", "Sin fila en el export de HPA"),
+    ("Deployments sin pods en los meses medidos (posibles zombis)", "no_usage_in_ci", "SÍ",
+     "El cluster tiene Container Insights pero el workload no aparece"),
+    ("Request de CPU más de 3 veces el uso real", "request_over_3x_used", "SÍ",
+     "Request del export / vCPU usados por réplica en horario de oficina"),
+    ("Uso real de CPU por encima del request", "used_over_request", "SÍ",
+     "El scheduler reserva menos de lo que usa: riesgo de contención en el nodo"),
+    ("Límite de CPU 10 veces el request o más", "limit_10x_request", "SÍ", "Límite / request del export"),
+    ("Cabe en una réplica de Container Apps según su request", "fits_aca_by_request", "SÍ",
+     "Request ≤ 4 vCPU y ≤ 8 GiB, máximo por réplica del ADT_019"),
+]
+
+
+def build_k8s(workbook, hpa, deployments, taken_on):
+    sheet = workbook.create_sheet("Config_K8s")
+    title(sheet, f"HPA y deployments PROD: configuración al {taken_on} frente a los meses medidos",
+          "La configuración es una foto de un día (export del equipo de plataforma, sin historia). La historia de "
+          "réplicas y uso sale de Container Insights. Detalle por fila en D_HPA y D_Deploy.", 5)
+    sheet.append([])
+    headers = ["Hallazgo", "PROD", "Total PROD", "%", "Cómo se calcula"]
+    sheet.append(headers)
+    style_header(sheet, 4, len(headers))
+    for detail, findings in ((hpa, HPA_FINDINGS), (deployments, DEPLOYMENT_FINDINGS)):
+        if detail is None:
+            continue
+        for label, field, value, how in findings:
+            if field not in detail.fields:
+                continue
+            sheet.append([label])
+            row = sheet.max_row
+            sheet.cell(row=row, column=2, value=f'=COUNTIFS({detail.col("environment")},"PROD",{detail.col(field)},"{value}")')
+            sheet.cell(row=row, column=3, value=f'=COUNTIFS({detail.col("environment")},"PROD")')
+            sheet.cell(row=row, column=4, value=f'=IFERROR(B{row}/C{row},"")').number_format = "0%"
+            sheet.cell(row=row, column=5, value=how).alignment = WRAP
+        sheet.append([])
+    set_widths(sheet, [56, 10, 12, 8, 70])
+
+
+MICROSERVICE_BUCKETS = [("0 (sin deployments en el export)", 0, 0), ("1", 1, 1), ("2 a 3", 2, 3), ("4 a 5", 4, 5),
+                        ("6 a 10", 6, 10), ("11 a 15", 11, 15), ("16 a 30", 16, 30), ("31 a 100", 31, 100),
+                        ("Más de 100", 101, 10 ** 9)]
+REPLICA_BUCKETS = [("0 (posible zombi)", 0, 0), ("1", 1, 1), ("2 a 3", 2, 3), ("4 a 5", 4, 5), ("6 a 10", 6, 10),
+                   ("11 a 20", 11, 20), ("21 a 50", 21, 50), ("Más de 50", 51, 10 ** 9)]
+LAYER_ORDER = ["business", "channel", "app", "async", "support", "core", "otros"]
+BEHAVIOURS = [("NUNCA_ESCALA", "Nunca pasa de su mínimo"), ("ESCALA", "Escala entre mínimo y máximo"),
+              ("LLEGA_AL_MAX", "Llega a su máximo"), ("FIJO", "Mínimo = máximo"), ("SIN_DATO", "Sin datos")]
+
+
+def section(sheet, text, span=5):
+    sheet.append([])
+    sheet.append([text])
+    row = sheet.max_row
+    for column in range(1, span + 1):
+        sheet.cell(row=row, column=column).fill = SECTION_FILL
+    sheet.cell(row=row, column=1).font = BOLD
+
+
+def header(sheet, values):
+    sheet.append(values)
+    style_header(sheet, sheet.max_row, len(values))
+
+
+def build_patterns(workbook, deploy, hpa, kclusters, capabilities, taken_on):
+    sheet = workbook.create_sheet("Patrones")
+    title(sheet, f"Patrones de uso de AKS en PROD (configuración al {taken_on})",
+          "Microservicio = deployment fuera de namespaces de plataforma. Dominio = namespace. Capa = primera palabra "
+          "del nombre. Réplicas y HPA del export de un día; la historia de 3 meses sale de Container Insights.", 5)
+    prod_ms = [deploy.col("environment"), '"PROD"', deploy.col("platform_component"), '"NO"']
+
+    section(sheet, "Patrón 1. Granularidad de microservicios")
+    header(sheet, ["Dato", "Valor", "% del total", "", "Cómo se calcula"])
+    sheet.append(["Microservicios PROD", f"=COUNTIFS({','.join(prod_ms)})", "", "", "Filas de D_Deploy en PROD sin plataforma"])
+    total_row = sheet.max_row
+    for layer in LAYER_ORDER:
+        sheet.append([f"Capa {layer}-*" if layer != "otros" else "Otras capas"])
+        row = sheet.max_row
+        sheet.cell(row=row, column=2, value=f'=COUNTIFS({",".join(prod_ms)},{deploy.col("layer")},"{layer}")')
+        sheet.cell(row=row, column=3, value=f'=IFERROR(B{row}/$B${total_row},"")').number_format = "0%"
+    if capabilities:
+        sheet.append([])
+        header(sheet, ["Capacidad repetida en varios dominios", "Dominios PROD", "Deployments PROD", "",
+                       "Dominios (deployments)"])
+        for row in capabilities:
+            sheet.append([row["capability"], number(row["namespaces_prod"]), number(row["deployments_prod"]), "",
+                          row["namespaces"]])
+            sheet.cell(row=sheet.max_row, column=5).alignment = WRAP
+
+    section(sheet, "Patrón 2. Clusters por número de microservicios")
+    header(sheet, ["Microservicios por cluster", "Clusters PROD", "% de clusters", "Costo mensual (USD)", "Cómo se calcula"])
+    k = kclusters
+    base = [k.col("environment"), '"PROD"', k.col("in_inventory"), '"SÍ"']
+    first = sheet.max_row + 1
+    for label, low, high in MICROSERVICE_BUCKETS:
+        criteria = ",".join(base + [k.col("microservices"), f'">={low}"', k.col("microservices"), f'"<={high}"'])
+        sheet.append([label, f"=COUNTIFS({criteria})"])
+        row = sheet.max_row
+        sheet.cell(row=row, column=3, value=f'=IFERROR(B{row}/SUM($B${first}:$B${first + len(MICROSERVICE_BUCKETS) - 1}),"")'
+                   ).number_format = "0%"
+        sheet.cell(row=row, column=4, value=f"=SUMIFS({k.col('cost_month_usd')},{criteria})").number_format = USD
+    last = sheet.max_row
+    sheet.append(["Clusters PROD con 15 microservicios o menos",
+                  f'=COUNTIFS({",".join(base + [k.col("microservices"), chr(34) + "<=15" + chr(34)])})',
+                  f'=IFERROR(B{last + 1}/SUM($B${first}:$B${last}),"")', "", "Umbral de 15 microservicios del ADT_019"])
+    sheet.cell(row=sheet.max_row, column=3).number_format = "0%"
+    sheet.append(["Costo mensual de clusters PROD con 3 microservicios o menos", "", "",
+                  f'=SUMIFS({k.col("cost_month_usd")},{",".join(base + [k.col("microservices"), chr(34) + "<=3" + chr(34)])})',
+                  "Costo amortizado real (Cost Management), promedio de los meses con costo"])
+    sheet.cell(row=sheet.max_row, column=4).number_format = USD
+
+    if hpa:
+        section(sheet, "Patrón 4. Réplicas y HPA")
+        header(sheet, ["Réplicas actuales (día de la foto)", "HPA PROD", "% de HPA", "", "Cómo se calcula"])
+        prod_hpa = [hpa.col("environment"), '"PROD"', hpa.col("platform_component"), '"NO"']
+        first = sheet.max_row + 1
+        for label, low, high in REPLICA_BUCKETS:
+            criteria = ",".join(prod_hpa + [hpa.col("replicas_now"), f'">={low}"', hpa.col("replicas_now"), f'"<={high}"'])
+            sheet.append([label, f"=COUNTIFS({criteria})"])
+            row = sheet.max_row
+            sheet.cell(row=row, column=3, value=f'=IFERROR(B{row}/SUM($B${first}:$B${first + len(REPLICA_BUCKETS) - 1}),"")'
+                       ).number_format = "0%"
+        sheet.append([])
+        header(sheet, ["Comportamiento del HPA", "Según ValTrend (días)", "%", "Según Container Insights (3 meses)", "%"])
+        first = sheet.max_row + 1
+        for code, label in BEHAVIOURS:
+            sheet.append([label])
+            row = sheet.max_row
+            end = first + len(BEHAVIOURS) - 1
+            sheet.cell(row=row, column=2, value=f'=COUNTIFS({",".join(prod_hpa)},{hpa.col("behaviour_export")},"{code}")')
+            sheet.cell(row=row, column=3, value=f'=IFERROR(B{row}/SUM($B${first}:$B${end}),"")').number_format = "0%"
+            sheet.cell(row=row, column=4, value=f'=COUNTIFS({",".join(prod_hpa)},{hpa.col("behaviour_ci")},"{code}")')
+            sheet.cell(row=row, column=5, value=f'=IFERROR(D{row}/SUM($D${first}:$D${end}),"")').number_format = "0%"
+    set_widths(sheet, [52, 16, 14, 22, 70])
+
+
+def build_criteria(workbook, clusters, kclusters, deploy, hpa, traffic, workloads_last, traffic_month):
+    """Technical criteria to choose a platform, each with the measured PROD figure that answers it."""
+    sheet = workbook.create_sheet("Criterios_tecnicos")
+    title(sheet, "Criterios técnicos AKS vs Container Apps, con el dato medido en PROD",
+          "Cada fila: qué favorece a cada plataforma y cuánto del parque actual cae de cada lado. Límites de Container "
+          "Apps según Microsoft Learn (cuotas, 9-oct-2026; escalado, 19-may-2026).", 6)
+    sheet.append([])
+    header(sheet, ["Criterio", "Favorece Container Apps", "Favorece AKS", "Dato medido (PROD)", "Valor", "De un total de"])
+
+    def add(criterion, aca, aks, measure, value="", total=""):
+        sheet.append([criterion, aca, aks, measure, value, total])
+        for column in range(1, 5):
+            sheet.cell(row=sheet.max_row, column=column).alignment = WRAP
+
+    if kclusters:
+        k = kclusters
+        base = f'{k.col("environment")},"PROD",{k.col("in_inventory")},"SÍ"'
+        add("Microservicios por aplicación", "15 o menos (ADT_019)", "Más de 15, o una plataforma compartida por varias apps",
+            "Clusters con 15 microservicios o menos", f'=COUNTIFS({base},{k.col("microservices")},"<=15")', f"=COUNTIFS({base})")
+    if traffic and traffic_month:
+        t = traffic
+        month = f'{t.col("month")},"{traffic_month}"'
+        add("Transacciones por segundo", "Menos de 100 tps, o tráfico con picos y valles",
+            "Más de 100 tps sostenidos (ADT_019)", f"APIs con pico de más de 100 tps en {traffic_month} (promedio de 5 min)",
+            f'=COUNTIFS({month},{t.col("peak_5min_requests")},">30000")', f"=COUNTIFS({month})")
+        add("Patrón horario", "Uso concentrado en horario de oficina; escala a 0 fuera de él",
+            "Uso constante 24/7 (más de 10 h al día, ADT_019)", f"Peticiones fuera de horario / total, {traffic_month}",
+            f'=IFERROR(SUMIFS({t.col("offhours_requests")},{month})/SUMIFS({t.col("requests")},{month}),"")')
+        sheet.cell(row=sheet.max_row, column=5).number_format = "0%"
+    if hpa:
+        h = hpa
+        base = f'{h.col("environment")},"PROD",{h.col("platform_component")},"NO"'
+        add("Réplicas y autoescalado", "Escala a 0 y por eventos (KEDA integrado); hasta 1.000 réplicas por revisión",
+            "Densidad de pods alta y constante", "HPA que nunca pasó de su mínimo en 3 meses",
+            f'=COUNTIFS({base},{h.col("behaviour_ci")},"NUNCA_ESCALA")', f"=COUNTIFS({base})")
+    if deploy:
+        d = deploy
+        base = f'{d.col("environment")},"PROD",{d.col("platform_component")},"NO"'
+        add("Tamaño por réplica", "Hasta 4 vCPU / 8 GiB (ADT_019)", "Réplicas más grandes o VMs especiales (memoria, GPU, red)",
+            "Microservicios que caben por su request", f'=COUNTIFS({base},{d.col("fits_aca_by_request")},"SÍ")',
+            f"=COUNTIFS({base})")
+    if workloads_last:
+        add("Tipo de carga", "HTTP, eventos y jobs cortos", "StatefulSet, DaemonSet propios, batch largo",
+            "Workloads StatefulSet en namespaces de aplicación", '=COUNTIFS(Workloads!$B:$B,"PROD",Workloads!$E:$E,"StatefulSet")',
+            '=COUNTIFS(Workloads!$B:$B,"PROD")')
+    if clusters:
+        c = clusters
+        base = f'{c.col("environment")},"PROD"'
+        add("Control de la plataforma", "No necesita kubectl, CRDs ni operadores propios",
+            "Service mesh, operadores, CRDs y políticas de red propias", "Clusters con Istio gestionado",
+            f'=COUNTIFS({base},{c.col("service_mesh")},"Istio")', f"=COUNTIFS({base})")
+        add("", "", "", "Clusters con GitOps (Flux)", f'=COUNTIFS({base},{c.col("gitops_flux")},"YES")', f"=COUNTIFS({base})")
+        add("Esfuerzo operativo", "La plataforma actualiza runtime, nodos y parches",
+            "Upgrades de versión y nodos a cargo de cada equipo", "Clusters sin upgrade automático de versión",
+            f'=COUNTIFS({base},{c.col("upgrade_channel")},"none")', f"=COUNTIFS({base})")
+    add("Límites de escala", "Cores de consumo por environment (cuota ampliable a pedido); 1.000 réplicas por revisión",
+        "Miles de pods por cluster; límites del tamaño de nodo y de la subred", "Sin dato medido: límite documentado")
+    add("Costo", "Pago por segundo activo; ver Modelo y Equilibrio", "Nodos reservados con uso alto y constante",
+        "Ver hojas Modelo, Equilibrio y Mapa")
+    set_widths(sheet, [24, 38, 38, 44, 12, 14])
+
+
 # ---------------------------------------------------------------------------
 # Resumen, Fuentes, Consultas
 # ---------------------------------------------------------------------------
@@ -792,7 +1001,7 @@ SOURCE_ROWS = [
 ]
 
 
-def build_sources(workbook):
+def build_sources(workbook, extra_rows=()):
     sheet = workbook.create_sheet("Fuentes")
     title(sheet, "De dónde sale cada cifra",
           "Medido = dato leído de Azure en la corrida. Derivado = cálculo sobre medidos. Estimado = modelo con supuestos. "
@@ -801,7 +1010,7 @@ def build_sources(workbook):
     headers = ["Dato", "Tipo", "Fuente", "Cómo se obtiene", "Archivo de salida", "Cómo verificarlo"]
     sheet.append(headers)
     style_header(sheet, 4, len(headers))
-    for values in SOURCE_ROWS:
+    for values in SOURCE_ROWS + list(extra_rows):
         sheet.append(list(values))
         for column in range(1, 7):
             sheet.cell(row=sheet.max_row, column=column).alignment = WRAP
@@ -897,6 +1106,15 @@ def main():
     services = [row for row in load(args.results, "aa-container-insights", "aks_services.csv")
                 if row["namespace"] not in aa.SYSTEM_NAMESPACES and not row["namespace"].startswith("aks-istio")]
     cost = load(args.results, "aa-cost", "cost_by_resource.csv")
+    hpas = load(args.results, "aa-k8s-snapshot", "hpa_snapshot.csv")
+    deployments = load(args.results, "aa-k8s-snapshot", "deployment_snapshot.csv")
+    k8s_clusters = load(args.results, "aa-k8s-snapshot", "cluster_snapshot.csv")
+    capabilities = load(args.results, "aa-k8s-snapshot", "capability_domains.csv")
+    snapshot_path = os.path.join(args.results, "aa-k8s-snapshot", "snapshot_summary.json")
+    snapshot = {}
+    if os.path.exists(snapshot_path):
+        with open(snapshot_path, encoding="utf-8") as handle:
+            snapshot = json.load(handle)
     # Metrics and Container Insights may hold clusters the inventory no longer lists (for example POC ones).
     names = {row["name"] for row in clusters}
     usage, workloads, services = ([row for row in rows if row["cluster"] in names] for rows in (usage, workloads, services))
@@ -931,6 +1149,17 @@ def main():
     d_workloads = Detail(workbook, "D_Workloads", workloads, all_fields(workloads), complete=True) if workloads else None
     d_services = Detail(workbook, "D_Services", services, list(services[0].keys())) if services else None
     d_cost = Detail(workbook, "D_Costo", cost, list(cost[0].keys())) if cost else None
+    d_hpa = Detail(workbook, "D_HPA", hpas, list(hpas[0].keys())) if hpas else None
+    d_deploy = Detail(workbook, "D_Deploy", deployments, list(deployments[0].keys())) if deployments else None
+    d_kclusters = None
+    if k8s_clusters:
+        d_kclusters = Detail(workbook, "D_K8s_clusters", k8s_clusters, list(k8s_clusters[0].keys()), extra=["cost_month_usd"])
+        letter = d_kclusters.letter("cost_month_usd")
+        cost_months = max(1, distinct_months(cost))
+        for index in range(2, len(k8s_clusters) + 2):
+            d_kclusters.sheet[f"{letter}{index}"] = (
+                f'=SUMIFS({d_cost.col("cost_usd")},{d_cost.col("owner")},$A{index},{d_cost.col("owner_type")},"AKS")'
+                f'/{cost_months}' if d_cost else "")
 
     months = {"cost": distinct_months(cost), "usage": distinct_months(usage)}
     apis_last = build_traffic(workbook, d_traffic, apis, distinct_months(traffic)) if d_traffic else None
@@ -943,16 +1172,29 @@ def main():
     if d_clusters:
         measured_refs, _ = build_measured(workbook, d_clusters, d_usage, d_cost, d_workloads, d_services, months)
         build_config(workbook, d_clusters)
+    snapshot_sources = []
+    if d_hpa or d_deploy:
+        taken_on = snapshot.get("snapshot_date", "")
+        build_k8s(workbook, d_hpa, d_deploy, taken_on)
+        if d_deploy and d_kclusters:
+            build_patterns(workbook, d_deploy, d_hpa, d_kclusters, capabilities, taken_on)
+        snapshot_sources.append((
+            f"HPA, requests y límites por deployment (foto del {taken_on})", "Medido (un día)",
+            "Export del equipo de plataforma", ", ".join(item["file"] for item in snapshot.get("inputs", [])),
+            "hpa_snapshot.csv, deployment_snapshot.csv",
+            "kubectl get hpa / get deployment en el cluster; la historia, en Container Insights"))
     else:
         measured_refs = {key: '""' for key in ("Clusters PROD", "Clusters PROD con 4 nodos o menos",
                                                "Costo mensual promedio por cluster PROD (USD)",
                                                "Costo mensual total AKS PROD (USD)", "Uso de CPU promedio en oficina, PROD")}
+    build_criteria(workbook, d_clusters, d_kclusters, d_deploy, d_hpa, d_traffic, workloads_last,
+                   max((row["month"] for row in traffic if row["month"] < date.today().strftime("%Y-%m")), default=""))
     build_summary(workbook, breakeven, measured_refs, r)
-    build_sources(workbook)
+    build_sources(workbook, snapshot_sources)
     build_queries(workbook, args.results)
 
-    order = ["Resumen", "Supuestos", "Modelo", "Equilibrio", "Mapa", "Medido_AKS", "Trafico_APIM", "Workloads",
-             "Config_AKS", "Fuentes", "Precios"]
+    order = ["Resumen", "Patrones", "Criterios_tecnicos", "Supuestos", "Modelo", "Equilibrio", "Mapa", "Medido_AKS", "Trafico_APIM", "Workloads",
+             "Config_AKS", "Config_K8s", "Fuentes", "Precios"]
     workbook._sheets.sort(key=lambda ws: order.index(ws.title) if ws.title in order
                           else (len(order) + 1 if ws.title == "Consultas" else len(order)))
     for sheet in workbook.worksheets:

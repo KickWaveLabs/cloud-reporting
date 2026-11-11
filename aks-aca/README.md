@@ -79,6 +79,7 @@ python aks-aca/src/aa_metrics.py --apim-names apigp01,apigp03,apigp05
 python aks-aca/src/aa_container_insights.py
 python aks-aca/src/aa_cost.py --from-date 2026-08-01 --to-date 2026-10-31
 python aks-aca/src/aa_prices.py
+python aks-aca/src/aa_k8s_snapshot.py --snapshot-date 2026-11-10   # optional, needs the exports below
 python aks-aca/src/aa_workbook.py
 ```
 
@@ -89,6 +90,7 @@ python aks-aca/src/aa_workbook.py
 | `aa_container_insights.py` | PROD clusters with the add-on | ~80 min | `ci_errors.csv`, `ci_coverage.csv` |
 | `aa_cost.py` | Every environment, `AmortizedCost` | ~10 min | `cost_errors.csv` |
 | `aa_prices.py` | VM sizes in the inventory; eastus2, centralus | < 1 min | `queries_without_rows` in `prices_summary.json` |
+| `aa_k8s_snapshot.py` | Every row of the exports; the workbook counts PROD | < 10 s | `clusters_not_in_inventory`, `hpa_without_ci_history` in `snapshot_summary.json` |
 | `aa_workbook.py` | Everything above | ~30 s | Open in Excel and save once |
 
 1. `aa_inventory.py` first: the other scripts read its CSVs.
@@ -106,7 +108,15 @@ python aks-aca/src/aa_workbook.py
    It caches each subscription in `results/aa-cost/_cache/<type>_<from>_<to>/`; rerun it to
    resume after throttling (429), delete the folder to fetch again.
 7. `aa_prices.py` needs no sign-in.
-8. `aa_workbook.py` writes `reports/<date>-aks-aca/aks_aca_comparison.xlsx`. Add a `README.md` next to
+8. `aa_k8s_snapshot.py` needs no sign-in either. It reads the platform team's `reportHpa*` and
+   `reportDeployment*` exports (CSV with `;` or XLSX) from `.local/aks-aca-inputs/` (`--inputs` for another
+   folder), keeps only the columns it needs and joins them with the Container Insights history by
+   cluster, namespace and deployment. The exports hold one day of configuration, so pass that day with
+   `--snapshot-date`. Run it after `aa_container_insights.py`. `ValTrend` in the HPA export covers a short
+   recent window; the 3-month replica history comes from Container Insights. It also writes the inputs of
+   the `Patrones` sheet (microservices per layer and per cluster, capabilities repeated across namespaces)
+   and of part of `Criterios_tecnicos`; without the exports both sheets skip those rows.
+9. `aa_workbook.py` writes `reports/<date>-aks-aca/aks_aca_comparison.xlsx`. Add a `README.md` next to
    it with the scope and gaps of the run (see `reports/2026-11-10-aks-aca/README.md` on the machine that
    ran it).
 

@@ -1,50 +1,55 @@
-# AKS vs Container Apps deck: outline and Copilot prompts
+# AKS vs Container Apps decks: outline and Copilot prompts
 
-One deck in the order of [presenting-findings.md](../../docs/presenting-findings.md): current cost,
-production insights (including the configuration problem), comparison and decision, roadmap. Cost is
-the main focus, as requested.
+Two decks, as the manager asked:
+
+1. **Diagnóstico y criterios técnicos**: what PROD looks like today (patterns 1, 2 and 4), what it costs,
+   the technical criteria to choose a platform with the measured figure behind each one, and the cost
+   comparison under the ADT_019 rules.
+2. **Frente estratégico**: security, resilience and multicloud with Istio vs Container Apps, as the
+   architecture lead's email asked. Key message: for the business both platforms are equivalent; for IT
+   two platforms double the effort.
+
+Both follow [presenting-findings.md](../../docs/presenting-findings.md): evidence first, then the
+comparison and the decision.
 
 Inputs, all on the corporate laptop:
 
-- `aks_aca_comparison.xlsx`, regenerated, opened in Excel and saved (see [README](../README.md)).
+- `aks_aca_comparison.xlsx`, regenerated after `aa_k8s_snapshot.py`, opened in Excel and saved (see
+  [README](../README.md)).
 - The Cost analysis screenshots of [cost-screenshots.md](cost-screenshots.md), Aug–Oct 2026.
-- [app-level-comparison.md](app-level-comparison.md), with the **Verify** rows checked that day.
+- [app-level-comparison.md](app-level-comparison.md).
 - The non-compliance level from the security guidelines team (they validate it; the workbook only
   shows configuration dispersion).
 
-Figures below name the workbook sheet they come from.
+Figures below name the workbook sheet they come from. Label every figure from the HPA and deployment
+exports with the export date ("configuración al 10-nov-2026").
 
-## Outline
+## Deck 1: Diagnóstico y criterios técnicos (10 slides)
 
 | # | Slide title (conclusion) | Content | Source |
 |---|---|---|---|
-| 0 | AKS y Container Apps: costo, esfuerzo y decisión | Title | |
-| 1 | Resumen: [N] clusters PROD cuestan US$[X]/mes; para apps de menos de 15 microservicios, ACA cuesta US$[Y]/mes | Three figures and the decisions requested | Resumen |
-| **A** | **Costo actual (evidencia)** | | |
-| 2 | AKS PROD cuesta US$[X]/mes en [N] clusters, uno por aplicación | Stacked column by meter category, Aug–Oct | Screenshots 1, 3; Medido_AKS |
-| 3 | Un cluster mínimo de 4 nodos cuesta US$[X]/mes aunque la app use [Z]% de la CPU | One cluster: cost by meter + CPU used vs allocatable | Screenshot 2; Medido_AKS |
-| **B** | **Insights PROD** | | |
-| 4 | Usamos [Z]% de los vCPU que pagamos en horario de oficina | Bar per cluster: allocatable vs used (office average, peak) | Medido_AKS |
-| 5 | Cada aplicación tiene su propio cluster: [N] clusters para [N] aplicaciones | One app per cluster vs one app per namespace | Medido_AKS; Workloads |
-| 6 | La configuración base se fragmenta: [N] clusters PROD difieren en [M] propiedades | Top properties by clusters with a different value | Config_AKS |
-| 7 | [Z]% de los clusters no cumple la LBS (dato del equipo de lineamientos) | Non-compliance level, why: changes after creation are not adopted | Guidelines team; Config_AKS |
-| 7b | Mantener [N] clusters al día requiere horas-hombre de los equipos | Qualitative, no amounts: Kubernetes minor upgrades are manual (`upgrade_channel` none in [N] PROD); node auto-upgrade guideline in rollout ([N] of [N] PROD with `NodeImage`); Istio revisions in [N] clusters; in ACA the platform does all of it | Config_AKS; node auto-upgrade guideline |
-| **C** | **Comparación de costo (producción)** | | |
-| 8 | Con el modelo del ADT, ACA cuesta US$[X] por microservicio al mes | How ACA bills: 1 replica 8–20, scale to zero, requests | Supuestos; Modelo |
-| 9 | ACA es más barato hasta [N*] microservicios; desde ahí conviene AKS | Line chart AKS (list, effective) vs ACA (ADT, 24/7) | Modelo chart; Equilibrio |
-| 10 | Peticiones y réplicas no cambian la decisión hasta [X] M peticiones/mes | Heat map microservices × requests | Mapa |
-| 11 | Los umbrales del ADT_019 frente al costo | Table: rule, ADT threshold, model result, reading | Equilibrio, ADT table |
-| 12 | Qué mueve el resultado | Sensitivity: vCPU per replica, share of office time with traffic, 24/7 vs office hours | Supuestos (rerun with 2–3 values) |
-| **D** | **Frente estratégico** | | |
-| 13 | La aplicación funciona igual en las dos plataformas | Build, endpoints, data, producers and consumers | app-level-comparison §1 |
-| 14 | Pasar de AKS a ACA cambia configuración, releases y GitOps | ConfigMaps → YAML/Key Vault; canary; Argo CD → pipeline | app-level-comparison §2–3 |
-| 15 | Seguridad: Istio da identidad SPIFFE, mTLS STRICT y autorización por servicio; ACA no | Security table | app-level-comparison §4 |
-| 16 | Resiliencia: timeout, retry, circuit breaker y outlier detection | Resilience table; what APIM covers on both | app-level-comparison §5 |
-| 17 | Para el negocio son equivalentes; para TI, dos plataformas duplican el esfuerzo | Key message | app-level-comparison, key message |
-| **E** | **Cierre** | | |
-| 18 | Hoja de ruta | Quick wins (right-size, shared clusters), ACA where it wins, guidelines baseline | |
-| 19 | Decisiones que se necesitan | Approvals with owner and date | |
-| 20 | Anexo: de dónde sale cada cifra | Measured, derived, estimated, vendor data; ADT_019 rules | Fuentes; Consultas; Supuestos |
+| 1 | AKS y Container Apps en PROD: diagnóstico, criterios y costo | Title | |
+| 2 | Resumen: [N] microservicios en [N] clusters PROD cuestan US$[X]/mes; [Z]% de los clusters tiene 15 microservicios o menos | Three figures and the decisions requested | Resumen; Patrones |
+| 3 | Patrón 1: [N] microservicios PROD; [X] capacidades se repiten en hasta [N] dominios | Bars by layer; table of repeated capabilities | Patrones §1 |
+| 4 | Patrón 2: [N] de [N] clusters PROD tienen 15 microservicios o menos; los de 3 o menos cuestan US$[X]/mes y usamos [Z]% de los vCPU pagados | Column chart of clusters by microservices; cost of the smallest; CPU used vs allocatable in office hours | Patrones §2; Medido_AKS |
+| 5 | Patrón 4: [X]% de los HPA es fijo o nunca pasó de su mínimo en 3 meses | Replicas histogram; HPA behaviour by the export trend vs by 3 months of Container Insights | Patrones §4; Config_K8s |
+| 6 | La configuración se fragmenta y mantenerla cuesta horas-hombre: [N] clusters difieren en [M] propiedades, [Z]% no cumple la LBS | Top differing properties; LBS level from the guidelines team; upgrades manual in [N] PROD (qualitative, no amounts) | Config_AKS; Criterios_tecnicos; guidelines team |
+| 7 | Qué decide la plataforma, con el dato de PROD | Table: criterion, favours ACA, favours AKS, measured figure; Container Apps limits (consumption cores per environment, 1,000 replicas per revision) | Criterios_tecnicos |
+| 8 | Con los mínimos de AKS del banco, ACA cuesta menos en infraestructura; AKS gana si el cluster se comparte o el servicio está activo más del ~60% del tiempo | ADT_019 model (1 replica 8–20, scale to zero); line chart AKS vs ACA | Supuestos; Modelo; Equilibrio |
+| 9 | Peticiones y umbrales del ADT_019 no cambian la decisión hasta [X] M peticiones/mes | Heat map microservices × requests; table rule, threshold, model result | Mapa; Equilibrio |
+| 10 | Hoja de ruta y decisiones | Quick wins (consolidate small clusters, right-size HPA minimums and requests), ACA where it wins, guidelines baseline; approvals with owner and date | Patrones; Config_K8s |
+
+Annex, outside the count: where each figure comes from (Fuentes, Consultas, Supuestos).
+
+## Deck 2: Frente estratégico (5 slides)
+
+| # | Slide title (conclusion) | Content | Source |
+|---|---|---|---|
+| 1 | AKS con Istio y Container Apps: seguridad, resiliencia y multicloud | Title | |
+| 2 | La aplicación funciona igual; lo que cambia es configuración, releases y GitOps | Build, endpoints, data; ConfigMaps → YAML/Key Vault; canary; Argo CD → pipeline | app-level-comparison §1–3 |
+| 3 | Seguridad: Istio da identidad SPIFFE, mTLS STRICT y autorización por servicio; ACA no | Security table, certificate management | app-level-comparison §4 |
+| 4 | Resiliencia: timeout, retry, circuit breaker y outlier detection | Resilience table; what APIM covers on both | app-level-comparison §5 |
+| 5 | Multicloud y mensaje clave: para el negocio son equivalentes; para TI, dos plataformas duplican el esfuerzo | AKS carries the same model to other clouds, ACA is Azure only; delivery and migration model ACA → AKS (to complete with the platform team) | app-level-comparison, key message |
 
 ## Copilot prompts
 

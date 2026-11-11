@@ -95,5 +95,9 @@ costs IT to keep both.
 - Peer-to-peer encryption: https://learn.microsoft.com/azure/container-apps/ingress-environment-configuration
 - Dapr: https://learn.microsoft.com/azure/container-apps/dapr-overview
 - Resiliency and circuit breaker: https://learn.microsoft.com/azure/container-apps/service-discovery-resiliency
-- Scale defaults (polling 30 s, cooldown 300 s, min replicas 0): https://learn.microsoft.com/azure/container-apps/scale-app
+- Scale defaults (polling 30 s, cooldown 300 s, min replicas 0, up to 1,000 replicas per revision, no
+  vertical scaling; page dated 2026-05-19, checked 2026-11-11): https://learn.microsoft.com/azure/container-apps/scale-app
+- Quotas (page dated 2026-10-09, checked 2026-11-11): no fixed number of apps per environment is published;
+  the limits are environments per region and consumption cores per environment (sum of the cores of active
+  replicas), both raised on request: https://learn.microsoft.com/azure/container-apps/quotas
 - Billing and free grant: https://learn.microsoft.com/azure/container-apps/billing
