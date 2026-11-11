@@ -519,7 +519,7 @@ def build_measured(workbook, clusters, usage, cost, workloads, services, months)
     sheet.append([])
     headers = ["Cluster", "Ambiente", "Nodos sistema", "Nodos user", "Tamaños de VM", "Costo mensual (USD)",
                "vCPU asignables", "vCPU usados oficina", "Uso CPU oficina", "vCPU pico", "GiB usados oficina",
-               "Workloads (sin sistema)", "Services", "Malla", "Id"]
+               "Workloads (sin sistema)", "Services", "Malla", "Id", "Nodos mínimos configurados"]
     sheet.append(headers)
     style_header(sheet, 4, len(headers))
     cost_months = max(1, months.get("cost", 1))
@@ -549,6 +549,7 @@ def build_measured(workbook, clusters, usage, cost, workloads, services, months)
             sheet.cell(row=row, column=13, value=f'=COUNTIFS({services.col("cluster")},A{row})')
         sheet.cell(row=row, column=14, value=row_data.get("service_mesh", ""))
         sheet.cell(row=row, column=15, value=row_data.get("id", ""))
+        sheet.cell(row=row, column=16, value=number(row_data.get("min_nodes", "")))
     last = sheet.max_row
     sheet.append([])
     sheet.append(["Resumen PROD"])
@@ -556,6 +557,10 @@ def build_measured(workbook, clusters, usage, cost, workloads, services, months)
     summary = [
         ("Clusters PROD", f'=COUNTIFS($B$5:$B${last},"PROD")', "0"),
         ("Clusters PROD con 4 nodos o menos", f'=SUMPRODUCT(($B$5:$B${last}="PROD")*(($C$5:$C${last}+$D$5:$D${last})<=4))', "0"),
+        ("Clusters PROD con menos de 4 nodos al momento del inventario",
+         f'=SUMPRODUCT(($B$5:$B${last}="PROD")*(($C$5:$C${last}+$D$5:$D${last})<4))', "0"),
+        ("Clusters PROD con mínimo configurado de menos de 4 nodos",
+         f'=SUMPRODUCT(($B$5:$B${last}="PROD")*($P$5:$P${last}<>"")*($P$5:$P${last}<4))', "0"),
         ("Costo mensual promedio por cluster PROD (USD)", f'=IFERROR(AVERAGEIFS($F$5:$F${last},$B$5:$B${last},"PROD"),"")', USD),
         ("Costo mensual total AKS PROD (USD)", f'=SUMIFS($F$5:$F${last},$B$5:$B${last},"PROD")', USD),
         ("Uso de CPU promedio en oficina, PROD", f'=IFERROR(SUMIFS($H$5:$H${last},$B$5:$B${last},"PROD")/'
@@ -591,7 +596,7 @@ def build_measured(workbook, clusters, usage, cost, workloads, services, months)
             sheet.append([env_name, f'=SUMIFS({cost.col("cost_usd")},{cost.col("owner")},A{sheet.max_row + 1},'
                                     f'{cost.col("owner_type")},"ACA")/{cost_months}'])
             sheet.cell(row=sheet.max_row, column=2).number_format = USD
-    set_widths(sheet, [34, 12, 10, 10, 22, 16, 12, 14, 12, 10, 12, 14, 10, 10, 40])
+    set_widths(sheet, [34, 12, 10, 10, 22, 16, 12, 14, 12, 10, 12, 14, 10, 10, 40, 14])
     sheet.freeze_panes = "B5"
     return refs, last
 
@@ -1468,6 +1473,16 @@ def add_pool_sizes(usage, pools, clusters):
         row["location"] = regions.get(row["cluster"].lower(), "")
 
 
+def add_min_nodes(clusters, pools):
+    """Configured minimum nodes per cluster: minCount of autoscaled pools, the fixed count of the others."""
+    totals = defaultdict(int)
+    for pool in pools:
+        autoscaled = str(pool.get("autoscaling", "")).lower() == "true" and pool.get("min_count", "") != ""
+        totals[pool["cluster_id"].lower()] += int(float(pool["min_count"] if autoscaled else pool["count"] or 0))
+    for cluster in clusters:
+        cluster["min_nodes"] = totals.get(cluster["id"].lower(), "")
+
+
 def full_months(usage, cost):
     """Months with cost that platform metrics cover end to end (the metrics window rarely starts on day 1)."""
     hours = defaultdict(int)
@@ -1499,6 +1514,7 @@ def main():
     apps = load(args.results, "aa-inventory", "aca_apps.csv")
     usage = load(args.results, "aa-metrics", "aks_usage_monthly.csv")
     add_pool_sizes(usage, pools, clusters)
+    add_min_nodes(clusters, pools)
     traffic = load(args.results, "aa-metrics", "apim_api_monthly.csv")
     workloads = load(args.results, "aa-container-insights", "aks_workloads_monthly.csv")
     services = [row for row in load(args.results, "aa-container-insights", "aks_services.csv")
@@ -1528,7 +1544,7 @@ def main():
     Detail(workbook, "Precios", prices, price_fields)
     cluster_fields = ["name", "environment", "environment_evidence", "subscription", "resource_group", "location",
                       "kubernetes_version", "minor_versions_behind", "node_pools", "system_nodes", "user_nodes",
-                      "user_max_nodes", "vm_sizes", "zones"] + [p for p in CONFIG_PROPERTIES if p not in
+                      "user_max_nodes", "min_nodes", "vm_sizes", "zones"] + [p for p in CONFIG_PROPERTIES if p not in
                       ("kubernetes_version", "minor_versions_behind", "zones")] + ["istio_revisions", "extension_types", "id"]
     d_clusters = Detail(workbook, "D_Clusters", clusters, cluster_fields) if clusters else None
     if pools:
