@@ -923,6 +923,50 @@ def build_criteria(workbook, clusters, kclusters, deploy, hpa, traffic, workload
     set_widths(sheet, [24, 38, 38, 44, 12, 14])
 
 
+BIA_LEVELS = ["MUY ALTA", "ALTA", "MEDIA", "BAJA", "MUY BAJA", "SIN BIA"]
+BIA_REQUIRES_AKS = ("MUY ALTA", "ALTA")
+
+
+def build_bia(workbook, kclusters):
+    sheet = workbook.create_sheet("Candidatos_BIA")
+    title(sheet, "Clusters PROD que podrían pasar a Container Apps: criterio técnico y luego criticidad (BIA)",
+          "Apto técnicamente = 1 a 15 microservicios, todos caben en una réplica de Container Apps por su request "
+          "(4 vCPU / 8 GiB) y sin StatefulSet de aplicación. La columna B (editable) dice qué niveles de BIA se quedan "
+          "en AKS por cumplimiento. No incluye peticiones por segundo por aplicación. Detalle en D_K8s_clusters.", 8)
+    sheet.append([])
+    header(sheet, ["BIA", "¿Se queda en AKS por BIA?", "Clusters PROD", "Aptos técnicamente para ACA",
+                   "Costo mensual actual de los aptos (USD)", "Clusters que pasarían a ACA",
+                   "Microservicios que pasarían a ACA", "Aptos que se quedan en AKS por BIA"])
+    k = kclusters
+    base = f'{k.col("environment")},"PROD",{k.col("in_inventory")},"SÍ"'
+    present = {row["bia"] for row in k.rows}
+    levels = [level for level in BIA_LEVELS if level in present] + sorted(present - set(BIA_LEVELS))
+    first = sheet.max_row + 1
+    for level in levels:
+        sheet.append([level, "SÍ" if level in BIA_REQUIRES_AKS else "NO"])
+        row = sheet.max_row
+        sheet.cell(row=row, column=2).fill = INPUT_FILL
+        by_level = f'{base},{k.col("bia")},$A{row}'
+        fit = f'{by_level},{k.col("aca_technical_fit")},"SÍ"'
+        sheet.cell(row=row, column=3, value=f"=COUNTIFS({by_level})")
+        sheet.cell(row=row, column=4, value=f"=COUNTIFS({fit})")
+        sheet.cell(row=row, column=5, value=f"=SUMIFS({k.col('cost_month_usd')},{fit})").number_format = USD
+        sheet.cell(row=row, column=6, value=f'=IF($B{row}="SÍ",0,D{row})')
+        sheet.cell(row=row, column=7, value=f'=IF($B{row}="SÍ",0,SUMIFS({k.col("microservices")},{fit}))')
+        sheet.cell(row=row, column=8, value=f'=IF($B{row}="SÍ",D{row},0)')
+    last = sheet.max_row
+    sheet.append(["Total", ""] + [f"=SUM({get_column_letter(column)}{first}:{get_column_letter(column)}{last})"
+                                  for column in range(3, 9)])
+    total = sheet.max_row
+    sheet.cell(row=total, column=1).font = BOLD
+    sheet.cell(row=total, column=5).number_format = USD
+    sheet.append([])
+    sheet.append(["Costo mensual actual de los clusters que pasarían a ACA (USD)", "", "", "",
+                  f'=SUMPRODUCT((B{first}:B{last}<>"SÍ")*E{first}:E{last})'])
+    sheet.cell(row=sheet.max_row, column=5).number_format = USD
+    set_widths(sheet, [16, 16, 12, 16, 20, 16, 18, 18])
+
+
 # ---------------------------------------------------------------------------
 # Resumen, Fuentes, Consultas
 # ---------------------------------------------------------------------------
@@ -1178,6 +1222,8 @@ def main():
         build_k8s(workbook, d_hpa, d_deploy, taken_on)
         if d_deploy and d_kclusters:
             build_patterns(workbook, d_deploy, d_hpa, d_kclusters, capabilities, taken_on)
+            if "bia" in d_kclusters.fields:
+                build_bia(workbook, d_kclusters)
         snapshot_sources.append((
             f"HPA, requests y límites por deployment (foto del {taken_on})", "Medido (un día)",
             "Export del equipo de plataforma", ", ".join(item["file"] for item in snapshot.get("inputs", [])),
@@ -1193,7 +1239,7 @@ def main():
     build_sources(workbook, snapshot_sources)
     build_queries(workbook, args.results)
 
-    order = ["Resumen", "Patrones", "Criterios_tecnicos", "Supuestos", "Modelo", "Equilibrio", "Mapa", "Medido_AKS", "Trafico_APIM", "Workloads",
+    order = ["Resumen", "Patrones", "Criterios_tecnicos", "Candidatos_BIA", "Supuestos", "Modelo", "Equilibrio", "Mapa", "Medido_AKS", "Trafico_APIM", "Workloads",
              "Config_AKS", "Config_K8s", "Fuentes", "Precios"]
     workbook._sheets.sort(key=lambda ws: order.index(ws.title) if ws.title in order
                           else (len(order) + 1 if ws.title == "Consultas" else len(order)))

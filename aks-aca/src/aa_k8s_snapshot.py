@@ -9,7 +9,12 @@ The exports are a snapshot (current state, no history). The history comes from a
 (replicas and usage per workload and month), so run it first. No Azure call is made here.
 
 Only the columns listed in HPA_COLUMNS and DEPLOYMENT_COLUMNS are read; the rest of each export (subscription,
-application, owner and provisioning columns) is never copied to the results.
+application, owner and provisioning columns) is never copied to the results. `bia` is the business impact
+level of the application (MUY ALTA to BAJA); a cluster takes the highest level among its microservices.
+
+A cluster is a technical fit for Container Apps when it has 1 to 15 microservices, every one fits a Container
+Apps replica by its request (4 vCPU / 8 GiB) and Container Insights shows no StatefulSet outside platform
+namespaces. Requests per second per application are not part of the rule (APIs are not mapped to clusters).
 
 Units as exported: CPU in millicores; memory in MB (10^6 bytes, so 2Gi shows as 2147.483648).
 
@@ -51,8 +56,11 @@ HPA_COLUMNS = {"hpa": "HPAs", "deployment": "Deployment", "namespace": "Namespac
 DEPLOYMENT_COLUMNS = {"namespace": "Namespace", "service": "ServiceName", "deployment": "Deployment",
                       "cpu_request_m": "CpuRequest", "cpu_limit_m": "CpuLimit", "mem_request_mb": "MemoryRequest",
                       "mem_limit_mb": "MemoryLimit", "cluster": "resourceName", "cluster_id": "resourceId",
-                      "environment_export": "environment"}
+                      "environment_export": "environment", "bia": "bia"}
 ENVIRONMENTS = {"prod": "PROD", "cert": "CERT", "desa": "DESA", "dev": "DESA"}
+BIA_ORDER = ("MUY ALTA", "ALTA", "MEDIA", "BAJA", "MUY BAJA")
+NO_BIA = "SIN BIA"
+ADT_MAX_MICROSERVICES = 15
 LAYERS = ("business", "channel", "app", "async", "support", "core")
 PLATFORM_NAMESPACES = set(aa.SYSTEM_NAMESPACES) | {"flux-system", "argocd", "cert-manager", "keda", "monitoring"}
 # Capability -> words in the deployment name. Words with a hyphen match as text, single words as a whole word.
@@ -65,6 +73,19 @@ CAPABILITIES = {
     "session": ("session", "sessions"),
     "login": ("login",),
 }
+
+
+def normalize_bia(value):
+    text = " ".join(str(value or "").upper().split())
+    return text if text and text != "-" else NO_BIA
+
+
+def most_critical(levels):
+    """Highest BIA among the given levels; unknown labels rank below the known ones, SIN BIA last."""
+    known = [level for level in levels if level != NO_BIA]
+    if not known:
+        return NO_BIA
+    return min(known, key=lambda level: BIA_ORDER.index(level) if level in BIA_ORDER else len(BIA_ORDER))
 
 
 def is_platform(namespace):
@@ -255,6 +276,7 @@ def deployment_rows(rows, history, inventory, hpas, clusters_with_ci):
             "cluster": row["cluster"], "environment": environment, "in_inventory": in_inventory,
             "namespace": row["namespace"], "deployment": row["deployment"], "service": row["service"],
             "platform_component": yes(is_platform(row["namespace"])), "layer": layer_of(row["deployment"]),
+            "bia": normalize_bia(row.get("bia")),
             "capabilities": ";".join(capabilities_of(row["deployment"])),
             "cpu_request_vcpu": request_vcpu, "cpu_limit_vcpu": cpu_limit / 1000 if cpu_limit is not None else None,
             "mem_request_gib": round(mem_request * MB_TO_GIB, 4) if mem_request is not None else None,
@@ -276,26 +298,45 @@ def deployment_rows(rows, history, inventory, hpas, clusters_with_ci):
     return out
 
 
-def cluster_rows(deployments, hpas, inventory):
-    """Microservices, domains and HPAs per cluster; inventory clusters missing from the export get 0."""
-    clusters = {}
-    for name, cluster in inventory.items():
-        clusters[name] = {"cluster": cluster["name"], "environment": cluster["environment"], "in_inventory": "SÍ",
-                          "in_export": "NO", "microservices": 0, "namespaces": set(), "hpas": 0}
+def statefulsets_by_cluster(workloads):
+    """StatefulSets outside platform namespaces seen by Container Insights, per cluster."""
+    names = defaultdict(set)
+    for row in workloads:
+        if row.get("kind") == "StatefulSet" and not is_platform(row["namespace"]):
+            names[row["cluster"].lower()].add((row["namespace"], row["workload"]))
+    return {cluster: len(items) for cluster, items in names.items()}
+
+
+def cluster_rows(deployments, hpas, inventory, statefulsets):
+    """Microservices, domains, HPAs, BIA and Container Apps fit per cluster; inventory clusters missing from the
+    export get 0."""
+    def empty(name, environment, in_inventory):
+        return {"cluster": name, "environment": environment, "in_inventory": in_inventory, "in_export": "NO",
+                "microservices": 0, "namespaces": set(), "hpas": 0, "levels": set(), "over_aca_size": 0}
+
+    clusters = {key: empty(cluster["name"], cluster["environment"], "SÍ") for key, cluster in inventory.items()}
     for row in deployments:
-        entry = clusters.setdefault(row["cluster"].lower(), {
-            "cluster": row["cluster"], "environment": row["environment"], "in_inventory": "NO", "in_export": "NO",
-            "microservices": 0, "namespaces": set(), "hpas": 0})
+        entry = clusters.setdefault(row["cluster"].lower(), empty(row["cluster"], row["environment"], "NO"))
         entry["in_export"] = "SÍ"
         if row["platform_component"] == "NO":
             entry["microservices"] += 1
             entry["namespaces"].add(row["namespace"])
+            entry["levels"].add(row["bia"])
+            entry["over_aca_size"] += row["fits_aca_by_request"] == "NO"
     for row in hpas:
         entry = clusters.get(row["cluster"].lower())
         if entry and row["platform_component"] == "NO":
             entry["hpas"] += 1
-    return [dict(entry, namespaces=len(entry["namespaces"])) for entry in
-            sorted(clusters.values(), key=lambda value: (value["environment"], -value["microservices"], value["cluster"]))]
+    out = []
+    for key, entry in clusters.items():
+        stateful = statefulsets.get(key, 0)
+        fit = 1 <= entry["microservices"] <= ADT_MAX_MICROSERVICES and not entry["over_aca_size"] and not stateful
+        out.append({"cluster": entry["cluster"], "environment": entry["environment"], "in_inventory": entry["in_inventory"],
+                    "in_export": entry["in_export"], "microservices": entry["microservices"],
+                    "namespaces": len(entry["namespaces"]), "hpas": entry["hpas"], "bia": most_critical(entry["levels"]),
+                    "microservices_over_aca_size": entry["over_aca_size"], "statefulsets": stateful,
+                    "aca_technical_fit": yes(fit)})
+    return sorted(out, key=lambda value: (value["environment"], -value["microservices"], value["cluster"]))
 
 
 def capability_rows(deployments):
@@ -351,7 +392,7 @@ def main():
     output = azure.Output(args.output_dir, args.delimiter)
     output.csv("hpa_snapshot.csv", hpas)
     output.csv("deployment_snapshot.csv", deployments)
-    output.csv("cluster_snapshot.csv", cluster_rows(deployments, hpas, inventory))
+    output.csv("cluster_snapshot.csv", cluster_rows(deployments, hpas, inventory, statefulsets_by_cluster(workloads)))
     output.csv("capability_domains.csv", capability_rows(deployments))
     output.json("snapshot_summary.json", {
         "generated_at": azure.iso(azure.utc_now()),
