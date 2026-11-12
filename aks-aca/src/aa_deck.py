@@ -651,18 +651,18 @@ def table(slide, left, top, width, rows, widths, highlight_column=None, row_heig
             cell.vertical_anchor = MSO_ANCHOR.MIDDLE
             cell.margin_left = cell.margin_right = Inches(0.06)
             cell.margin_top = cell.margin_bottom = Inches(0.02)
-            paragraph = cell.text_frame.paragraphs[0]
-            paragraph.alignment = PP_ALIGN.LEFT if (c == 0 or not align_first) else PP_ALIGN.CENTER
-            font = paragraph.runs[0].font
-            font.name, font.size = FONT, Pt(size)
             cell.fill.solid()
-            if r == 0:
-                cell.fill.fore_color.rgb = CARD
-                font.bold, font.color.rgb = True, WHITE
-            else:
-                cell.fill.fore_color.rgb = LIGHT if r % 2 else WHITE
-                font.color.rgb = RUST if c == highlight_column else GREY
-                font.bold = c == highlight_column or (c == 0 and not align_first)
+            cell.fill.fore_color.rgb = CARD if r == 0 else (LIGHT if r % 2 else WHITE)
+            for paragraph in cell.text_frame.paragraphs:  # a value with line breaks has one paragraph per line
+                paragraph.alignment = PP_ALIGN.LEFT if (c == 0 or not align_first) else PP_ALIGN.CENTER
+                for run in paragraph.runs:
+                    font = run.font
+                    font.name, font.size = FONT, Pt(size)
+                    if r == 0:
+                        font.bold, font.color.rgb = True, WHITE
+                    else:
+                        font.color.rgb = RUST if c == highlight_column else GREY
+                        font.bold = c == highlight_column or (c == 0 and not align_first)
     return shape
 
 
@@ -1012,40 +1012,49 @@ def slide_configuration(deck, measured_summary, properties, criteria, source):
             "a cada equipo.", size=11, fill=ROYAL)
 
 
+# Short wording for the figure of each criterion, keyed by the start of the measure in Criterios_tecnicos.
+MEASURE_LABELS = [("Clusters con 15 microservicios", "clusters con ≤15 microservicios"),
+                  ("APIs con pico de más de 100 tps", "APIs con pico de más de 100 tps"),
+                  ("Peticiones fuera de horario", "de las peticiones llega fuera de oficina"),
+                  ("HPA que se queda en su mínimo", "HPA se queda en su mínimo"),
+                  ("Microservicios que caben", "microservicios caben en una réplica de ACA"),
+                  ("Workloads StatefulSet", "workloads son StatefulSet"),
+                  ("Clusters con Istio", "clusters con Istio"), ("Clusters con GitOps", "clusters con GitOps (Flux)"),
+                  ("Clusters sin upgrade automático", "clusters con upgrade manual")]
+
+
+def figure_text(measure, value, total):
+    """'75% · 99 de 132 clusters con ≤15 microservicios', or '44% de las peticiones ...' for a share."""
+    label = next((short for start, short in MEASURE_LABELS if measure.startswith(start)), measure)
+    if is_number(value) and is_number(total) and total:
+        return f"{percent(value / total)} · {number(value)} de {number(total)} {label}"
+    if is_number(value) and value <= 1:
+        return f"{percent(value)} {label}"
+    return f"{number(value)} {label}" if is_number(value) else label
+
+
 def slide_criteria(deck, criteria, keda, signals, source):
-    slide = base_slide(deck, "Qué decide la plataforma: criterios técnicos con el dato de PROD", source,
-                       "Criterios técnicos")
-    rows = [["Criterio", "Favorece Container Apps", "Favorece AKS", "Dato de PROD"]]
-    documented = []
+    slide = base_slide(deck, "Criterios técnicos AKS vs ACA y lo que muestra producción", source, "Criterios técnicos")
+    rows = [["Criterio", "Favorece Container Apps", "Favorece AKS", "Hoy en producción"]]
     for item in criteria:
-        if item["name"] == "Costo":
+        if item["name"] == "Costo" or (item["value"] is None and not item["extra"]):
             continue
-        if item["value"] is None and not item["extra"]:
-            documented.append(f"{item['name']}: ACA {item['aca']}; AKS {item['aks']}.")
-            continue
-        value = measured(item["value"], item["total"])
-        if item["measure"] and not item["measure"].startswith("Sin dato"):
-            value = f"{item['measure']}: {value}"
-        for extra_measure, extra_value, extra_total in item["extra"]:
-            value += f"; {extra_measure}: {measured(extra_value, extra_total)}"
-        rows.append([item["name"], item["aca"], item["aks"], value])
+        figures = [figure_text(item["measure"], item["value"], item["total"])]
+        figures += [figure_text(measure, value, total) for measure, value, total in item["extra"]]
+        rows.append([item["name"], item["aca"], item["aks"], "\n".join(figures)])
     latency = signals.get("latency")
     if latency:
         rows.append(["Latencia y arranque en frío", "El consumidor tolera ~30 s en el primer request tras escalar a 0",
                      "Respuesta baja y constante, sin arranque en frío",
-                     f"Latencia media de backend por API ({latency['month']}): mediana {latency['median']:.0f} ms; "
+                     f"{latency['median']:.0f} ms de latencia media del backend (mediana por API); "
                      f"{percent(latency['under_100'])} de las APIs bajo 100 ms"])
-    table(slide, Inches(0.35), Inches(1.25), Inches(12.6), rows, [0.17, 0.25, 0.25, 0.33], row_height=0.46, size=8.5,
-          align_first=False)
-    text = " ".join(documented + [
-        "El tope de 4 vCPU / 8 GiB por réplica es del perfil Consumption en un environment con workload profiles; "
-        "un environment «Consumption only» se queda en 2 vCPU / 4 GiB.",
-        "Umbrales del ADT_019; límites según Microsoft Learn (fuentes en el workbook)."])
+    table(slide, Inches(0.35), Inches(1.25), Inches(12.6), rows, [0.17, 0.25, 0.25, 0.33], row_height=0.47, size=9,
+          align_first=False, highlight_column=3)
+    text = "Umbrales del ADT_019; límites según Microsoft Learn (detalle y fuentes en la hoja Criterios_tecnicos)."
     if keda:
-        text = (f"Escenario aparte: con KEDA, AKS también escala pods a 0, pero los nodos mínimos se siguen pagando. "
-                f"Hoy {measured(keda['value'], keda['total'])} clusters PROD con KEDA; la iniciativa con autoscaler "
-                f"predictivo no está en PROD. {text}")
-    note_box(slide, Inches(0.35), Inches(6.2), Inches(12.6), Inches(0.75), text, size=8)
+        text = (f"Aparte: con KEDA, AKS también escala pods a 0, pero sigue pagando sus nodos mínimos; hoy "
+                f"{number(keda['value'])} de {number(keda['total'])} clusters PROD usan KEDA. {text}")
+    note_box(slide, Inches(0.35), Inches(6.3), Inches(12.6), Inches(0.6), text, size=9)
 
 
 def slide_cost(deck, s, model, equilibrium, rules, assumptions, source):
