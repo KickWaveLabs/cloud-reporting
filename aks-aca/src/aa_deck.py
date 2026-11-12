@@ -56,14 +56,18 @@ from pptx.util import Emu, Inches, Pt
 import aa_common as aa
 from aa_k8s_snapshot import is_platform
 
-NAVY = RGBColor(0x1B, 0x2F, 0x5C)
-RUST = RGBColor(0xB5, 0x45, 0x2D)
-CARD = RGBColor(0x1F, 0x2B, 0x3E)
-ORANGE = RGBColor(0xF7, 0x94, 0x1D)
+# Palette of the team's deck: royal blue header ending in a rust tip, navy cards, royal blue highlight boxes.
+NAVY = RGBColor(0x1E, 0x3A, 0x78)
+ROYAL = RGBColor(0x1F, 0x41, 0x8E)
+RUST = RGBColor(0xB0, 0x45, 0x2C)
+RUST_DARK = RGBColor(0x7A, 0x2C, 0x1F)
+CARD = RGBColor(0x1F, 0x33, 0x55)
+ORANGE = RGBColor(0xF2, 0xA1, 0x5A)
 STEEL = RGBColor(0x4A, 0x8F, 0xB8)
-SKY = RGBColor(0x5B, 0xB4, 0xE5)
-GREEN = RGBColor(0x5C, 0xB8, 0x5C)
-RED = RGBColor(0xE8, 0x5A, 0x4F)
+SKY = RGBColor(0x5D, 0xAD, 0xE2)
+GREEN = RGBColor(0x4C, 0xB0, 0x7A)
+RED = RGBColor(0xE8, 0x57, 0x4A)
+FOOTER_BLUE = RGBColor(0x3B, 0x6E, 0xB5)
 GREY = RGBColor(0x5B, 0x67, 0x70)
 LIGHT = RGBColor(0xEE, 0xF1, 0xF5)
 SOFT = RGBColor(0xC5, 0xCD, 0xD6)
@@ -279,8 +283,11 @@ def read_per_cluster(book):
         elif label.startswith("Total de los clusters"):
             total = row
         elif header and label and len(row) > 10:
+            row = row + [None] * (21 - len(row))
             rows.append({"name": label, "workloads": row[1], "aks": row[5], "aca_use": row[7], "aca_adt": row[8],
-                         "difference": row[9], "cheaper": row[10]})
+                         "difference": row[9], "cheaper": row[10], "nodes": row[12], "nodes_rs": row[13],
+                         "aks_rs": row[14], "cheaper_rs": row[16], "nodes_hpa": row[17], "aks_hpa": row[18],
+                         "aca_hpa": row[19], "cheaper_hpa": row[20]})
     return rows, total
 
 
@@ -524,15 +531,21 @@ def gradient(shape, angle=0):
 
 
 def banner(slide, deck, title):
-    """Title band: navy fading into rust, like the bank's report decks."""
+    """Title band as in the team's deck: a royal blue arrow over a rust band that darkens to the right."""
     band = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, 0, 0, deck.slide_width, Inches(1.05))
-    gradient(band)
-    tip = slide.shapes.add_shape(MSO_SHAPE.CHEVRON, deck.slide_width - Inches(0.55), Inches(0.18), Inches(0.35),
-                                 Inches(0.7))
-    tip.fill.solid()
-    tip.fill.fore_color.rgb = WHITE
-    tip.line.fill.background()
-    tip.shadow.inherit = False
+    band.line.fill.background()
+    band.shadow.inherit = False
+    band.fill.gradient()
+    band.fill.gradient_angle = 0
+    stops = band.fill.gradient_stops
+    stops[0].color.rgb, stops[0].position = RUST, 0.7
+    stops[1].color.rgb, stops[1].position = RUST_DARK, 1.0
+    arrow = slide.shapes.add_shape(MSO_SHAPE.PENTAGON, 0, 0, int(deck.slide_width * 0.78), Inches(1.05))
+    arrow.fill.solid()
+    arrow.fill.fore_color.rgb = NAVY
+    arrow.line.fill.background()
+    arrow.shadow.inherit = False
+    arrow.adjustments[0] = 0.45
     text_box(slide, Inches(0.45), 0, Inches(12.2), Inches(1.05), title.upper(), size=19 if len(title) <= 68 else 16,
              bold=True, color=WHITE, anchor=MSO_ANCHOR.MIDDLE)
 
@@ -540,7 +553,9 @@ def banner(slide, deck, title):
 def base_slide(deck, title, source, section=""):
     slide = deck.slides.add_slide(deck.slide_layouts[6])  # blank layout
     banner(slide, deck, title)
-    text_box(slide, Inches(0.45), Inches(7.05), Inches(10.8), Inches(0.35), source, size=8, italic=True)
+    text_box(slide, Inches(0.45), Inches(6.98), Inches(10.6), Inches(0.25), source, size=8, italic=True)
+    text_box(slide, Inches(0.45), Inches(7.18), Inches(10.6), Inches(0.25), "Datos elaborados por BCP para uso interno",
+             size=8, color=FOOTER_BLUE, align=PP_ALIGN.RIGHT)
     if section:
         text_box(slide, Inches(11.2), Inches(7.05), Inches(1.2), Inches(0.35), section, size=8, color=RUST,
                  bold=True, align=PP_ALIGN.RIGHT)
@@ -702,13 +717,13 @@ def slide_summary(deck, s, p, measured_summary, clusters, source):
     counts = [behaviour.get(code, {}).get("ci") or 0 for code, _, _ in BEHAVIOURS]
     hpa_share = share_of(counts[0], sum(counts))
     tiles = [(number(s.get("Clusters AKS PROD")), "clusters PROD", SKY),
-             (money(total), "costo mensual (amortizado)", ORANGE),
+             (money(total), "costo mensual", ORANGE),
              (money(s.get("Costo mensual promedio por cluster PROD")), "promedio por cluster", ORANGE),
-             (number(s.get("Clusters PROD con 4 nodos o menos")), "clusters con ≤4 nodos hoy", SKY),
-             (percent(cpu), "CPU usada en oficina", RED),
-             (percent(mem), "memoria usada en oficina", GREEN),
-             (percent(p.get("clusters_le15_share")), "clusters con ≤15 microservicios", GREEN),
-             (percent(hpa_share), "HPA se queda en su mínimo", RED)]
+             (number(s.get("Clusters PROD con 4 nodos o menos")), "clusters con ≤4 nodos", SKY),
+             (percent(cpu), "CPU en oficina", RED),
+             (percent(mem), "memoria en oficina", GREEN),
+             (percent(p.get("clusters_le15_share")), "clusters con ≤15 MS", GREEN),
+             (percent(hpa_share), "HPA permanece al mínimo", RED)]
     for index, (value, label, color) in enumerate(tiles):
         row, column = divmod(index, 4)
         kpi(slide, Inches(0.45 + column * 3.13), Inches(1.6 + row * 1.35), Inches(2.95), Inches(1.2), value, label,
@@ -722,16 +737,11 @@ def slide_summary(deck, s, p, measured_summary, clusters, source):
             ["Memoria", percent(mem), percent(s.get("Uso de memoria, percentil 95 por hora (todo el día)")),
              percent(s.get("Uso de memoria, máximo (cota superior: picos de cada cluster sumados)"))]]
     table(slide, Inches(0.45), Inches(4.75), Inches(6.4), rows, [0.22, 0.28, 0.25, 0.25], row_height=0.36, size=10)
-    uses = [row["cpu_use"] for row in clusters if is_number(row["cpu_use"])]
-    median = f" Mediana de CPU por cluster: {percent(statistics.median(uses))}." if uses else ""
-    text_box(slide, Inches(0.45), Inches(5.85), Inches(6.4), Inches(0.4),
-             f"* Suma del pico de cada cluster: cota superior, porque los picos no ocurren a la misma hora.{median}",
-             size=8, italic=True)
-    note_box(slide, Inches(0.45), Inches(6.3), Inches(6.4), Inches(0.55),
-             f"DIMENSIÓN · {number(p.get('clusters_le15'))} clusters tienen 15 microservicios o menos · "
-             f"{number(measured_summary.get('Clusters PROD con mínimo configurado de menos de 4 nodos'))} "
-             f"con mínimo bajo 4 nodos · {number(p['layout'].get('Sin pool user', (None,))[0])} sin pool user",
-             size=10)
+    text_box(slide, Inches(0.45), Inches(5.85), Inches(6.4), Inches(0.3),
+             "* Suma del pico de cada cluster: cota superior, porque los picos no ocurren a la misma hora.", size=8,
+             italic=True)
+    note_box(slide, Inches(0.45), Inches(6.2), Inches(6.4), Inches(0.55),
+             f"DIMENSIÓN · {number(p.get('clusters_le15'))} clusters tienen 15 microservicios o menos", size=11)
 
     heading(slide, Inches(7.3), Inches(4.4), Inches(5.6), "Lo que cuesta el modelo de hoy", size=12)
     kpi(slide, Inches(7.3), Inches(4.75), Inches(2.7), Inches(1.3), money(s.get("Cluster AKS mínimo con el descuento medido")),
@@ -740,7 +750,7 @@ def slide_summary(deck, s, p, measured_summary, clusters, source):
         "un microservicio en ACA al mes (horario ADT)", value_size=24, label_size=10)
     callout(slide, Inches(7.3), Inches(6.2), Inches(5.6), Inches(0.68),
             "Cada aplicación tiene su propio cluster: el costo lo manda la capacidad reservada, no el consumo.",
-            size=11, fill=NAVY)
+            size=11, fill=ROYAL)
 
 
 def slide_pattern1(deck, p, source):
@@ -794,7 +804,7 @@ def slide_pattern2(deck, p, source):
                                                              for item in buckets]
     table(slide, Inches(8.85), Inches(3.05), Inches(4.05), rows, [0.38, 0.24, 0.38], row_height=0.33, size=10)
     callout(slide, Inches(8.85), Inches(6.2), Inches(4.05), Inches(0.65),
-            "La fragmentación multiplica mínimos de nodos, operación y componentes comunes.", size=10, fill=NAVY)
+            "La fragmentación multiplica mínimos de nodos, operación y componentes comunes.", size=10, fill=ROYAL)
 
 
 def slide_pattern3(deck, p, source):
@@ -999,7 +1009,7 @@ def slide_configuration(deck, measured_summary, properties, criteria, source):
              "Nivel oficial de incumplimiento de la LBS: [dato del equipo de lineamientos]", size=10)
     callout(slide, Inches(7.9), Inches(5.65), Inches(4.95), Inches(1.0),
             "Cada cluster nace con la línea base del momento y se queda ahí: mantenerlos al día cuesta horas-hombre "
-            "a cada equipo.", size=11, fill=NAVY)
+            "a cada equipo.", size=11, fill=ROYAL)
 
 
 def slide_criteria(deck, criteria, keda, signals, source):
@@ -1065,7 +1075,7 @@ def slide_cost(deck, s, model, equilibrium, rules, assumptions, source):
               align_first=False)
     callout(slide, Inches(0.45), Inches(6.15), Inches(12.45), Inches(0.75),
             "El modelo supone 1 réplica de 8 a 20 por microservicio. El resultado real depende de las réplicas que "
-            "cada aplicación necesita: ver la comparación por cluster en la propuesta.", size=11, fill=NAVY)
+            "cada aplicación necesita: ver la comparación por cluster en la propuesta.", size=11, fill=ROYAL)
 
 
 def strategic_table(deck, title, header, rows, widths, message, source):
@@ -1160,28 +1170,24 @@ def slide_multicloud(deck, source):
 
 def slide_per_cluster(deck, rows, source):
     with_data = [row for row in rows if row["cheaper"] in ("ACA", "AKS")]
-    aca = [row for row in with_data if row["cheaper"] == "ACA"]
-    slide = base_slide(deck, f"Con las réplicas reales, ACA gana en {number(len(aca))} de {number(len(with_data))} "
-                             "clusters: los chicos", source, "Propuesta")
+    levels = [("cheaper", "AKS hoy", NAVY), ("cheaper_rs", "AKS con right sizing", STEEL),
+              ("cheaper_hpa", "ambos con HPA ajustado", ORANGE)]
+    levels = [level for level in levels if any(row[level[0]] in ("ACA", "AKS") for row in with_data)]
+    wins = {key: sum(row[key] == "ACA" for row in with_data) for key, _, _ in levels}
+    last = levels[-1][0]
+    slide = base_slide(deck, f"ACA gana en los clusters chicos aun con AKS ajustado: {number(wins[last])} de "
+                             f"{number(len(with_data))}", source, "Propuesta")
     buckets = [("1 a 5", 1, 5), ("6 a 15", 6, 15), ("16 a 30", 16, 30), ("Más de 30", 31, 10 ** 9)]
-    table_rows = [["Workloads por cluster", "Clusters", "Más barato en ACA", "Más barato en AKS", "Ahorro si migran los que ganan"]]
-    aca_counts, aks_counts = [], []
-    for label, low, high in buckets:
-        group = [row for row in with_data if is_number(row["workloads"]) and low <= row["workloads"] <= high]
-        cheaper = [row for row in group if row["cheaper"] == "ACA"]
-        saving = sum(row["difference"] for row in cheaper if is_number(row["difference"]))
-        aca_counts.append(len(cheaper))
-        aks_counts.append(len(group) - len(cheaper))
-        table_rows.append([label, number(len(group)), number(len(cheaper)), number(len(group) - len(cheaper)),
-                           money(saving)])
-    heading(slide, Inches(0.45), Inches(1.25), Inches(6.5), "Clusters donde cada plataforma cuesta menos")
+    heading(slide, Inches(0.45), Inches(1.2), Inches(6.5), "Clusters donde ACA cuesta menos, por workloads", size=12)
     data = CategoryChartData()
     data.categories = [label for label, _, _ in buckets]
-    data.add_series("ACA más barato", aca_counts)
-    data.add_series("AKS más barato", aks_counts)
-    chart = slide.shapes.add_chart(XL_CHART_TYPE.COLUMN_CLUSTERED, Inches(0.3), Inches(1.6), Inches(6.5), Inches(3.9),
+    groups = [[row for row in with_data if is_number(row["workloads"]) and low <= row["workloads"] <= high]
+              for _, low, high in buckets]
+    for key, name, _ in levels:
+        data.add_series(f"vs {name}", [sum(row[key] == "ACA" for row in group) for group in groups])
+    chart = slide.shapes.add_chart(XL_CHART_TYPE.COLUMN_CLUSTERED, Inches(0.3), Inches(1.5), Inches(6.5), Inches(3.6),
                                    data).chart
-    chart.font.name, chart.font.size = FONT, Pt(11)
+    chart.font.name, chart.font.size = FONT, Pt(10)
     chart.has_title = False
     chart.has_legend = True
     chart.legend.position = XL_LEGEND_POSITION.BOTTOM
@@ -1193,23 +1199,34 @@ def slide_per_cluster(deck, rows, source):
     plot.has_data_labels = True
     plot.data_labels.font.bold = True
     plot.data_labels.position = XL_LABEL_POSITION.OUTSIDE_END
-    for series, color in zip(plot.series, (ORANGE, NAVY)):
+    for series, (_, _, color) in zip(plot.series, levels):
         series.format.fill.solid()
         series.format.fill.fore_color.rgb = color
-    heading(slide, Inches(7.1), Inches(1.25), Inches(5.8), "Por tamaño del cluster")
-    table(slide, Inches(7.1), Inches(1.6), Inches(5.8), table_rows, [0.24, 0.15, 0.19, 0.19, 0.23], row_height=0.45,
-          size=9)
-    saving = sum(row["difference"] for row in aca if is_number(row["difference"]))
-    kpi(slide, Inches(7.1), Inches(4.1), Inches(2.8), Inches(1.3), money(saving), "al mes si migran solo los que ganan",
-        value_size=22, label_size=9)
-    kpi(slide, Inches(10.1), Inches(4.1), Inches(2.8), Inches(1.3), money(sum(row["aks"] for row in aca if is_number(row["aks"]))),
-        "costo AKS hoy de esos clusters", value_color=SKY, value_size=22, label_size=9)
-    text_box(slide, Inches(0.45), Inches(5.6), Inches(12.4), Inches(0.4),
-             "ACA con las mismas réplicas que midió Container Insights, tamaño por uso + 50%, 24/7, a precio de lista. "
-             "AKS: costo real del último mes completo. Estimado: verificar por cluster.", size=9, italic=True)
-    callout(slide, Inches(0.45), Inches(6.05), Inches(12.45), Inches(0.85),
-            "No hay una plataforma ganadora: ACA conviene en clusters chicos y AKS en los densos, donde los nodos con "
-            "descuento se aprovechan mejor.", size=12)
+
+    def total(key, group):
+        return sum(row[key] for row in group if is_number(row[key]))
+
+    heading(slide, Inches(7.1), Inches(1.2), Inches(5.8), "Costo mensual por tamaño del cluster", size=12)
+    table_rows = [["Workloads", "Clusters", "AKS hoy", "AKS ajustado", "+ HPA", "ACA (HPA aj.)"]]
+    for (label, _, _), group in zip(buckets, groups):
+        table_rows.append([label, number(len(group)), money(total("aks", group)), money(total("aks_rs", group)),
+                           money(total("aks_hpa", group)), money(total("aca_hpa", group) or total("aca_use", group))])
+    table(slide, Inches(7.1), Inches(1.5), Inches(5.8), table_rows, [0.17, 0.13, 0.17, 0.19, 0.16, 0.18],
+          row_height=0.42, size=9)
+    tiles = [(money(total("aks", with_data)), "AKS hoy al mes", SKY),
+             (money(total("aks_rs", with_data)), "AKS con right sizing de requests y nodos", ORANGE),
+             (money(total("aks_hpa", with_data)), "y además mínimos de HPA ajustados", GREEN)]
+    for index, (value, label, color) in enumerate(tiles):
+        kpi(slide, Inches(7.1 + index * 1.97), Inches(3.75), Inches(1.85), Inches(1.3), value, label, value_color=color,
+            value_size=17, label_size=8)
+    text_box(slide, Inches(0.45), Inches(5.25), Inches(12.4), Inches(0.75), [
+        "Right sizing: requests al uso + 50%, en nodos del tamaño actual, con piso de 4 nodos (2 sistema + 2 user); VMs y "
+        "discos escalan con los nodos. HPA ajustado: los que se quedan en su mínimo bajan a lo que pide su CPU (mínimo 2), "
+        "en AKS y en ACA. ACA: réplicas medidas, tamaño por uso + 50%, 24/7, precio de lista. Estimado: verificar por cluster."],
+        size=9, italic=True)
+    callout(slide, Inches(0.45), Inches(6.05), Inches(12.45), Inches(0.82),
+            "El right sizing baja AKS sobre todo en los clusters grandes; en los chicos el piso de 4 nodos pesa más y "
+            "ACA sigue ganando.", size=12)
 
 
 def slide_traffic(deck, classes, settings, source):
@@ -1260,10 +1277,19 @@ def slide_quick_wins(deck, p, measured_summary, clusters, per_cluster, signals, 
     small = [item for item in p["clusters"] if item[0] in ("1", "2 a 3")]
     aca = [row for row in per_cluster if row["cheaper"] == "ACA" and is_number(row["workloads"]) and row["workloads"] <= 15]
     oom = signals.get("oom")
+
+    def total(key):
+        return sum(row[key] for row in per_cluster if is_number(row.get(key)) and is_number(row.get("aks_rs")))
+
+    saving_rs, saving_hpa = total("aks") - total("aks_rs"), total("aks_rs") - total("aks_hpa")
+    nodes_now, nodes_rs = total("nodes"), total("nodes_rs")
     rows = [["Acción", "Alcance", "Efecto", "Dónde se ve"],
+            ["Right sizing: requests al uso + 50% y menos nodos",
+             f"{money(saving_rs)} al mes ({number(nodes_now)} → {number(nodes_rs)} nodos)" if saving_rs else "-",
+             "Ahorro sin migrar", "ACA_por_cluster"],
             ["Bajar mínimos de HPA inflados",
-             f"{number(p.get('inflated_beyond_ha_count'))} HPA con mínimo sobre lo que pide su CPU, aun dejando 2",
-             "Ahorro sin migrar", "Patrón 4"],
+             f"{number(p.get('inflated_beyond_ha_count'))} HPA con mínimo sobre lo que pide su CPU, aun dejando 2"
+             + (f"; {money(saving_hpa)} más al mes" if saving_hpa else ""), "Ahorro sin migrar", "Patrón 4"],
             ["Revisar clusters sin aplicaciones", f"{number(len(empty))} clusters, {money(sum(row['cost'] or 0 for row in empty))} al mes",
              "Ahorro", "Medido_AKS"],
             ["Consolidar apps de 1 a 3 microservicios", f"{number(sum(item[1] for item in small))} clusters, "
@@ -1278,7 +1304,7 @@ def slide_quick_wins(deck, p, measured_summary, clusters, per_cluster, signals, 
              f"{number(oom['workloads'])} workloads" if oom else "Correr aa_signals.py", "Estabilidad", "aa-signals"],
             ["Mapear API → aplicación", "Para clasificar apps por perfil de tráfico", "Habilita la decisión por app",
              "Perfil_trafico"]]
-    table(slide, Inches(0.35), Inches(1.3), Inches(12.6), rows, [0.27, 0.38, 0.18, 0.17], row_height=0.55, size=10,
+    table(slide, Inches(0.35), Inches(1.3), Inches(12.6), rows, [0.27, 0.38, 0.18, 0.17], row_height=0.5, size=10,
           align_first=False)
     callout(slide, Inches(0.35), Inches(6.0), Inches(12.6), Inches(0.9),
             "Decisiones que pedimos: aprobar el ajuste de mínimos y la revisión de clusters vacíos, y un piloto de ACA "
@@ -1312,7 +1338,7 @@ def slide_bia(deck, bia, source):
     callout(slide, Inches(7.6), Inches(4.5), Inches(2.6), Inches(0.9), ["1 PRIORIZAR", "Gobierno y secuencia"], size=10,
             fill=RUST)
     callout(slide, Inches(10.3), Inches(4.5), Inches(2.6), Inches(0.9), ["2 DECIDIR TÉCNICAMENTE", "Carga, réplica, operación"],
-            size=10, fill=NAVY)
+            size=10, fill=ROYAL)
     callout(slide, Inches(7.6), Inches(5.55), Inches(5.3), Inches(0.75),
             "El BIA orienta la prioridad; no determina por sí solo AKS o Container Apps.", size=11)
 

@@ -198,6 +198,12 @@ ASSUMPTIONS = [
     ("sidecar_cpu", "vCPU de request del sidecar de Istio por réplica", 0.1, "Request por defecto del sidecar del add-on de Istio."),
     ("sidecar_mem", "GiB de request del sidecar de Istio por réplica", 0.125, "Request por defecto del sidecar del add-on de Istio."),
     ("aks_min_rep", "Réplicas mínimas por microservicio en AKS (24/7)", 2, "Alta disponibilidad en producción."),
+    ("rs_headroom", "Right sizing AKS: holgura sobre el uso medido", 1.5,
+     "Misma holgura que el tamaño por uso de Container Apps (uso + 50%). Exige bajar los requests de los pods a ese valor."),
+    ("rs_usable", "Right sizing AKS: fracción usable de cada nodo", 0.85, "Margen para DaemonSets, sidecars y picos."),
+    ("rs_system_nodes", "Right sizing AKS: nodos de sistema", 2, "Mínimo de producción: 2 sistema + 2 user."),
+    ("rs_user_min", "Right sizing AKS: nodos user mínimos", 2,
+     "Piso del mínimo de producción. Con el mínimo actual de cada cluster el ahorro sería mayor."),
     ("discount", "Costo efectivo / precio lista de los nodos", None,
      "Fórmula: costo amortizado de VMs de nodos PROD / (horas-nodo medidas × precio lista), en los meses completos "
      "de métricas y costo. 1 si no hay costo medido."),
@@ -1202,7 +1208,26 @@ def aca_allocation(cpu, mem_gib):
     return math.ceil(need * 4 - 1e-9) / 4
 
 
-def aca_workloads(workloads, names):
+def hpa_replica_factors(hpas):
+    """Share of today's replicas each workload keeps if its inflated HPA minimum drops to what its CPU asks for.
+
+    Only HPAs that stay at their minimum and whose minimum is above max(2, replicas needed by CPU) change; the rest
+    keep 1. Keyed by (cluster, namespace, deployment), lower case.
+    """
+    factors = {}
+    for row in hpas or []:
+        if row.get("environment") != "PROD" or row.get("behaviour_ci") != "NUNCA_ESCALA" \
+                or row.get("min_above_need_beyond_ha") != "SÍ":
+            continue
+        try:
+            keep = max(2, float(row["replicas_needed_by_cpu"])) / float(row["ci_replicas_avg_office"])
+        except (KeyError, TypeError, ValueError, ZeroDivisionError):
+            continue
+        factors[(row["cluster"].lower(), row["namespace"].lower(), row["deployment"].lower())] = round(min(1.0, keep), 3)
+    return factors
+
+
+def aca_workloads(workloads, names, factors=None):
     """One row per PROD application workload: replica-hours per month (office / off-hours) and ACA size.
 
     Replica-hours use the full months only (the first and last month of the window are partial).
@@ -1227,6 +1252,11 @@ def aca_workloads(workloads, names):
             return sum(value * weight for value, weight in pairs) / hours if hours else 0
 
         cpu_used, mem_used = weighted("cpu_used_per_replica"), weighted("mem_used_gib_per_replica")
+        office_items = [item for item in items if item["period"] == "OFFICE" and item["month"] in full] or \
+            [item for item in items if item["period"] == "OFFICE"]
+        office_hours = sum(float(item["hours"] or 0) for item in office_items)
+        replicas_office = (sum(float(item["replicas_avg"] or 0) * float(item["hours"] or 0) for item in office_items)
+                           / office_hours) if office_hours else 0
         cpu = max(weighted("cpu_request_per_replica"), cpu_used)
         mem = max(weighted("mem_request_gib_per_replica"), mem_used)
         vcpu = aca_allocation(cpu, mem)
@@ -1237,19 +1267,62 @@ def aca_workloads(workloads, names):
                     "offhours_replica_hours_month": replica_hours("OFFHOURS"),
                     "cpu_request_or_use": round(cpu, 3), "mem_gib_request_or_use": round(mem, 3),
                     "cpu_used": round(cpu_used, 3), "mem_gib_used": round(mem_used, 3),
+                    "replicas_office": round(replicas_office, 2),
+                    "cpu_used_office_total": round(replicas_office * cpu_used, 3),
+                    "mem_gib_used_office_total": round(replicas_office * mem_used, 3),
+                    "hpa_replica_factor": (factors or {}).get((cluster.lower(), namespace.lower(), workload.lower()), 1.0),
                     "aca_vcpu": vcpu, "aca_mem_gib": vcpu * 2, "aca_vcpu_by_use": vcpu_use,
                     "aca_mem_gib_by_use": vcpu_use * 2, "fits_aca": "SÍ" if vcpu_use <= ACA_MAX_VCPU else "NO"})
     return out, sorted(full)
 
 
-def build_aca_by_cluster(workbook, r, clusters, workloads, cost, cost_month):
+def add_right_sizing(sheet, row, s, d, usage, cost, cost_month, suffix="", columns=(14, 15, 16, 17)):
+    """Columns M to Q of ACA_por_cluster (R to U with suffix "_hpa", where inflated HPA minimums also drop): nodes
+    and cost of the cluster if its pods asked for their use plus headroom.
+
+    Nodes keep the cluster's current size (allocatable per node from the platform metrics of the cost month) and the
+    floor of Supuestos. Node VMs and disks scale with the nodes; network, load balancer and tier stay fixed.
+    """
+    by = f'{d.col("cluster")},$A{row}'
+    month = f'{usage.col("month")},"{cost_month}"'
+    cluster = f'{usage.col("cluster")},$A{row}'
+    nodes_now = f'SUMIFS({usage.col("nodes_avg")},{cluster},{month})'
+    per_node = {kind: f'(SUMIFS({usage.col(field)},{cluster},{month})/{nodes_now})'
+                for kind, field in (("cpu", "cpu_allocatable_avg"), ("mem", "mem_allocatable_avg_gib"))}
+    need = {"cpu": f'SUMIFS({d.col("cpu_used_office_total" + suffix)},{by})',
+            "mem": f'SUMIFS({d.col("mem_gib_used_office_total" + suffix)},{by})'}
+    user = (f"MAX({s['rs_user_min']},"
+            + ",".join(f"CEILING({need[kind]}*{s['rs_headroom']}/({per_node[kind]}*{s['rs_usable']}),1)" for kind in ("cpu", "mem"))
+            + ")")
+    nodes, aks, versus, cheaper = (get_column_letter(column) for column in columns)
+    aca = "H" if not suffix else "T"
+    if not suffix:
+        sheet.cell(row=row, column=13, value=f'=IF(B{row}=0,"",{nodes_now})').number_format = "0.0"
+    else:
+        sheet.cell(row=row, column=columns[2], value=f'=IF(B{row}=0,"",SUMIFS({d.col("aca_use_hpa_usd")},{by}))'
+                   ).number_format = USD
+    sheet[f"{nodes}{row}"] = f'=IFERROR(IF(B{row}=0,"",{s["rs_system_nodes"]}+{user}),"")'
+    sheet[f"{nodes}{row}"].number_format = "0"
+    owner = f'{cost.col("owner_id")},L{row},{cost.col("owner_type")},"AKS",{cost.col("month")},"{cost_month}"'
+    scalable = "+".join(f'SUMIFS({cost.col("cost_usd")},{owner},{cost.col("meter_category")},"{category}")'
+                        for category in ("Virtual Machines", "Storage"))
+    sheet[f"{aks}{row}"] = f'=IFERROR(IF({nodes}{row}="","",F{row}-({scalable})+({scalable})*{nodes}{row}/M{row}),"")'
+    sheet[f"{aks}{row}"].number_format = USD
+    if not suffix:
+        sheet[f"{versus}{row}"] = f'=IF({aks}{row}="","",{aks}{row}-H{row})'
+        sheet[f"{versus}{row}"].number_format = '"$"#,##0;[Red]-"$"#,##0'
+    sheet[f"{cheaper}{row}"] = f'=IF({aks}{row}="","",IF({aca}{row}<{aks}{row},"ACA","AKS"))'
+
+
+def build_aca_by_cluster(workbook, r, clusters, workloads, cost, cost_month, usage=None, hpas=None):
     names = {row["name"] for row in clusters.rows if row["environment"] == "PROD"}
-    rows, full = aca_workloads(workloads, names)
+    rows, full = aca_workloads(workloads, names, hpa_replica_factors(hpas))
     if not rows:
         return
     s = {key: f"Supuestos!{value}" for key, value in r.items()}
     d = Detail(workbook, "D_ACA_cargas", rows, list(rows[0].keys()),
-               extra=["aca_same_replicas_request_usd", "aca_same_replicas_use_usd", "aca_adt_use_usd"])
+               extra=["aca_same_replicas_request_usd", "aca_same_replicas_use_usd", "aca_adt_use_usd",
+                      "aca_use_hpa_usd", "cpu_used_office_total_hpa", "mem_gib_used_office_total_hpa"])
     letter = {field: d.letter(field) for field in d.fields}
     for index in range(2, len(rows) + 2):
         def rate(vcpu, mem):
@@ -1264,18 +1337,29 @@ def build_aca_by_cluster(workbook, r, clusters, workloads, cost, cost_month):
             f"=IF({fits},{all_hours}*3600*{rate('aca_vcpu_by_use', 'aca_mem_gib_by_use')},0)")
         d.sheet[f"{letter['aca_adt_use_usd']}{index}"] = (
             f"=IF({fits},{office}*3600*{rate('aca_vcpu_by_use', 'aca_mem_gib_by_use')},0)")
+        factor = f"${letter['hpa_replica_factor']}{index}"
+        d.sheet[f"{letter['aca_use_hpa_usd']}{index}"] = f"=${letter['aca_same_replicas_use_usd']}{index}*{factor}"
+        for total in ("cpu_used_office_total", "mem_gib_used_office_total"):
+            d.sheet[f"{letter[total + '_hpa']}{index}"] = f"=${letter[total]}{index}*{factor}"
     sheet = workbook.create_sheet("ACA_por_cluster")
     title(sheet, "Propuesta: cada cluster PROD, costo AKS hoy vs Container Apps con sus réplicas reales",
           f"Réplicas medidas por Container Insights (promedio de {', '.join(full)}), workloads de aplicación (ReplicaSet). "
           "Tamaño ACA: la menor combinación que cubre el request o el uso. Peor caso para ACA: tarifa activa todo el "
           "tiempo, precio de lista sin descuento, sin la concesión gratuita; el request incluye los sidecars de Istio. "
           "Tamaño por uso = uso promedio + 50%. ACA va de 0,25 vCPU / 0,5 GiB a 4 vCPU / 8 GiB; el ADT_019 manda a AKS "
-          "lo que pase de 4 vCPU / 8 GB, así que esos workloads quedan fuera del costo ACA.", 12)
+          "lo que pase de 4 vCPU / 8 GB, así que esos workloads quedan fuera del costo ACA. AKS con right sizing "
+          "(columnas M a Q): los mismos pods por uso + holgura, en nodos del tamaño actual del cluster, con el piso de "
+          "nodos de Supuestos; VMs y discos escalan con los nodos, el resto del costo queda fijo. Columnas R a U: además, "
+          "los HPA que se quedan en su mínimo bajan a lo que pide su CPU (al menos 2 réplicas), en AKS y en ACA.", 21)
     sheet.append([])
     headers = ["Cluster", "Workloads", "No caben en ACA", "Réplicas promedio oficina", "Réplicas promedio fuera de horario",
                f"Costo AKS {cost_month} (USD)", "ACA mismas réplicas, tamaño por request (peor caso)",
                "ACA mismas réplicas, tamaño por uso", "ACA regla ADT, tamaño por uso (fuera de horario en 0)",
-               "AKS hoy − ACA por uso", "Más barato (AKS hoy vs ACA por uso)", "Id"]
+               "AKS hoy − ACA por uso", "Más barato (AKS hoy vs ACA por uso)", "Id", "Nodos hoy",
+               "Nodos con right sizing", "AKS con right sizing (USD, estimado)", "AKS con right sizing − ACA por uso",
+               "Más barato (AKS con right sizing vs ACA por uso)", "Nodos con right sizing y mínimos de HPA ajustados",
+               "AKS con right sizing y HPA ajustado (USD)", "ACA por uso con mínimos de HPA ajustados (USD)",
+               "Más barato (ambos con HPA ajustado)"]
     sheet.append(["Total de los clusters con datos"])
     total_row = sheet.max_row
     sheet.cell(row=total_row, column=1).font = BOLD
@@ -1302,14 +1386,21 @@ def build_aca_by_cluster(workbook, r, clusters, workloads, cost, cost_month):
         sheet.cell(row=row, column=10, value=f'=IF(B{row}=0,"",F{row}-H{row})').number_format = '"$"#,##0;[Red]-"$"#,##0'
         sheet.cell(row=row, column=11, value=f'=IF(B{row}=0,"Sin datos",IF(H{row}<F{row},"ACA","AKS"))')
         sheet.cell(row=row, column=12, value=cluster.get("id", ""))
+        if usage and cost:
+            add_right_sizing(sheet, row, s, d, usage, cost, cost_month)
+            add_right_sizing(sheet, row, s, d, usage, cost, cost_month, "_hpa", (18, 19, 20, 21))
     last = sheet.max_row
-    for column in (6, 7, 8, 9, 10):
+    for column in (6, 7, 8, 9, 10) + ((13, 14, 15, 16, 18, 19, 20) if usage and cost else ()):
         col = get_column_letter(column)
         sheet.cell(row=total_row, column=column, value=f'=SUMIFS({col}{first}:{col}{last},$B{first}:$B{last},">0")'
                    ).number_format = USD
     sheet.cell(row=total_row, column=2, value=f'=COUNTIFS(B{first}:B{last},">0")')
     sheet.cell(row=total_row, column=11, value=f'=COUNTIFS(K{first}:K{last},"ACA")&" de "&B{total_row}&" más baratos en ACA"')
-    set_widths(sheet, [30, 11, 11, 13, 15, 16, 18, 16, 20, 16, 16, 40])
+    if usage and cost:
+        for column in ("Q", "U"):
+            sheet[f"{column}{total_row}"] = (f'=COUNTIFS({column}{first}:{column}{last},"ACA")&" de "&'
+                                             f'COUNTIFS({column}{first}:{column}{last},"?*")&" más baratos en ACA"')
+    set_widths(sheet, [30, 11, 11, 13, 15, 16, 18, 16, 20, 16, 16, 40, 10, 12, 18, 18, 18, 14, 18, 18, 18])
     sheet.column_dimensions["L"].hidden = True  # resource id, only used to match the cost
     sheet.freeze_panes = f"B{first}"
 
@@ -1672,7 +1763,7 @@ def main():
     if profile:
         build_traffic_profile(workbook, profile, d_traffic)
     if d_clusters and workloads:
-        build_aca_by_cluster(workbook, r, d_clusters, workloads, d_cost, last_cost_month)
+        build_aca_by_cluster(workbook, r, d_clusters, workloads, d_cost, last_cost_month, d_usage, hpas)
     if d_clusters:
         measured_refs, _ = build_measured(workbook, d_clusters, d_usage, d_cost, d_workloads, d_services, months)
         build_config(workbook, d_clusters)
