@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Capacity and latency signals: unschedulable pods, OOMKilled containers and APIM backend latency.
+"""Capacity, memory and latency signals: unschedulable pods, OOM kills, stack and memory per container, APIM latency.
 
 Three read-only checks that test the usage figures from the other side: low CPU use is only waste if the
 clusters are not short of capacity (unschedulable pods) and the containers are not short of memory
@@ -11,6 +11,11 @@ clusters are not short of capacity (unschedulable pods) and the containers are n
                         (pod, container, restart count) with that last status, so a status repeated in
                         every inventory snapshot counts once. A kill from before the window counts in its
                         first month. Only counts leave the workspace: no logs, labels or messages.
+  Container Insights    Stack per workload and memory per replica split into app and Istio sidecar, office hours
+                        of the last --stack-days days (memory per container is stable, so a week is enough). The
+                        stack is classified inside the workspace from ContainerInventory (command and image of
+                        every container of the pod, including the init container that injects a Java agent);
+                        only the label leaves it, never the command, the image or the environment variables.
   APIM platform metrics BackendDuration and Duration (milliseconds, Average and Maximum) per API and month,
                         one data point per month (interval FULL), so the average is per request.
 
@@ -20,6 +25,7 @@ Outputs (in --output-dir):
   aks_autoscaler_monthly.csv  cluster x month: hours with data, hours with unschedulable pods (all, office),
                               highest hourly average of unschedulable pods
   aks_oomkilled_monthly.csv   cluster x namespace x workload x month: OOM kills and pods affected
+  aks_stack_memory.csv        cluster x namespace x workload: stack, replicas, app and sidecar memory per replica
   apim_latency_monthly.csv    APIM x API x month: backend and gateway duration, average and maximum (ms)
   signals_errors.csv
   signals_summary.json
@@ -28,6 +34,7 @@ Outputs (in --output-dir):
 import json
 import os
 import time
+from datetime import timedelta
 
 import aa_common as aa
 import aa_container_insights as ci
@@ -47,6 +54,76 @@ KubePodInventory
 | extend Month = format_datetime(datetime_utc_to_local(FirstSeen, 'America/Lima'), 'yyyy-MM')
 | summarize OomKills = count(), Pods = dcount(PodUid) by Month, Namespace, Workload, ControllerKind
 """
+
+
+STACK_QUERY = """
+let t0 = datetime({start}); let t1 = datetime({end});
+let clues = ContainerInventory
+| where TimeGenerated between (t0 .. t1)
+| summarize arg_max(TimeGenerated, Command, Image) by ContainerID
+| extend c = tolower(Command), i = tolower(Image)
+| project ContainerID,
+    Quarkus = toint(c has 'quarkus' or i has 'quarkus'),
+    Spring = toint(c has 'springframework' or c has 'jarlauncher' or i has 'spring'),
+    Java = toint(c has 'java' or c has 'javaagent' or i has 'java' or i has 'openjdk' or i has 'temurin' or i has 'jre'),
+    Dotnet = toint(c has 'dotnet' or i has 'dotnet' or i has 'aspnet'),
+    Node = toint(c has 'node' or i has 'node'),
+    Python = toint(c has 'python' or c has 'gunicorn' or c has 'uvicorn' or i has 'python');
+KubePodInventory
+| where TimeGenerated between (t0 .. t1) and isnotempty(ControllerName) and isnotempty(ContainerID)
+| extend Workload = {workload}
+| distinct ContainerID, Namespace, Workload, ControllerKind
+| join kind=inner clues on ContainerID
+| summarize Quarkus = max(Quarkus), Spring = max(Spring), Java = max(Java), Dotnet = max(Dotnet), Node = max(Node),
+    Python = max(Python) by Namespace, Workload, ControllerKind
+| extend Stack = case(Quarkus == 1, 'Quarkus', Spring == 1, 'Spring Boot', Java == 1, 'Java', Dotnet == 1, '.NET',
+    Node == 1, 'Node.js', Python == 1, 'Python', 'Sin identificar')
+| project Namespace, Workload, ControllerKind, Stack
+"""
+
+MEMORY_QUERY = """
+let t0 = datetime({start}); let t1 = datetime({end});
+let pods = KubePodInventory
+| where TimeGenerated between (t0 .. t1) and isnotempty(ControllerName)
+| extend Workload = {workload}
+| distinct PodUid, Namespace, Workload, ControllerKind;
+Perf
+| where TimeGenerated between (t0 .. t1)
+| where ObjectName == 'K8SContainer' and CounterName == 'memoryWorkingSetBytes'
+| extend Local = datetime_utc_to_local(TimeGenerated, 'America/Lima')
+| where dayofweek(Local) between (1d .. 5d) and hourofday(Local) between (8 .. 19)
+| extend PodUid = extract(@'/([^/]+)/[^/]+$', 1, InstanceName), Container = extract(@'/([^/]+)$', 1, InstanceName)
+| summarize Value = avg(CounterValue) by Hour = bin(TimeGenerated, 1h), PodUid,
+    Role = iff(Container == 'istio-proxy', 'sidecar', 'app')
+| join kind=inner pods on PodUid
+| summarize Total = sum(Value), Pods = dcount(PodUid) by Hour, Namespace, Workload, ControllerKind, Role
+| summarize PerReplica = avg(Total / Pods), Replicas = avg(Pods) by Namespace, Workload, ControllerKind, Role
+"""
+
+
+def stack_rows(ctx, client, cluster, start, end):
+    """Stack and memory per replica (app and sidecar) per workload; None when a query fails."""
+    timespan = f"{aa.iso_z(start)}/{aa.iso_z(end)}"
+    arguments = {"start": aa.iso_z(start), "end": aa.iso_z(end), "workload": ci.WORKLOAD_NAME}
+    stacks = ctx.try_arm("ci-stack", cluster["name"], client.query, cluster["id"], STACK_QUERY.format(**arguments), timespan)
+    memory = ctx.try_arm("ci-memory", cluster["name"], client.query, cluster["id"], MEMORY_QUERY.format(**arguments),
+                         timespan)
+    if stacks is None or memory is None:
+        return None
+    by_workload = {}
+    for row in memory:
+        key = (row["Namespace"], row["Workload"], row["ControllerKind"])
+        entry = by_workload.setdefault(key, {"replicas_avg": 0.0, "app_mem_gib_per_replica": "",
+                                             "sidecar_mem_gib_per_replica": ""})
+        entry[f"{row['Role']}_mem_gib_per_replica"] = round(row["PerReplica"] / 1024 ** 3, 3)
+        if row["Role"] == "app":
+            entry["replicas_avg"] = round(row["Replicas"], 2)
+    stack_of = {(row["Namespace"], row["Workload"], row["ControllerKind"]): row["Stack"] for row in stacks}
+    return [{"cluster": cluster["name"], "environment": cluster["environment"], "namespace": namespace,
+             "workload": workload, "kind": kind,
+             "system_namespace": "YES" if namespace in aa.SYSTEM_NAMESPACES or str(namespace).startswith("aks-istio") else "NO",
+             "stack": stack_of.get((namespace, workload, kind), "Sin identificar"), **figures}
+            for (namespace, workload, kind), figures in sorted(by_workload.items())]
 
 
 def autoscaler_rows(ctx, cluster, start, end, chunk_days):
@@ -112,6 +189,8 @@ def main():
     parser.add_argument("--skip-autoscaler", action="store_true")
     parser.add_argument("--skip-oom", action="store_true")
     parser.add_argument("--skip-apim", action="store_true")
+    parser.add_argument("--skip-stack", action="store_true")
+    parser.add_argument("--stack-days", type=int, default=7, help="Days before --end for the stack and memory split")
     parser.add_argument("--chunk-days", type=int, default=31, help="Days per autoscaler metrics call (hourly points)")
     parser.add_argument("--top", type=int, default=1000, help="Max APIs per APIM metrics call")
     parser.add_argument("--pause", type=float, default=2.0, help="Seconds between Log Analytics queries")
@@ -145,14 +224,15 @@ def main():
             autoscaler.extend(result or [])
         output.csv("aks_autoscaler_monthly.csv", autoscaler)
 
-    ooms, oom_clusters = [], 0
-    if not args.skip_oom:
-        client = ci.LogsClient(ctx, args.pause)
-        with_ci = [row for row in clusters if row.get("container_insights", "").lower() == "true"]
+    client = ci.LogsClient(ctx, args.pause)
+    with_ci = [row for row in clusters if row.get("container_insights", "").lower() == "true"]
+    if not (args.skip_oom and args.skip_stack):
         for row in clusters:
             if row not in with_ci:
-                ctx.errors.add("ci-oomkilled", row["name"], "inventory", code="NotEnabled",
+                ctx.errors.add("container-insights", row["name"], "inventory", code="NotEnabled",
                                message="Container Insights add-on is not enabled on this cluster")
+    ooms, oom_clusters = [], 0
+    if not args.skip_oom:
         started = time.monotonic()
         for number, cluster in enumerate(with_ci, 1):  # sequential: Log Analytics allows few concurrent queries
             azure.LOG.info("OOMKilled %d/%d %s (%.0f min)", number, len(with_ci), cluster["name"],
@@ -167,6 +247,24 @@ def main():
                                      "timestamp": azure.iso(azure.utc_now())})
         output.csv("aks_oomkilled_monthly.csv", ooms)
 
+    stack, stack_clusters = [], 0
+    if not args.skip_stack:
+        stack_start = max(start, end - timedelta(days=args.stack_days))
+        started = time.monotonic()
+        for number, cluster in enumerate(with_ci, 1):
+            azure.LOG.info("Stack and memory %d/%d %s (%.0f min)", number, len(with_ci), cluster["name"],
+                           (time.monotonic() - started) / 60)
+            rows = stack_rows(ctx, client, cluster, stack_start, end)
+            if rows is not None:
+                stack_clusters += 1
+                stack.extend(rows)
+        for label, query in (("stack", STACK_QUERY), ("memory-by-container", MEMORY_QUERY)):
+            ctx.evidence.queries.append({"source": "Log Analytics (Container Insights)", "label": label,
+                                         "query": " ".join(query.replace("{workload}", ci.WORKLOAD_NAME).split()),
+                                         "rows": len(stack), "subscriptions": "", "seconds": "",
+                                         "timestamp": azure.iso(azure.utc_now())})
+        output.csv("aks_stack_memory.csv", stack)
+
     latency = []
     if not args.skip_apim:
         for service in services:
@@ -175,7 +273,8 @@ def main():
 
     output.csv("signals_errors.csv", ctx.errors.rows, azure.ErrorLog.FIELDS)
     summary = {"autoscaler_rows": len(autoscaler), "oom_rows": len(ooms), "oom_clusters_queried": oom_clusters,
-               "latency_rows": len(latency), "errors": len(ctx.errors.rows)}
+               "stack_rows": len(stack), "stack_clusters_queried": stack_clusters, "latency_rows": len(latency),
+               "errors": len(ctx.errors.rows)}
     output.json("signals_summary.json", azure.run_metadata(ctx, {
         "window_utc": {"from": aa.iso_z(start), "to": aa.iso_z(end)},
         "office_hours": "Monday-Friday 08:00-20:00 America/Lima (UTC-5), holidays not excluded",

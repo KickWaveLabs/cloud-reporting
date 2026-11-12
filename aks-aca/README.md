@@ -129,7 +129,8 @@ python aks-aca/src/aa_workbook.py
    windows and threshold are editable cells, so reclassifying needs no new Azure query.
 9. Optional: `aa_signals.py` checks the other side of the usage figures: hours with unschedulable pods
    per cluster (only clusters with the autoscaler emit the metric), OOMKilled containers per workload,
-   and APIM backend latency per API and month. It runs on its own after the inventory and writes to
+   stack and memory per replica split into app and Istio sidecar (last 7 days), and APIM backend latency
+   per API and month. It runs on its own after the inventory and writes to
    `results/aa-signals/`; the workbook does not read it yet.
 10. `aa_workbook.py` writes `reports/<date>-aks-aca/aks_aca_comparison.xlsx`. Add a `README.md` next to
     it with the scope and gaps of the run (see `reports/2026-11-10-aks-aca/README.md` on the machine that

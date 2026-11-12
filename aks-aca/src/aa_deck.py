@@ -413,7 +413,18 @@ def read_footprint(results):
     buckets = [("< 128 MiB", 0, 0.125), ("128–512 MiB", 0.125, 0.5), ("512 MiB–1 GiB", 0.5, 1.0), ("≥ 1 GiB", 1.0, 10 ** 6)]
     memory = [value for value, _ in per_replica]
     apps = parts["apps"]
+    stack = read_csv(os.path.join(results, "aa-signals", "aks_stack_memory.csv")) or []
+    stack = [row for row in stack if row["environment"] == "PROD" and row["kind"] == "ReplicaSet"
+             and row["system_namespace"] == "NO" and not is_platform_namespace(row["namespace"])]
+    app_memory = sum(to_float(row["app_mem_gib_per_replica"]) * to_float(row["replicas_avg"]) for row in stack)
+    sidecar_memory = sum(to_float(row["sidecar_mem_gib_per_replica"]) * to_float(row["replicas_avg"]) for row in stack)
+    stacks = {}
+    for row in stack:
+        stacks[row["stack"]] = stacks.get(row["stack"], 0) + 1
     return {
+        "stack_workloads": len(stack), "stacks": sorted(stacks.items(), key=lambda item: -item[1]),
+        "sidecar_share": share_of(sidecar_memory, app_memory + sidecar_memory) if stack else None,
+        "with_sidecar": sum(1 for row in stack if row["sidecar_mem_gib_per_replica"] not in ("", None)),
         "month": month, "clusters": len(with_ci), "node": node, "parts": parts,
         "rest_mem": node["mem_used"] - sum(part[0] for part in parts.values()),
         "buckets": [(label, sum(low <= value < high for value in memory)) for label, low, high in buckets],
@@ -891,10 +902,20 @@ def slide_footprint(deck, s, footprint, source):
              f"{footprint['ratio_used']:.0f} · forma del nodo 1 : {footprint['ratio_node']:.1f}").replace(".", ",")
     note_box(slide, Inches(6.9), Inches(3.6), Inches(5.95), Inches(0.5), ratio, size=9)
     heading(slide, Inches(6.9), Inches(4.2), Inches(5.9), "Hipótesis (a validar con los equipos)", size=12)
+    stack_line = "• JVM: reserva su heap aunque no haya tráfico; casi nada corre en modo nativo (Quarkus nativo < 128 MiB)."
+    if footprint["stack_workloads"]:
+        detected = ", ".join(f"{name} {percent(share_of(count, footprint['stack_workloads']))}"
+                             for name, count in footprint["stacks"][:3])
+        stack_line = f"• Stack detectado: {detected}. La JVM reserva su heap aunque no haya tráfico."
+    sidecar_line = "• Cada pod suma el sidecar de Istio (si está en la malla) y un agente Java inyectado (javaagent)."
+    if footprint["sidecar_share"] is not None:
+        sidecar_line = (f"• El sidecar de Istio es el {percent(footprint['sidecar_share'])} de la memoria de los pods "
+                        f"({number(footprint['with_sidecar'])} de {number(footprint['stack_workloads'])} workloads con "
+                        "sidecar); además, un agente Java inyectado (javaagent).")
     text_box(slide, Inches(6.9), Inches(4.5), Inches(5.95), Inches(1.6), [
-        "• JVM: reserva su heap aunque no haya tráfico; casi nada corre en modo nativo (Quarkus nativo < 128 MiB).",
-        "• Cada pod suma el sidecar de Istio y un agente Java inyectado (javaagent).",
-        "• Requests de CPU muy sobre el uso: el scheduler reserva CPU que nadie usa.",
+        stack_line, sidecar_line,
+        "• Kubernetes ubica los pods por lo que reservan (request), no por lo que usan: esa CPU queda apartada en el "
+        "nodo aunque nadie la use, y el autoscaler suma nodos por ella.",
         "• La parte del SO, kubelet y caché no es de las apps."], size=9)
     callout(slide, Inches(0.45), Inches(6.1), Inches(12.45), Inches(0.8),
             "Las apps se configuran 1:4 pero se comportan como cargas de memoria: bajar requests de CPU, ajustar el heap "

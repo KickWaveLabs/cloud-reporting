@@ -109,12 +109,18 @@ target). `min_above_need_beyond_ha` = the minimum is above max(2, needed).
 |---|---|---|
 | `aks_autoscaler_monthly.csv` | Cluster x month | `hours_with_data` (0 = no autoscaler, the metric is not emitted), `hours_with_unschedulable`, `office_hours_with_unschedulable`, `unschedulable_pods_max` (highest hourly average) |
 | `aks_oomkilled_monthly.csv` | Cluster x namespace x workload x month | `oom_kills`, `pods` affected, `system_namespace` |
+| `aks_stack_memory.csv` | Cluster x namespace x workload (last `--stack-days`, office hours) | `stack` (Quarkus, Spring Boot, Java, .NET, Node.js, Python, Sin identificar), `replicas_avg`, `app_mem_gib_per_replica`, `sidecar_mem_gib_per_replica` (Istio; empty when the pod has no sidecar) |
 | `apim_latency_monthly.csv` | APIM x API x month | `backend_duration_avg_ms`, `backend_duration_max_ms` (APIM to the backend and back), `duration_avg_ms`, `duration_max_ms` (whole gateway request) |
 
 - Unschedulable pods: `cluster_autoscaler_unschedulable_pods_count`, hourly average. An hour above 0
   had pods waiting for a node at some point.
 - OOM kills: `KubePodInventory.ContainerLastStatus` = OOMKilled. One kill is one pod, container and
   restart count with that status, so a status repeated in every inventory snapshot counts once.
+- Stack: classified inside the workspace from the command and image of every container of the pod
+  (`ContainerInventory`). Most app containers start from the image entrypoint, so the command is empty;
+  a Java pod is still recognised by the init container that copies a `javaagent.jar`. Spring Boot and
+  Quarkus only show when the command or image names them, so "Java" usually means "framework unknown".
+  The framework comes from the repositories (`pom.xml`) or the platform team.
 - Latency averages are per request over the whole month (metric interval `FULL`). The maximum is a
   single slow request; use the average to compare with a Container Apps cold start (up to ~30 s).
 
