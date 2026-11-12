@@ -331,7 +331,7 @@ def slide_pattern1(deck, p, source):
 def slide_pattern2(deck, p, source):
     buckets = [item for item in p["clusters"] if not item[0].startswith("0")]
     empty = next((item for item in p["clusters"] if item[0].startswith("0")), None)
-    total = sum(item[1] for item in p["clusters"])
+    total = sum(item[1] for item in buckets)
     slide = base_slide(deck, f"Patrón 2: {number(p.get('clusters_le15'))} de {number(total)} clusters tienen 15 "
                              "microservicios o menos", source, 3)
     heading(slide, Inches(0.45), Inches(1.3), Inches(8), "Clusters PROD por número de microservicios")

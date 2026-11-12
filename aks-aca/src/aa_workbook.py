@@ -856,13 +856,16 @@ def build_patterns(workbook, deploy, hpa, kclusters, capabilities, taken_on):
                    ).number_format = "0%"
         sheet.cell(row=row, column=4, value=f"=SUMIFS({k.col('cost_month_usd')},{criteria})").number_format = USD
     last = sheet.max_row
+    # Clusters missing from the export have 0 microservices because nothing is known, not because they are small.
+    small = base + [k.col("microservices"), '">=1"']
     sheet.append(["Clusters PROD con 15 microservicios o menos",
-                  f'=COUNTIFS({",".join(base + [k.col("microservices"), chr(34) + "<=15" + chr(34)])})',
-                  f'=IFERROR(B{last + 1}/SUM($B${first}:$B${last}),"")', "", "Umbral de 15 microservicios del ADT_019"])
+                  f'=COUNTIFS({",".join(small + [k.col("microservices"), chr(34) + "<=15" + chr(34)])})',
+                  f'=IFERROR(B{last + 1}/SUM($B${first + 1}:$B${last}),"")', "",
+                  "Umbral de 15 microservicios del ADT_019; sobre los clusters con al menos 1 microservicio en el export"])
     sheet.cell(row=sheet.max_row, column=3).number_format = "0%"
     sheet.append(["Costo mensual de clusters PROD con 3 microservicios o menos", "", "",
-                  f'=SUMIFS({k.col("cost_month_usd")},{",".join(base + [k.col("microservices"), chr(34) + "<=3" + chr(34)])})',
-                  "Costo amortizado real (Cost Management), último mes completo del periodo"])
+                  f'=SUMIFS({k.col("cost_month_usd")},{",".join(small + [k.col("microservices"), chr(34) + "<=3" + chr(34)])})',
+                  "Costo amortizado real (Cost Management), último mes completo; de 1 a 3 microservicios en el export"])
     sheet.cell(row=sheet.max_row, column=4).number_format = USD
 
     if hpa:
@@ -934,8 +937,9 @@ def build_criteria(workbook, clusters, kclusters, deploy, hpa, traffic, workload
     k_base = f'{kclusters.col("environment")},"PROD",{kclusters.col("in_inventory")},"SÍ"' if kclusters else ""
     add("Microservicios por aplicación", "15 o menos", "Más de 15, o una plataforma compartida por varias apps",
         "Clusters con 15 microservicios o menos",
-        f'=COUNTIFS({k_base},{kclusters.col("microservices")},"<=15")' if kclusters else "",
-        f"=COUNTIFS({k_base})" if kclusters else "", ADT,
+        f'=COUNTIFS({k_base},{kclusters.col("microservices")},">=1",{kclusters.col("microservices")},"<=15")'
+        if kclusters else "",
+        f'=COUNTIFS({k_base},{kclusters.col("microservices")},">=1")' if kclusters else "", ADT,
         "El umbral de 15 es del ADT; Microsoft no publica uno.")
     if traffic and traffic_month:
         t = traffic
