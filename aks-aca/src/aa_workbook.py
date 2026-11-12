@@ -564,6 +564,9 @@ def build_measured(workbook, clusters, usage, cost, workloads, services, months)
     sheet.cell(row=sheet.max_row, column=1).font = BOLD
     summary = [
         ("Clusters PROD", f'=COUNTIFS($B$5:$B${last},"PROD")', "0"),
+        ("Clusters no productivos (Dev/QA)", f'=COUNTIFS($B$5:$B${last},"DESA")+COUNTIFS($B$5:$B${last},"CERT")', "0"),
+        ("Clusters AKS en total (PROD + Dev/QA)",
+         f'=COUNTIFS($B$5:$B${last},"PROD")+COUNTIFS($B$5:$B${last},"DESA")+COUNTIFS($B$5:$B${last},"CERT")', "0"),
         ("Clusters PROD con 4 nodos o menos", f'=SUMPRODUCT(($B$5:$B${last}="PROD")*(($C$5:$C${last}+$D$5:$D${last})<=4))', "0"),
         ("Clusters PROD con menos de 4 nodos al momento del inventario",
          f'=SUMPRODUCT(($B$5:$B${last}="PROD")*(($C$5:$C${last}+$D$5:$D${last})<4))', "0"),
@@ -1460,6 +1463,8 @@ def build_summary(workbook, breakeven, measured_refs, r, kclusters=None):
     s = {key: f"Supuestos!{value}" for key, value in r.items()}
     rows = [
         ("Clusters AKS PROD", f"={measured_refs['Clusters PROD']}", "Medido", "Medido_AKS", "0"),
+        ("Clusters AKS no productivos (Dev/QA)", f"={measured_refs.get('Clusters no productivos (Dev/QA)', chr(34) * 2)}",
+         "Medido", "Medido_AKS (DESA + CERT); contexto, el análisis cubre PROD", "0"),
         ("Clusters PROD con 4 nodos o menos", f"={measured_refs['Clusters PROD con 4 nodos o menos']}", "Medido", "Medido_AKS", "0"),
         ("Costo mensual promedio por cluster PROD", f"={measured_refs['Costo mensual promedio por cluster PROD (USD)']}",
          "Medido", "Medido_AKS; Cost Management", USD),

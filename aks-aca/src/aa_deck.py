@@ -741,7 +741,10 @@ def slide_summary(deck, s, p, measured_summary, clusters, source):
              "* Suma del pico de cada cluster: cota superior, porque los picos no ocurren a la misma hora.", size=8,
              italic=True)
     note_box(slide, Inches(0.45), Inches(6.2), Inches(6.4), Inches(0.55),
-             f"DIMENSIÓN · {number(p.get('clusters_le15'))} clusters tienen 15 microservicios o menos", size=11)
+             f"DIMENSIÓN · {number(p.get('clusters_le15'))} clusters tienen 15 microservicios o menos"
+             + (f" · parque AKS: {number(s.get('Clusters AKS PROD'))} PROD + "
+                f"{number(s.get('Clusters AKS no productivos (Dev/QA)'))} Dev/QA"
+                if is_number(s.get("Clusters AKS no productivos (Dev/QA)")) else ""), size=10)
 
     heading(slide, Inches(7.3), Inches(4.4), Inches(5.6), "Lo que cuesta el modelo de hoy", size=12)
     kpi(slide, Inches(7.3), Inches(4.75), Inches(2.7), Inches(1.3), money(s.get("Cluster AKS mínimo con el descuento medido")),
@@ -1034,28 +1037,40 @@ def figure_text(measure, value, total):
     return f"{number(value)} {label}" if is_number(value) else label
 
 
-def slide_criteria(deck, criteria, keda, signals, source):
-    slide = base_slide(deck, "Criterios técnicos AKS vs ACA y lo que muestra producción", source, "Criterios técnicos")
-    rows = [["Criterio", "Favorece Container Apps", "Favorece AKS", "Hoy en producción"]]
+# Decision rules of ADT_019 shown on the slide, with the measure of Criterios_tecnicos that backs each one.
+DECISION_RULES = [("15 microservicios o menos por aplicación", "Clusters con 15 microservicios"),
+                  ("Menos de 100 tps de carga", "APIs con pico de más de 100 tps"),
+                  ("Uso concentrado en horario, no constante más de 10 h al día", "Peticiones fuera de horario"),
+                  ("Réplicas de hasta 4 vCPU / 8 GiB", "Microservicios que caben"),
+                  ("Sin StatefulSet, batch largo ni contenedores privilegiados", "Workloads StatefulSet")]
+
+
+def slide_criteria(deck, criteria, signals, bia, source):
+    slide = base_slide(deck, "Cómo decidimos si un AKS puede pasar a Container Apps", source, "Criterios técnicos")
+    by_measure = {}
     for item in criteria:
-        if item["name"] == "Costo" or (item["value"] is None and not item["extra"]):
-            continue
-        figures = [figure_text(item["measure"], item["value"], item["total"])]
-        figures += [figure_text(measure, value, total) for measure, value, total in item["extra"]]
-        rows.append([item["name"], item["aca"], item["aks"], "\n".join(figures)])
+        by_measure[item["measure"]] = item
+        for measure, value, total in item["extra"]:
+            by_measure[measure] = {"measure": measure, "value": value, "total": total}
+    rows = [["#", "Regla de decisión (ADT_019)", "Hoy en producción"]]
+    for rule, measure in DECISION_RULES:
+        item = next((value for key, value in by_measure.items() if key.startswith(measure)), None)
+        rows.append([str(len(rows)), rule, figure_text(item["measure"], item["value"], item["total"]) if item else "-"])
     latency = signals.get("latency")
-    if latency:
-        rows.append(["Latencia y arranque en frío", "El consumidor tolera ~30 s en el primer request tras escalar a 0",
-                     "Respuesta baja y constante, sin arranque en frío",
-                     f"{latency['median']:.0f} ms de latencia media del backend (mediana por API); "
-                     f"{percent(latency['under_100'])} de las APIs bajo 100 ms"])
-    table(slide, Inches(0.35), Inches(1.25), Inches(12.6), rows, [0.17, 0.25, 0.25, 0.33], row_height=0.47, size=9,
-          align_first=False, highlight_column=3)
-    text = "Umbrales del ADT_019; límites según Microsoft Learn (detalle y fuentes en la hoja Criterios_tecnicos)."
-    if keda:
-        text = (f"Aparte: con KEDA, AKS también escala pods a 0, pero sigue pagando sus nodos mínimos; hoy "
-                f"{number(keda['value'])} de {number(keda['total'])} clusters PROD usan KEDA. {text}")
-    note_box(slide, Inches(0.35), Inches(6.3), Inches(12.6), Inches(0.6), text, size=9)
+    rows.append([str(len(rows)), "El consumidor tolera ~30 s en el primer request tras escalar a 0",
+                 f"{latency['median']:.0f} ms de latencia media del backend; {percent(latency['under_100'])} de las APIs "
+                 "bajo 100 ms" if latency else "Validar con cada equipo"])
+    high = sum((bia.get(level) or {}).get("clusters") or 0 for level in ("MUY ALTA", "ALTA"))
+    rows.append([str(len(rows)), "Si el servicio es crítico, lo revisa la unidad de gobierno de arquitectura de soluciones",
+                 f"{number(high)} clusters con BIA alta o muy alta" if high else "-"])
+    table(slide, Inches(0.45), Inches(1.3), Inches(12.45), rows, [0.05, 0.5, 0.45], row_height=0.5, size=11,
+          align_first=False, highlight_column=2)
+    callout(slide, Inches(0.45), Inches(5.95), Inches(12.45), Inches(0.9),
+            "Un cluster pasa a Container Apps solo si cumple todas las reglas; el costo (siguiente lámina) decide el orden.",
+            size=13)
+    text_box(slide, Inches(0.45), Inches(5.5), Inches(12.45), Inches(0.35),
+             "Detalle de cada criterio, qué favorece a cada plataforma y sus fuentes: hoja Criterios_tecnicos del workbook.",
+             size=9, italic=True)
 
 
 def slide_cost(deck, s, model, equilibrium, rules, assumptions, source):
@@ -1381,7 +1396,7 @@ def main():
     if not patterns["layers"]:
         raise SystemExit("The Patrones sheet is empty. Run aa_k8s_snapshot.py, then aa_workbook.py, and save in Excel.")
     measured_summary, clusters = read_measured(book)
-    criteria, keda = read_criteria(book)
+    criteria, _ = read_criteria(book)
     equilibrium, rules = read_equilibrium(book)
     per_cluster, _ = read_per_cluster(book)
     classes, settings = read_profile(book)
@@ -1408,7 +1423,7 @@ def main():
     slide_footprint(deck, summary, read_footprint(args.results), measured_source)
     slide_configuration(deck, measured_summary, read_config(book), criteria,
                         "Fuente: Azure Resource Graph (configuración de clusters y node pools). Uso interno.")
-    slide_criteria(deck, criteria, keda, signals, measured_source)
+    slide_criteria(deck, criteria, signals, read_bia(book), measured_source)
     slide_cost(deck, summary, read_model(book), equilibrium, rules, read_assumptions(book), model_source)
     slide_application(deck, strategic_source)
     slide_security(deck, strategic_source)
