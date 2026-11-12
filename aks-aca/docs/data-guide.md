@@ -153,6 +153,7 @@ Inputs: the four `aa-k8s-snapshot` CSVs, plus the cost per cluster from workbook
 | Microservices per layer (pattern 1) | `deployment_snapshot`, filter PROD and `platform_component` = NO; rows `layer`; count |
 | Repeated capabilities | `capability_domains` as is |
 | Clusters per microservices bucket (pattern 2) | `cluster_snapshot`, filter PROD, `in_inventory` = SÍ, `in_export` = SÍ; helper bucket column on `microservices`; add the cost with `XLOOKUP(cluster, owner, cost)` |
+| Apps on system nodes (pattern 3) | `aks_node_pools`, filter PROD; pivot `cluster` x `mode`, count `pool`: clusters without a `User` column run their apps on the system pool. Add the cost per cluster from workbook 1. Clusters without apps: `aks_workloads_monthly`, last month, `kind` not DaemonSet, `system_namespace` = NO, outside platform namespaces; clusters with 0 workloads |
 | Replicas now (pattern 4) | `hpa_snapshot`, filter PROD and `platform_component` = NO; helper bucket column on `replicas_now` |
 | HPA behaviour | Same filter; rows `behaviour_ci`; count as % of total |
 | Inflated minimums | Same filter plus `behaviour_ci` = NUNCA_ESCALA; rows `min_above_need` or `min_above_need_beyond_ha` |

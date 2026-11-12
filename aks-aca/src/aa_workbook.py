@@ -58,6 +58,8 @@ MAX_MICROSERVICES = MODEL_POINTS[-1]
 ACA_MAX_VCPU = 4
 ACA_MIN_VCPU = 0.25  # smallest Consumption allocation
 USE_HEADROOM = 1.5
+# Namespaces of shared agents and tools, on top of aa.SYSTEM_NAMESPACES and Istio, ingress and gateway ones.
+PLATFORM_EXTRA = {"orcasecurity", "tfc-system", "flux-system", "argocd", "cert-manager", "keda", "monitoring", "default"}
 MAP_MAX_MICROSERVICES = 30  # the heat map stays readable
 REQUEST_LEVELS = [1_000_000, 5_000_000, 10_000_000, 25_000_000, 50_000_000, 95_040_000, 200_000_000]
 
@@ -818,6 +820,40 @@ def header(sheet, values):
     style_header(sheet, sheet.max_row, len(values))
 
 
+def build_pattern3(sheet, k, base):
+    """Where the applications run and what capacity has no use: apps on system nodes, clusters without apps and
+    clusters under the node minimum. Deployments with 0 replicas are left out: they hold no capacity."""
+    if "user_pools" not in k.fields:
+        return
+    section(sheet, "Patrón 3. Dónde corren las aplicaciones y capacidad sin uso")
+    header(sheet, ["Clusters PROD", "Clusters", "Microservicios", "Costo mensual (USD)", "Cómo se calcula"])
+    groups = [
+        ("Sin pool user: las apps corren en los nodos de sistema", [k.col("user_pools"), "0"],
+         "Ningún node pool en modo User; las apps comparten nodos con CoreDNS, Istio y los agentes"),
+        ("Con pool user", [k.col("user_pools"), '">0"'], "Al menos un node pool en modo User"),
+        ("Sin aplicaciones: solo agentes de plataforma", [k.col("ci_app_workloads"), "0"],
+         "Container Insights no ve workloads de aplicación en su último mes"),
+        ("Con mínimo configurado de menos de 4 nodos", [k.col("min_nodes"), '"<4"'],
+         "Suma de minCount (o nodos fijos) de sus pools; la LBS pide 4"),
+        ("Con un solo nodo de sistema: sin alta disponibilidad del sistema", [k.col("system_min_nodes"), "1"],
+         "Mínimo del pool de sistema = 1: si ese nodo cae, el cluster pierde CoreDNS y sus componentes"),
+    ]
+    for label, extra, how in groups:
+        criteria = ",".join(base + extra)
+        sheet.append([label, f"=COUNTIFS({criteria})", f"=SUMIFS({k.col('microservices')},{criteria})",
+                      f"=SUMIFS({k.col('cost_month_usd')},{criteria})", how])
+        sheet.cell(row=sheet.max_row, column=4).number_format = USD
+    sheet.append([])
+    header(sheet, ["Clusters PROD sin pool user", "Microservicios", "Nodos mínimos", "Costo mensual (USD)", "Workloads en Container Insights"])
+    names = k.sheet.title
+    for index, row in enumerate(k.rows, start=2):
+        if row.get("environment") == "PROD" and row.get("in_inventory") == "SÍ" and row.get("user_pools") == 0:
+            sheet.append([row["cluster"], f"={names}!{k.letter('microservices')}{index}",
+                          f"={names}!{k.letter('min_nodes')}{index}", f"={names}!{k.letter('cost_month_usd')}{index}",
+                          f"={names}!{k.letter('ci_app_workloads')}{index}"])
+            sheet.cell(row=sheet.max_row, column=4).number_format = USD
+
+
 def build_patterns(workbook, deploy, hpa, kclusters, capabilities, taken_on):
     sheet = workbook.create_sheet("Patrones")
     title(sheet, f"Patrones de uso de AKS en PROD (configuración al {taken_on})",
@@ -867,6 +903,8 @@ def build_patterns(workbook, deploy, hpa, kclusters, capabilities, taken_on):
                   f'=SUMIFS({k.col("cost_month_usd")},{",".join(small + [k.col("microservices"), chr(34) + "<=3" + chr(34)])})',
                   "Costo amortizado real (Cost Management), último mes completo; de 1 a 3 microservicios en el export"])
     sheet.cell(row=sheet.max_row, column=4).number_format = USD
+
+    build_pattern3(sheet, k, base)
 
     if hpa:
         section(sheet, "Patrón 4. Réplicas y HPA")
@@ -1477,14 +1515,49 @@ def add_pool_sizes(usage, pools, clusters):
         row["location"] = regions.get(row["cluster"].lower(), "")
 
 
-def add_min_nodes(clusters, pools):
-    """Configured minimum nodes per cluster: minCount of autoscaled pools, the fixed count of the others."""
-    totals = defaultdict(int)
+def add_pool_figures(clusters, pools):
+    """Configured minimum nodes per cluster (minCount of autoscaled pools, the fixed count of the others) and its
+    number of user pools: 0 means the applications run on the system nodes."""
+    totals, system, user_pools = defaultdict(int), defaultdict(int), defaultdict(int)
     for pool in pools:
         autoscaled = str(pool.get("autoscaling", "")).lower() == "true" and pool.get("min_count", "") != ""
-        totals[pool["cluster_id"].lower()] += int(float(pool["min_count"] if autoscaled else pool["count"] or 0))
+        minimum = int(float(pool["min_count"] if autoscaled else pool["count"] or 0))
+        key = pool["cluster_id"].lower()
+        totals[key] += minimum
+        if pool.get("mode") == "System":
+            system[key] += minimum
+        else:
+            user_pools[key] += 1
     for cluster in clusters:
-        cluster["min_nodes"] = totals.get(cluster["id"].lower(), "")
+        key = cluster["id"].lower()
+        cluster["min_nodes"] = totals.get(key, "")
+        cluster["system_min_nodes"] = system.get(key, 0) if key in totals else ""
+        cluster["user_pools"] = user_pools.get(key, 0) if key in totals else ""
+
+
+def add_cluster_layout(k8s_clusters, clusters, workloads):
+    """Copy the pool figures to the snapshot clusters and count the application workloads Container Insights saw
+    in its last month ("" when the cluster has no Container Insights data)."""
+    by_name = {}
+    for cluster in clusters:
+        by_name.setdefault(cluster["name"].lower(), cluster)
+    last = max((row["month"] for row in workloads), default="")
+    apps, seen = defaultdict(set), set()
+    for row in workloads:
+        if row["month"] != last:
+            continue
+        seen.add(row["cluster"].lower())
+        namespace = row["namespace"].lower()
+        if (row["kind"] != "DaemonSet" and row["system_namespace"] == "NO" and namespace not in PLATFORM_EXTRA
+                and not namespace.startswith(("aks-istio", "istio-", "arc-", "shgw-")) and "ingress" not in namespace):
+            apps[row["cluster"].lower()].add((namespace, row["workload"]))
+    for row in k8s_clusters:
+        inventory = by_name.get(row["cluster"].lower(), {})
+        row["user_pools"] = inventory.get("user_pools", "")
+        row["min_nodes"] = inventory.get("min_nodes", "")
+        row["system_min_nodes"] = inventory.get("system_min_nodes", "")
+        key = row["cluster"].lower()
+        row["ci_app_workloads"] = len(apps[key]) if key in seen else ""
 
 
 def full_months(usage, cost):
@@ -1518,7 +1591,7 @@ def main():
     apps = load(args.results, "aa-inventory", "aca_apps.csv")
     usage = load(args.results, "aa-metrics", "aks_usage_monthly.csv")
     add_pool_sizes(usage, pools, clusters)
-    add_min_nodes(clusters, pools)
+    add_pool_figures(clusters, pools)
     traffic = load(args.results, "aa-metrics", "apim_api_monthly.csv")
     workloads = load(args.results, "aa-container-insights", "aks_workloads_monthly.csv")
     services = [row for row in load(args.results, "aa-container-insights", "aks_services.csv")
@@ -1530,6 +1603,7 @@ def main():
     deployments = load(args.results, "aa-k8s-snapshot", "deployment_snapshot.csv")
     k8s_clusters = load(args.results, "aa-k8s-snapshot", "cluster_snapshot.csv")
     capabilities = load(args.results, "aa-k8s-snapshot", "capability_domains.csv")
+    add_cluster_layout(k8s_clusters, clusters, workloads)
     snapshot_path = os.path.join(args.results, "aa-k8s-snapshot", "snapshot_summary.json")
     snapshot = {}
     if os.path.exists(snapshot_path):

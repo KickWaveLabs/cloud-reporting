@@ -1,0 +1,216 @@
+// =====================================================================================================
+// Container Insights queries for AKS (Log Analytics)
+// =====================================================================================================
+// Where to run: AKS cluster > Monitoring > Logs. The query is then limited to that cluster.
+// From the Log Analytics workspace instead, add `| where _ResourceId has "<cluster-name>"` (or
+// `ClusterName == "<cluster-name>"` on Kube* tables), because one workspace can hold several clusters.
+//
+// Rules:
+// - Never project EnvironmentVar (ContainerInventory): it can hold secrets.
+// - No container logs (ContainerLogV2): they are application data.
+// - Office hours = Monday to Friday, 8:00 to 19:59 Lima time, as in the aks-aca scripts.
+// - Replace <pod-name>, <namespace> and <workload> before running.
+// =====================================================================================================
+
+
+// -----------------------------------------------------------------------------------------------------
+// CONTAINERS: what runs in a pod
+// -----------------------------------------------------------------------------------------------------
+
+// Containers of one pod with image and start command. An init container that runs
+// `cp ... javaagent.jar` means a Java agent is injected, so the app is Java. An empty Command
+// means the container starts with the image ENTRYPOINT.
+ContainerInventory
+| where TimeGenerated > ago(1d)
+| where ContainerHostname startswith "<pod-name>"
+| summarize arg_max(TimeGenerated, Image, ImageTag, Command, ContainerState) by Name
+| project Name, Image, ImageTag, ContainerState, Command
+
+// Stack per workload, classified here so only the label is shown (same rules as aa_signals.py).
+let clues = ContainerInventory
+| where TimeGenerated > ago(1d)
+| summarize arg_max(TimeGenerated, Command, Image) by ContainerID
+| extend c = tolower(Command), i = tolower(Image)
+| project ContainerID,
+    Quarkus = toint(c has 'quarkus' or i has 'quarkus'),
+    Spring = toint(c has 'springframework' or c has 'jarlauncher' or i has 'spring'),
+    Java = toint(c has 'java' or c has 'javaagent' or i has 'java' or i has 'openjdk' or i has 'temurin' or i has 'jre'),
+    Dotnet = toint(c has 'dotnet' or i has 'dotnet' or i has 'aspnet'),
+    Node = toint(c has 'node' or i has 'node'),
+    Python = toint(c has 'python' or c has 'gunicorn' or c has 'uvicorn' or i has 'python');
+KubePodInventory
+| where TimeGenerated > ago(1d) and isnotempty(ControllerName) and isnotempty(ContainerID)
+| distinct ContainerID, Namespace, ControllerName
+| join kind=inner clues on ContainerID
+| summarize Quarkus = max(Quarkus), Spring = max(Spring), Java = max(Java), Dotnet = max(Dotnet), Node = max(Node),
+    Python = max(Python) by Namespace, ControllerName
+| extend Stack = case(Quarkus == 1, 'Quarkus', Spring == 1, 'Spring Boot', Java == 1, 'Java', Dotnet == 1, '.NET',
+    Node == 1, 'Node.js', Python == 1, 'Python', 'Sin identificar')
+| summarize Workloads = count() by Namespace, Stack
+| order by Namespace asc, Workloads desc
+
+// Pods with an Istio sidecar per namespace. A namespace with 0 is not in the mesh even if the
+// cluster has the Istio add-on.
+KubePodInventory
+| where TimeGenerated > ago(1h) and isnotempty(ContainerName)
+| extend Container = tostring(split(ContainerName, '/')[1])
+| summarize Sidecar = max(toint(Container == 'istio-proxy')) by Namespace, PodUid
+| summarize Pods = count(), WithSidecar = sum(Sidecar) by Namespace
+| order by Pods desc
+
+
+// -----------------------------------------------------------------------------------------------------
+// PODS AND REPLICAS
+// -----------------------------------------------------------------------------------------------------
+
+// Running pods per workload now (last inventory snapshot).
+KubePodInventory
+| where TimeGenerated > ago(15m) and PodStatus == 'Running' and isnotempty(ControllerName)
+| summarize Pods = dcount(PodUid) by Namespace, ControllerKind, ControllerName
+| order by Pods desc
+
+// Replicas of one workload hour by hour in the last 7 days: shows whether the HPA ever moves.
+KubePodInventory
+| where TimeGenerated > ago(7d) and Namespace == "<namespace>" and ControllerName startswith "<workload>"
+| where PodStatus == 'Running'
+| summarize Pods = dcount(PodUid) by bin(TimeGenerated, 1h)
+| render timechart
+
+// Pods that could not be placed on a node (Pending) in the last 7 days.
+KubePodInventory
+| where TimeGenerated > ago(7d) and PodStatus == 'Pending'
+| summarize Hours = dcount(bin(TimeGenerated, 1h)), Pods = dcount(PodUid) by Namespace, ControllerName
+| order by Hours desc
+
+
+// -----------------------------------------------------------------------------------------------------
+// RESTARTS AND OOMKILLED
+// -----------------------------------------------------------------------------------------------------
+
+// OOM kills per workload in the last 30 days. One kill = one pod, container and restart count whose
+// last status is OOMKilled (the status repeats in every snapshot, so it is counted once).
+KubePodInventory
+| where TimeGenerated > ago(30d) and ContainerLastStatus has 'OOMKilled'
+| summarize FirstSeen = min(TimeGenerated) by PodUid, ContainerName, ContainerRestartCount, Namespace, ControllerName
+| summarize OomKills = count(), Pods = dcount(PodUid) by Namespace, ControllerName
+| order by OomKills desc
+
+// Containers with the most restarts now, with the reason of the last termination.
+KubePodInventory
+| where TimeGenerated > ago(15m) and ContainerRestartCount > 0
+| extend LastReason = tostring(parse_json(ContainerLastStatus).reason)
+| summarize Restarts = max(ContainerRestartCount) by Namespace, ControllerName, ContainerName, LastReason
+| top 20 by Restarts
+
+// Warning events by reason in the last 7 days (FailedScheduling, BackOff, Unhealthy...).
+// Only counts; the event message is not shown.
+KubeEvents
+| where TimeGenerated > ago(7d) and KubeEventType == 'Warning'
+| summarize Events = sum(Count) by Reason, Namespace, ObjectKind
+| order by Events desc
+
+
+// -----------------------------------------------------------------------------------------------------
+// USAGE: CPU AND MEMORY
+// -----------------------------------------------------------------------------------------------------
+
+// CPU and memory per workload in office hours, last 7 days: use vs request, per replica.
+// Request shows what the scheduler reserves; use is what the pods consume.
+let pods = KubePodInventory
+| where TimeGenerated > ago(7d) and isnotempty(ControllerName)
+| distinct PodUid, Namespace, ControllerName;
+Perf
+| where TimeGenerated > ago(7d) and ObjectName == 'K8SContainer'
+| where CounterName in ('cpuUsageNanoCores', 'cpuRequestNanoCores', 'memoryWorkingSetBytes', 'memoryRequestBytes')
+| extend Local = datetime_utc_to_local(TimeGenerated, 'America/Lima')
+| where dayofweek(Local) between (1d .. 5d) and hourofday(Local) between (8 .. 19)
+| extend PodUid = extract(@'/([^/]+)/[^/]+$', 1, InstanceName)
+| summarize Value = avg(CounterValue) by Hour = bin(TimeGenerated, 1h), PodUid, InstanceName, CounterName
+| summarize Value = sum(Value) by Hour, PodUid, CounterName
+| join kind=inner pods on PodUid
+| summarize PerReplica = avg(Value) by Namespace, ControllerName, CounterName
+| evaluate pivot(CounterName, any(PerReplica))
+| project Namespace, ControllerName,
+    CpuUsedMilli = round(cpuUsageNanoCores / 1e6, 1), CpuRequestMilli = round(cpuRequestNanoCores / 1e6, 1),
+    MemUsedMiB = round(memoryWorkingSetBytes / 1048576, 0), MemRequestMiB = round(memoryRequestBytes / 1048576, 0)
+| order by MemUsedMiB desc
+
+// Memory per replica split into app and Istio sidecar, office hours, last 7 days.
+let pods = KubePodInventory
+| where TimeGenerated > ago(7d) and isnotempty(ControllerName)
+| distinct PodUid, Namespace, ControllerName;
+Perf
+| where TimeGenerated > ago(7d) and ObjectName == 'K8SContainer' and CounterName == 'memoryWorkingSetBytes'
+| extend Local = datetime_utc_to_local(TimeGenerated, 'America/Lima')
+| where dayofweek(Local) between (1d .. 5d) and hourofday(Local) between (8 .. 19)
+| extend PodUid = extract(@'/([^/]+)/[^/]+$', 1, InstanceName), Container = extract(@'/([^/]+)$', 1, InstanceName)
+| summarize Value = avg(CounterValue) by Hour = bin(TimeGenerated, 1h), PodUid,
+    Role = iff(Container == 'istio-proxy', 'sidecar', 'app')
+| join kind=inner pods on PodUid
+| summarize Total = sum(Value), Pods = dcount(PodUid) by Hour, Namespace, ControllerName, Role
+| summarize MiBPerReplica = round(avg(Total / Pods) / 1048576, 0) by Namespace, ControllerName, Role
+| evaluate pivot(Role, any(MiBPerReplica))
+| order by Namespace asc
+
+
+// -----------------------------------------------------------------------------------------------------
+// NODES
+// -----------------------------------------------------------------------------------------------------
+
+// Nodes with their pool, VM size and kubelet version (last snapshot).
+KubeNodeInventory
+| where TimeGenerated > ago(15m)
+| summarize arg_max(TimeGenerated, Status, KubeletVersion, Labels) by Computer
+| extend Pool = extract(@'"agentpool":"([^"]+)"', 1, Labels),
+    VmSize = extract(@'instance-type[^:]*:"([^"]+)"', 1, Labels)
+| project Computer, Pool, VmSize, Status, KubeletVersion
+
+// Node CPU and memory use vs allocatable, office hours, last 7 days.
+Perf
+| where TimeGenerated > ago(7d) and ObjectName == 'K8SNode'
+| where CounterName in ('cpuUsageNanoCores', 'cpuAllocatableNanoCores', 'memoryWorkingSetBytes', 'memoryAllocatableBytes')
+| extend Local = datetime_utc_to_local(TimeGenerated, 'America/Lima')
+| where dayofweek(Local) between (1d .. 5d) and hourofday(Local) between (8 .. 19)
+| extend Node = tostring(split(InstanceName, '/')[-1])
+| summarize Value = avg(CounterValue) by Node, CounterName
+| evaluate pivot(CounterName, any(Value))
+| project Node,
+    CpuUse = round(cpuUsageNanoCores / cpuAllocatableNanoCores, 3),
+    MemoryUse = round(memoryWorkingSetBytes / memoryAllocatableBytes, 3)
+| order by MemoryUse desc
+
+// Requests already placed on each node vs its allocatable: how "full" the scheduler sees it.
+let allocatable = Perf
+| where TimeGenerated > ago(1h) and ObjectName == 'K8SNode'
+| where CounterName in ('cpuAllocatableNanoCores', 'memoryAllocatableBytes')
+| extend Node = tostring(split(InstanceName, '/')[-1])
+| summarize Value = avg(CounterValue) by Node, CounterName
+| evaluate pivot(CounterName, any(Value));
+let podsOnNode = KubePodInventory
+| where TimeGenerated > ago(15m) and PodStatus == 'Running'
+| distinct PodUid, Node = Computer;
+Perf
+| where TimeGenerated > ago(15m) and ObjectName == 'K8SContainer'
+| where CounterName in ('cpuRequestNanoCores', 'memoryRequestBytes')
+| extend PodUid = extract(@'/([^/]+)/[^/]+$', 1, InstanceName)
+| summarize Value = avg(CounterValue) by PodUid, InstanceName, CounterName
+| join kind=inner podsOnNode on PodUid
+| summarize Requested = sum(Value) by Node, CounterName
+| evaluate pivot(CounterName, any(Requested))
+| join kind=inner allocatable on Node
+| project Node,
+    CpuRequested = round(cpuRequestNanoCores / cpuAllocatableNanoCores, 3),
+    MemoryRequested = round(memoryRequestBytes / memoryAllocatableBytes, 3)
+| order by CpuRequested desc
+
+// What runs on each node pool: pods per namespace and pool. Shows apps running on system nodes.
+let pools = KubeNodeInventory
+| where TimeGenerated > ago(15m)
+| summarize arg_max(TimeGenerated, Labels) by Computer
+| project Computer, Pool = extract(@'"agentpool":"([^"]+)"', 1, Labels);
+KubePodInventory
+| where TimeGenerated > ago(15m) and PodStatus == 'Running'
+| distinct PodUid, Namespace, Computer
+| join kind=inner pools on Computer
+| summarize Pods = count() by Pool, Namespace
+| order by Pool asc, Pods desc

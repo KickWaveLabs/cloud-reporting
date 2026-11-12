@@ -1,0 +1,66 @@
+// =====================================================================================================
+// Resource Graph queries for AKS (Azure Resource Graph Explorer, or `az graph query -q`)
+// =====================================================================================================
+// One query covers every subscription the account can read. Read-only.
+// PROD filter: cluster names end in p + digits (aksveu2xxxxp01). The scripts use the environment tag
+// first; tags are left out here because they can hold owner names.
+// =====================================================================================================
+
+
+// -----------------------------------------------------------------------------------------------------
+// NODE POOLS
+// -----------------------------------------------------------------------------------------------------
+
+// Configured node minimum per PROD cluster (minCount when the pool autoscales, else its fixed count).
+// The bank's baseline asks for 4: 2 system + 2 user.
+resources
+| where type =~ 'microsoft.containerservice/managedclusters' and name matches regex @'p\d+$'
+| mv-expand pool = properties.agentPoolProfiles
+| extend mode = tostring(pool.mode), autoscale = tobool(pool.enableAutoScaling),
+    nodes = toint(pool['count']), minCount = toint(pool.minCount)
+| extend minimum = iff(autoscale, minCount, nodes)
+| summarize systemMin = sumif(minimum, mode =~ 'System'), userMin = sumif(minimum, mode !~ 'System'),
+    userPools = countif(mode !~ 'System'), nodesNow = sum(nodes) by cluster = name
+| extend totalMin = systemMin + userMin
+| where totalMin < 4
+| order by totalMin asc, cluster asc
+
+// Every PROD node pool with VM size, current nodes and autoscaler range.
+resources
+| where type =~ 'microsoft.containerservice/managedclusters' and name matches regex @'p\d+$'
+| mv-expand pool = properties.agentPoolProfiles
+| project cluster = name, pool = tostring(pool.name), mode = tostring(pool.mode), vmSize = tostring(pool.vmSize),
+    nodes = toint(pool['count']), autoscale = tobool(pool.enableAutoScaling), minCount = toint(pool.minCount),
+    maxCount = toint(pool.maxCount), zones = tostring(pool.availabilityZones)
+| order by cluster asc, mode asc
+
+// VM sizes in PROD node pools and how many nodes run on each now.
+resources
+| where type =~ 'microsoft.containerservice/managedclusters' and name matches regex @'p\d+$'
+| mv-expand pool = properties.agentPoolProfiles
+| summarize pools = count(), nodes = sum(toint(pool['count'])) by vmSize = tostring(pool.vmSize)
+| order by nodes desc
+
+
+// -----------------------------------------------------------------------------------------------------
+// VERSIONS, UPGRADES AND ADD-ONS
+// -----------------------------------------------------------------------------------------------------
+
+// Kubernetes version, upgrade channels and power state per PROD cluster.
+resources
+| where type =~ 'microsoft.containerservice/managedclusters' and name matches regex @'p\d+$'
+| project cluster = name, version = tostring(properties.kubernetesVersion),
+    upgradeChannel = tostring(properties.autoUpgradeProfile.upgradeChannel),
+    nodeOsChannel = tostring(properties.autoUpgradeProfile.nodeOSUpgradeChannel),
+    power = tostring(properties.powerState.code), tier = tostring(sku.tier)
+| order by version asc
+
+// Istio add-on, KEDA and Container Insights per PROD cluster.
+resources
+| where type =~ 'microsoft.containerservice/managedclusters' and name matches regex @'p\d+$'
+| project cluster = name,
+    mesh = tostring(properties.serviceMeshProfile.mode),
+    istioRevisions = tostring(properties.serviceMeshProfile.istio.revisions),
+    keda = tobool(properties.workloadAutoScalerProfile.keda.enabled),
+    containerInsights = tobool(properties.addonProfiles.omsagent.enabled)
+| order by mesh desc, cluster asc

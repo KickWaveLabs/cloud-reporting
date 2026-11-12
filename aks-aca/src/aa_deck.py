@@ -11,25 +11,26 @@ Slides:
    2. Summary: cost, clusters, CPU and memory use, cost of a minimum cluster
    3. Pattern 1: microservices by layer and capabilities repeated across domains
    4. Pattern 2: clusters and monthly cost by number of microservices
-   5. Pattern 4: current replicas, HPA behaviour and inflated minimums
-   6. Capacity health: unschedulable pods, OOM kills, CPU vs memory
-   7. Why CPU is low and memory high: what uses node memory, requests vs use, memory per replica, hypotheses
-   8. Configuration drift and clusters under the 4-node minimum
+   5. Pattern 3: apps on system nodes, clusters without apps, clusters under the node minimum
+   6. Pattern 4: current replicas, HPA behaviour and inflated minimums
+   7. Capacity health: unschedulable pods, OOM kills, CPU vs memory
+   8. Why CPU is low and memory high: what uses node memory, requests vs use, memory per replica, hypotheses
+   9. Configuration drift and clusters under the 4-node minimum
   Technical criteria
-   9. Criteria AKS vs Container Apps with the PROD figure
-  10. Cost under the ADT_019 rules
+  10. Criteria AKS vs Container Apps with the PROD figure
+  11. Cost under the ADT_019 rules
   Strategic front
-  11. Application, configuration and releases
-  12. Security
-  13. Resilience
-  14. Multicloud and key message
+  12. Application, configuration and releases
+  13. Security
+  14. Resilience
+  15. Multicloud and key message
   Proposal
-  15. Per-cluster comparison with measured replicas
-  16. Traffic profile per API
-  17. Quick wins and next steps
+  16. Per-cluster comparison with measured replicas
+  17. Traffic profile per API
+  18. Quick wins and next steps
   Annex
-  18. Business criticality (BIA), information only
-  19. Sources and method
+  19. Business criticality (BIA), information only
+  20. Sources and method
 
 Output: aks_aca_deck.pptx next to the workbook (or --output). Charts are native and editable in PowerPoint.
 Every figure is an example to check against the workbook and the CSVs before presenting.
@@ -142,7 +143,8 @@ def read_bia(book):
 
 def read_patterns(book):
     """Split the Patrones sheet by section and read each table by its labels."""
-    data = {"layers": [], "capabilities": [], "clusters": [], "replicas": [], "behaviour": {}, "title": ""}
+    data = {"layers": [], "capabilities": [], "clusters": [], "replicas": [], "behaviour": {}, "title": "",
+            "layout": {}, "no_user_pool": []}
     section, in_capabilities = "", False
     for row in sheet_rows(book, "Patrones"):
         label = label_of(row)
@@ -155,6 +157,8 @@ def read_patterns(book):
             section = "p1"
         elif label.startswith("Patrón 2"):
             section, in_capabilities = "p2", False
+        elif label.startswith("Patrón 3"):
+            section = "p3"
         elif label.startswith("Patrón 4"):
             section = "p4"
         elif section == "p1":
@@ -173,6 +177,13 @@ def read_patterns(book):
                 data["cost_le3"] = row[3]
             elif is_number(row[1]):
                 data["clusters"].append((label, row[1], row[2], row[3]))
+        elif section == "p3":
+            if label == "Clusters PROD sin pool user":
+                section = "p3list"
+            elif is_number(row[1]):
+                data["layout"][label.split(":")[0]] = (row[1], row[2], row[3])
+        elif section == "p3list":
+            data["no_user_pool"].append((label, row[1], row[2], row[3], row[4]))
         elif section == "p4":
             if label in [code for code, _, _ in BEHAVIOURS]:
                 data["behaviour"][label] = {"export": row[1], "ci": row[3]}
@@ -719,7 +730,8 @@ def slide_summary(deck, s, p, measured_summary, clusters, source):
     note_box(slide, Inches(0.45), Inches(6.3), Inches(6.4), Inches(0.55),
              f"DIMENSIÓN · {number(p.get('clusters_le15'))} clusters tienen 15 microservicios o menos · "
              f"{number(measured_summary.get('Clusters PROD con mínimo configurado de menos de 4 nodos'))} "
-             "con mínimo configurado bajo 4 nodos", size=10)
+             f"con mínimo bajo 4 nodos · {number(p['layout'].get('Sin pool user', (None,))[0])} sin pool user",
+             size=10)
 
     heading(slide, Inches(7.3), Inches(4.4), Inches(5.6), "Lo que cuesta el modelo de hoy", size=12)
     kpi(slide, Inches(7.3), Inches(4.75), Inches(2.7), Inches(1.3), money(s.get("Cluster AKS mínimo con el descuento medido")),
@@ -783,6 +795,41 @@ def slide_pattern2(deck, p, source):
     table(slide, Inches(8.85), Inches(3.05), Inches(4.05), rows, [0.38, 0.24, 0.38], row_height=0.33, size=10)
     callout(slide, Inches(8.85), Inches(6.2), Inches(4.05), Inches(0.65),
             "La fragmentación multiplica mínimos de nodos, operación y componentes comunes.", size=10, fill=NAVY)
+
+
+def slide_pattern3(deck, p, source):
+    layout = p["layout"]
+    if not layout:
+        return
+    no_pool = layout.get("Sin pool user", (None, None, None))
+    empty = layout.get("Sin aplicaciones", (None, None, None))
+    single = layout.get("Con un solo nodo de sistema", (None, None, None))
+    under = layout.get("Con mínimo configurado de menos de 4 nodos", (None, None, None))
+    slide = base_slide(deck, f"Patrón 3: {number(no_pool[0])} clusters corren sus apps en los nodos de sistema",
+                       source, "Diagnóstico")
+    tiles = [(number(no_pool[0]), f"clusters sin pool user · {number(no_pool[1])} microservicios", RED),
+             (money(no_pool[2]), "al mes en esos clusters", ORANGE),
+             (number(empty[0]), f"clusters sin aplicaciones · {money(empty[2])} al mes", SKY),
+             (number(single[0]), "clusters con un solo nodo de sistema", RED)]
+    for index, (value, label, color) in enumerate(tiles):
+        kpi(slide, Inches(0.45 + index * 3.13), Inches(1.25), Inches(2.95), Inches(1.2), value, label, value_color=color,
+            value_size=24, label_size=9)
+    heading(slide, Inches(0.45), Inches(2.65), Inches(6), "Dónde corren las apps de los clusters PROD", size=12)
+    bars = [("Con pool user", layout.get("Con pool user", (0,))[0] or 0, STEEL),
+            ("Sin pool user", no_pool[0] or 0, RED), ("Sin aplicaciones", empty[0] or 0, SOFT),
+            ("Mínimo < 4 nodos", under[0] or 0, ORANGE), ("1 nodo de sistema", single[0] or 0, RUST)]
+    bars.reverse()
+    bar_chart(slide, Inches(0.3), Inches(2.95), Inches(6.0), Inches(3.0), [label for label, _, _ in bars],
+              [value for _, value, _ in bars], XL_CHART_TYPE.BAR_CLUSTERED, [color for _, _, color in bars])
+    heading(slide, Inches(6.8), Inches(2.65), Inches(6.1), "Clusters sin pool user con más costo", size=12)
+    top = sorted(p["no_user_pool"], key=lambda item: -(item[3] or 0))[:7]
+    rows = [["Cluster", "Microserv. (export)", "Workloads (CI)", "Nodos mín.", "Costo/mes"]] + [
+        [name, number(services), number(workloads), number(minimum), money(cost)]
+        for name, services, minimum, cost, workloads in top]
+    table(slide, Inches(6.8), Inches(2.95), Inches(6.1), rows, [0.34, 0.18, 0.16, 0.13, 0.19], row_height=0.36, size=9)
+    callout(slide, Inches(0.45), Inches(6.1), Inches(12.45), Inches(0.8),
+            "Apps productivas comparten nodos con CoreDNS, Istio y los agentes, fuera de la LBS (2 sistema + 2 user): "
+            "riesgo de estabilidad, no ahorro.", size=12)
 
 
 def slide_pattern4(deck, p, source):
@@ -1315,6 +1362,7 @@ def main():
     slide_summary(deck, summary, patterns, measured_summary, clusters, measured_source)
     slide_pattern1(deck, patterns, measured_source)
     slide_pattern2(deck, patterns, measured_source)
+    slide_pattern3(deck, patterns, measured_source)
     slide_pattern4(deck, patterns, measured_source)
     slide_capacity_health(deck, summary, signals, measured_source.replace("Container Insights", "Container Insights "
                                                                            "(KubePodInventory), métricas del autoscaler"))
