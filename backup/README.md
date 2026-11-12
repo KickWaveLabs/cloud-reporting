@@ -10,6 +10,7 @@ slide decks.
 |---|---|---|
 | `src/` | Python scripts (`bu_*.py`) and `requirements.txt` | Yes |
 | `src/decks/` | `build_decks.js` and its `package.json` | Yes |
+| `scripts/` | KQL to check figures by hand: `resource-graph.kql` (Resource Graph Explorer): disk snapshots by source disk and cleanup rule, vaults with orphaned VM backup items | Yes |
 | `results/backup-<front>/` | CSV and JSON written by each inventory script | No |
 | `reports/<date>-backup/` | `backup_insights.xlsx`, `metrics.json`, the two `.pptx` and a README with that run's scope | No |
 

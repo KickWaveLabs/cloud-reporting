@@ -1,0 +1,127 @@
+// =====================================================================================================
+// Resource Graph queries for backup (Azure Resource Graph Explorer, or `az graph query -q`)
+// =====================================================================================================
+// One query covers every subscription the account can read. Read-only.
+// "Not found" means not visible to this account: the disk or VM may live in a subscription it cannot
+// read. The scripts report those as access gaps; these queries do not tell them apart.
+// =====================================================================================================
+
+
+// -----------------------------------------------------------------------------------------------------
+// DISK SNAPSHOTS
+// -----------------------------------------------------------------------------------------------------
+// A snapshot with no sourceResourceId (imported from a VHD) also lands in "not found".
+
+// Snapshots by source disk status and SKU: count, distinct source disks, provisioned TB, full and old.
+resources
+| where type =~ 'microsoft.compute/snapshots'
+// | where resourceGroup =~ '<resource-group>'
+| extend
+    sourceId = tolower(tostring(properties.creationData.sourceResourceId)),
+    incremental = coalesce(tobool(properties.incremental), false),
+    sizeGB = toint(properties.diskSizeGB),
+    created = todatetime(properties.timeCreated),
+    sku = tostring(sku.name)
+| join kind=leftouter (
+    resources
+    | where type =~ 'microsoft.compute/disks'
+    | project sourceId = tolower(id), diskFound = 1
+) on sourceId
+| extend sourceDiskStatus = iff(isnull(diskFound), 'Source disk not found (or inaccessible)', 'Source disk exists')
+| summarize
+    snapshots = count(),
+    sourceDisks = dcount(sourceId),
+    provisionedTB = round(sum(sizeGB) / 1024.0, 0),
+    fullSnapshots = countif(not(incremental)),
+    olderThanOneYear = countif(created < ago(365d))
+    by sourceDiskStatus, sku
+
+// Snapshots by cleanup rule: R1 source disk gone, R2 past the 90-day retention, Ok under 90 days.
+// Same groups as the snapshot solution in the backup report.
+resources
+| where type =~ 'microsoft.compute/snapshots'
+| extend
+    sourceId = tolower(tostring(properties.creationData.sourceResourceId)),
+    incremental = coalesce(tobool(properties.incremental), false),
+    sizeGB = toint(properties.diskSizeGB),
+    created = todatetime(properties.timeCreated),
+    sku = tostring(sku.name)
+| join kind=leftouter (
+    resources
+    | where type =~ 'microsoft.compute/disks'
+    | project sourceId = tolower(id), diskFound = 1
+) on sourceId
+| extend rule = case(
+    isnull(diskFound), 'R1 - Source disk not found',
+    created < ago(365d), 'R2 - Older than 1 year',
+    created < ago(90d), 'R2 - 90 days to 1 year',
+    'Ok - Less than 90 days')
+| summarize
+    snapshots = count(),
+    sourceDisks = dcount(sourceId),
+    provisionedTB = round(sum(sizeGB) / 1024.0, 0),
+    fullSnapshots = countif(not(incremental))
+    by rule, sku
+| order by rule asc
+
+// Snapshots whose source disk is not found, oldest first. Uncomment the filter to scope one group.
+resources
+| where type =~ 'microsoft.compute/snapshots'
+// | where resourceGroup =~ '<resource-group>'
+| extend
+    sourceId = tolower(tostring(properties.creationData.sourceResourceId)),
+    incremental = coalesce(tobool(properties.incremental), false),
+    sizeGB = toint(properties.diskSizeGB),
+    created = todatetime(properties.timeCreated)
+| join kind=leftouter (
+    resources
+    | where type =~ 'microsoft.compute/disks'
+    | project sourceId = tolower(id), diskFound = 1
+) on sourceId
+| where isnull(diskFound)
+| project subscriptionId, resourceGroup, name, created, incremental, sizeGB
+| order by created asc
+
+
+// -----------------------------------------------------------------------------------------------------
+// RECOVERY SERVICES VAULTS: VM BACKUP ITEMS WITHOUT A SOURCE VM
+// -----------------------------------------------------------------------------------------------------
+// Only AzureIaasVM items count. A vault of type A can still hold SQL, file share or other items.
+// Vault type: A every VM item is orphaned, B some are, C none are.
+
+// Vaults by type: how many vaults, VM items and orphaned items in each.
+recoveryservicesresources
+| where type =~ 'microsoft.recoveryservices/vaults/backupfabrics/protectioncontainers/protecteditems'
+| where tostring(properties.backupManagementType) =~ 'AzureIaasVM'
+| extend vault = tolower(tostring(split(id, '/')[8])),
+    vmId = tolower(tostring(properties.sourceResourceId))
+| join kind=leftouter (
+    resources
+    | where type =~ 'microsoft.compute/virtualmachines'
+    | project vmId = tolower(id), vmFound = 1
+) on vmId
+| summarize items = count(), orphans = countif(isnull(vmFound)) by subscriptionId, resourceGroup, vault
+| extend vaultType = case(orphans == items, 'A - Only orphans',
+                          orphans > 0, 'B - Mixed',
+                          'C - No orphans')
+| summarize vaults = count(), items = sum(items), orphanItems = sum(orphans) by vaultType
+| order by vaultType asc
+
+// Vaults of type A or B with their VM item and orphan counts. Change the filter to 'A' or 'B' for one type.
+recoveryservicesresources
+| where type =~ 'microsoft.recoveryservices/vaults/backupfabrics/protectioncontainers/protecteditems'
+| where tostring(properties.backupManagementType) =~ 'AzureIaasVM'
+| extend vault = tolower(tostring(split(id, '/')[8])),
+    vmId = tolower(tostring(properties.sourceResourceId))
+| join kind=leftouter (
+    resources
+    | where type =~ 'microsoft.compute/virtualmachines'
+    | project vmId = tolower(id), vmFound = 1
+) on vmId
+| summarize items = count(), orphans = countif(isnull(vmFound)) by subscriptionId, resourceGroup, vault
+| extend vaultType = case(orphans == items, 'A - Only orphans',
+                          orphans > 0, 'B - Mixed',
+                          'C - No orphans')
+| where vaultType !startswith 'C'
+| project vaultType, subscriptionId, resourceGroup, vault, items, orphans
+| order by vaultType asc, orphans desc
