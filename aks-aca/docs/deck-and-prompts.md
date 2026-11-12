@@ -21,16 +21,18 @@ The two decks became one presentation in four sections. Status:
 | Diagnosis | Summary | Done | Resumen; Medido_AKS |
 | | Pattern 1: microservices per layer, repeated capabilities | Done | deployment_snapshot, capability_domains |
 | | Pattern 2: 99 of 132 clusters with 15 microservices or fewer | Done | cluster_snapshot + cost_by_resource (last full month) |
+| | Pattern 3: apps on system nodes, clusters without apps | New, optional | cluster_snapshot + aks_node_pools + aks_workloads_monthly |
 | | Pattern 4: HPAs at their minimum | Done | hpa_snapshot |
+| | BIA, information only (slide 5 of the current deck) | Done | cluster_snapshot.bia + cost_by_resource |
 | | Capacity health: low use is not a lack of capacity (hours with unschedulable pods, OOM kills, CPU vs memory) | Next | aks_autoscaler_monthly, aks_oomkilled_monthly, aks_usage_monthly |
 | | Fragmented configuration and clusters under the 4-node production minimum | Later | aks_clusters, aks_node_pools; LBS level from the guidelines team |
 | Technical criteria | Criteria AKS vs ACA with the PROD figure, including backend latency vs a cold start | Next | Criterios_tecnicos; each figure from its CSV; apim_latency_monthly |
 | | Cost under the ADT_019 rules | Next | Supuestos, Modelo, Equilibrio (estimate, prices.csv) |
 | Strategic front | Security, resilience, multicloud and key message | If time allows | app-level-comparison.md |
 | Proposal | Per-cluster comparison, traffic profile, HPA minimums, quick wins | Last | ACA_por_cluster, Perfil_trafico, hpa_snapshot |
-| Annex | BIA (information only); sources and method | BIA done | cluster_snapshot.bia; Fuentes, Consultas |
+| Annex | Sources and method | Later | Fuentes, Consultas |
 
-The cover slide is left for the end. Every diagnosis figure can be rebuilt with a pivot table on the CSV
+The deck has no cover slide: it opens with the summary. Every diagnosis figure can be rebuilt with a pivot table on the CSV
 named in the Source column; the cost slide is a model estimate and says so.
 
 Inputs, all on the corporate laptop:
@@ -45,24 +47,28 @@ Inputs, all on the corporate laptop:
 Figures below name the workbook sheet they come from. Label every figure from the HPA and deployment
 exports with the export date ("configuración al 10-nov-2026").
 
-## Deck 1: Diagnóstico y criterios técnicos (10 slides)
+## Deck 1: Diagnóstico y criterios técnicos (10 slides, no cover)
+
+Order of the deck as built on 2026-11-12: it opens with the summary and keeps BIA right after the patterns,
+labelled as information only.
 
 | # | Slide title (conclusion) | Content | Source |
 |---|---|---|---|
-| 1 | AKS y Container Apps en PROD: diagnóstico, criterios y costo | Title | |
-| 2 | Resumen: [N] microservicios en [N] clusters PROD cuestan US$[X]/mes; [Z]% de los clusters tiene 15 microservicios o menos | Three figures and the decisions requested | Resumen; Patrones |
-| 3 | Patrón 1: [N] microservicios PROD; [X] capacidades se repiten en hasta [N] dominios | Bars by layer; table of repeated capabilities | Patrones §1 |
-| 4 | Patrón 2: [N] de [N] clusters PROD tienen 15 microservicios o menos; los de 3 o menos cuestan US$[X]/mes y usamos [Z]% de los vCPU pagados | Column chart of clusters by microservices; cost of the smallest; CPU used vs allocatable in office hours | Patrones §2; Medido_AKS |
-| 5 | Patrón 4: [X]% de los HPA es fijo o nunca pasó de su mínimo en 3 meses | Replicas histogram; HPA behaviour by the export trend vs by 3 months of Container Insights | Patrones §4; Config_K8s |
+| 1 | AKS PROD combina alto costo fijo con baja utilización de CPU | Eight figures (clusters, monthly cost, average per cluster, clusters with 4 nodes or fewer, CPU and memory in office hours, clusters with 15 microservices or fewer, HPAs at their minimum); use table (average, p95, maximum); minimum AKS cluster vs one microservice on ACA | Resumen; Medido_AKS; Patrones |
+| 2 | Patrón 1: [N] microservicios; capacidades repetidas en hasta [N] dominios | Bars by layer; table of repeated capabilities | Patrones §1 |
+| 3 | Patrón 2: [N] de [N] clusters tienen 15 microservicios o menos | Column chart of clusters by microservices; cost of those with 3 or fewer; clusters missing from the export as a note | Patrones §2 |
+| 3b | Patrón 3 (new, optional): [N] clusters corren sus apps en los nodos de sistema | Clusters without a user pool, without apps, under the 4-node minimum, with one system node; list of clusters without a user pool | Patrones §3 |
+| 4 | Patrón 4: [X]% de los HPA se queda en su mínimo durante 3 meses | Replicas histogram; HPA behaviour over 3 months of Container Insights; inflated minimums | Patrones §4 |
+| 5 | Anexo BIA: la criticidad prioriza; la decisión de plataforma sigue siendo técnica | Monthly cost by BIA level; share of MUY ALTA; clusters with high BIA, without BIA, total; how to use BIA. Information only | Resumen (BIA table); cluster_snapshot.bia |
 | 6 | La configuración se fragmenta y mantenerla cuesta horas-hombre: [N] clusters difieren en [M] propiedades, [Z]% no cumple la LBS | Top differing properties; LBS level from the guidelines team; upgrades manual in [N] PROD (qualitative, no amounts) | Config_AKS; Criterios_tecnicos; guidelines team |
 | 7 | Qué decide la plataforma, con el dato de PROD | Table: criterion, favours ACA, favours AKS, measured figure; Container Apps limits (consumption cores per environment, 1,000 replicas per revision) | Criterios_tecnicos |
 | 8 | Con los mínimos de AKS del banco, ACA cuesta menos en infraestructura; AKS gana si el cluster se comparte o el servicio está activo más del ~60% del tiempo | ADT_019 model (1 replica 8–20, scale to zero); line chart AKS vs ACA | Supuestos; Modelo; Equilibrio |
 | 9 | Peticiones y umbrales del ADT_019 no cambian la decisión hasta [X] M peticiones/mes | Heat map microservices × requests; table rule, threshold, model result | Mapa; Equilibrio |
-| 10 | Hoja de ruta y decisiones | Quick wins (consolidate small clusters, right-size HPA minimums and requests), ACA where it wins, guidelines baseline; approvals with owner and date | Patrones; Config_K8s |
+| 10 | Hoja de ruta y decisiones | Quick wins (consolidate small clusters, right-size HPA minimums and requests), ACA where it wins, guidelines baseline; approvals with owner and date | Patrones; Config_K8s; ACA_por_cluster |
 
-Annex, outside the count: where each figure comes from (Fuentes, Consultas, Supuestos), and, for
-information only, the same figures by business criticality (BIA): the summary's BIA table and the
-Candidatos_BIA sheet. The main deck stays technical.
+Annex, outside the count: where each figure comes from (Fuentes, Consultas, Supuestos). The manager
+asked to keep BIA out of the technical argument: slide 5 says it is information only, and it can move to
+the annex without changing anything else.
 
 ## Deck 2: Frente estratégico (5 slides)
 
