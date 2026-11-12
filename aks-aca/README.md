@@ -26,6 +26,8 @@ Guides:
   then the service mesh.
 - [docs/deck-and-prompts.md](docs/deck-and-prompts.md): slide order, source of each slide and the
   Copilot prompts.
+- [docs/data-guide.md](docs/data-guide.md): what each CSV holds, how to rebuild every deck figure with
+  pivot tables, and metrics not collected yet.
 
 ## Sources
 
