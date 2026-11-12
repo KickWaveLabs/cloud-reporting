@@ -12,6 +12,26 @@ Two decks, as the manager asked:
 Both follow [presenting-findings.md](../../docs/presenting-findings.md): evidence first, then the
 comparison and the decision.
 
+## Current plan (2026-11-11)
+
+The two decks became one presentation in four sections. Status:
+
+| Section | Slide | Status | Source |
+|---|---|---|---|
+| Diagnosis | Summary | Done | Resumen; Medido_AKS |
+| | Pattern 1: microservices per layer, repeated capabilities | Done | deployment_snapshot, capability_domains |
+| | Pattern 2: 99 of 132 clusters with 15 microservices or fewer | Done | cluster_snapshot + cost_by_resource (last full month) |
+| | Pattern 4: HPAs at their minimum | Done | hpa_snapshot |
+| | Fragmented configuration and clusters under the LBS node minimum | Later | aks_clusters, aks_node_pools; LBS level from the guidelines team |
+| Technical criteria | Criteria AKS vs ACA with the PROD figure | Next | Criterios_tecnicos; each figure from its CSV |
+| | Cost under the ADT_019 rules | Next | Supuestos, Modelo, Equilibrio (estimate, prices.csv) |
+| Strategic front | Security, resilience, multicloud and key message | If time allows | app-level-comparison.md |
+| Proposal | Per-cluster comparison, traffic profile, HPA minimums, quick wins | Last | ACA_por_cluster, Perfil_trafico, hpa_snapshot |
+| Annex | BIA (information only); sources and method | BIA done | cluster_snapshot.bia; Fuentes, Consultas |
+
+The cover slide is left for the end. Every diagnosis figure can be rebuilt with a pivot table on the CSV
+named in the Source column; the cost slide is a model estimate and says so.
+
 Inputs, all on the corporate laptop:
 
 - `aks_aca_comparison.xlsx`, regenerated after `aa_k8s_snapshot.py`, opened in Excel and saved (see
