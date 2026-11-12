@@ -31,15 +31,19 @@ azure = aa.azure
 LOGS_ENDPOINT = "https://api.loganalytics.io/v1"
 LOGS_SCOPE = "https://api.loganalytics.io/.default"
 
+# Workload name from the pod's controller: a ReplicaSet or CronJob Job loses its generated suffix. Shared with
+# aa_signals.py; passed as a format() argument, so its braces stay single.
+WORKLOAD_NAME = """case(
+    ControllerKind == 'ReplicaSet', replace_regex(ControllerName, @'-[a-z0-9]{6,10}$', ''),
+    ControllerKind == 'Job', replace_regex(ControllerName, @'-[0-9]{8,}$', ''),
+    ControllerKind == 'EphemeralRunner', replace_regex(ControllerName, @'-[a-z0-9]{5}-runner-[a-z0-9]{5}$', ''),
+    ControllerName)"""
+
 WORKLOADS_QUERY = """
 let t0 = datetime({start}); let t1 = datetime({end});
 let pods = KubePodInventory
 | where TimeGenerated between (t0 .. t1) and isnotempty(ControllerName)
-| extend Workload = case(
-    ControllerKind == 'ReplicaSet', replace_regex(ControllerName, @'-[a-z0-9]{{6,10}}$', ''),
-    ControllerKind == 'Job', replace_regex(ControllerName, @'-[0-9]{{8,}}$', ''),
-    ControllerKind == 'EphemeralRunner', replace_regex(ControllerName, @'-[a-z0-9]{{5}}-runner-[a-z0-9]{{5}}$', ''),
-    ControllerName)
+| extend Workload = {workload}
 | distinct PodUid, Namespace, Workload, ControllerKind;
 Perf
 | where TimeGenerated between (t0 .. t1)
@@ -175,7 +179,7 @@ def main():
                        (time.monotonic() - started) / 60)
         for month, begin, finish in month_windows(start, end):
             timespan = f"{aa.iso_z(begin)}/{aa.iso_z(finish)}"
-            kql = WORKLOADS_QUERY.format(start=aa.iso_z(begin), end=aa.iso_z(finish))
+            kql = WORKLOADS_QUERY.format(start=aa.iso_z(begin), end=aa.iso_z(finish), workload=WORKLOAD_NAME)
             rows = ctx.try_arm("ci-workloads", cluster["name"], client.query, cluster["id"], kql, timespan)
             workloads.extend(workload_rows(cluster, rows or []))
             coverage.append({"cluster": cluster["name"], "month": month, "rows": len(rows or []),
@@ -189,7 +193,7 @@ def main():
                              "service_type": row["ServiceType"], "last_seen": row["LastSeen"]})
 
     ctx.evidence.queries.append({"source": "Log Analytics (Container Insights)", "label": "workloads",
-                                 "query": " ".join(WORKLOADS_QUERY.split()), "rows": len(workloads),
+                                 "query": " ".join(WORKLOADS_QUERY.replace("{workload}", WORKLOAD_NAME).split()), "rows": len(workloads),
                                  "subscriptions": "", "seconds": "", "timestamp": azure.iso(azure.utc_now())})
     ctx.evidence.queries.append({"source": "Log Analytics (Container Insights)", "label": "services",
                                  "query": " ".join(SERVICES_QUERY.split()), "rows": len(services),

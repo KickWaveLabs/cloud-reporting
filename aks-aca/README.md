@@ -38,6 +38,7 @@ Guides:
 | Workloads, replicas, CPU/memory per replica | Container Insights (Log Analytics, GET) | `aa_container_insights.py` | Measured |
 | Actual cost of clusters and ACA environments | Cost Management query API, `AmortizedCost` | `aa_cost.py` | Measured |
 | List prices | Azure Retail Prices API (public, no sign-in) | `aa_prices.py` | Vendor data |
+| Unschedulable pods, OOMKilled containers, APIM backend latency | Azure Monitor platform metrics; Container Insights (GET) | `aa_signals.py` | Measured |
 
 What is never read: tags (only used to derive the environment), identities, APIM subscription keys and
 named values, Container Apps secrets and environment variables, container logs, pod labels.
@@ -82,6 +83,7 @@ python aks-aca/src/aa_container_insights.py
 python aks-aca/src/aa_cost.py --from-date 2026-08-01 --to-date 2026-10-31
 python aks-aca/src/aa_prices.py
 python aks-aca/src/aa_k8s_snapshot.py --snapshot-date 2026-11-10   # optional, needs the exports below
+python aks-aca/src/aa_signals.py --apim-names apigp01,apigp03,apigp05   # optional
 python aks-aca/src/aa_workbook.py
 ```
 
@@ -93,6 +95,7 @@ python aks-aca/src/aa_workbook.py
 | `aa_cost.py` | Every environment, `AmortizedCost` | ~10 min | `cost_errors.csv` |
 | `aa_prices.py` | VM sizes in the inventory; eastus2, centralus | < 1 min | `queries_without_rows` in `prices_summary.json` |
 | `aa_k8s_snapshot.py` | Every row of the exports; the workbook counts PROD | < 10 s | `clusters_not_in_inventory`, `hpa_without_ci_history` in `snapshot_summary.json` |
+| `aa_signals.py` | PROD clusters; the APIM in `--apim-names` | not timed yet (smoke test: 3 clusters + 1 APIM, 1 month, 20 s) | `signals_errors.csv` |
 | `aa_workbook.py` | Everything above | ~30 s | Open in Excel and save once |
 
 1. `aa_inventory.py` first: the other scripts read its CSVs.
@@ -124,11 +127,15 @@ python aks-aca/src/aa_workbook.py
    Container Insights measured (sized by request and by use, 24/7 and with the ADT_019 schedule).
    `Perfil_trafico` classifies each API as office, extended or 24/7 from `apim_hourly_profile.csv`; the
    windows and threshold are editable cells, so reclassifying needs no new Azure query.
-10. Optional: `aa_deck.py` builds `aks_patrones.pptx` (summary and patterns 1, 2 and 4, native charts)
+9. Optional: `aa_signals.py` checks the other side of the usage figures: hours with unschedulable pods
+   per cluster (only clusters with the autoscaler emit the metric), OOMKilled containers per workload,
+   and APIM backend latency per API and month. It runs on its own after the inventory and writes to
+   `results/aa-signals/`; the workbook does not read it yet.
+10. `aa_workbook.py` writes `reports/<date>-aks-aca/aks_aca_comparison.xlsx`. Add a `README.md` next to
+    it with the scope and gaps of the run (see `reports/2026-11-10-aks-aca/README.md` on the machine that
+    ran it).
+11. Optional: `aa_deck.py` builds `aks_patrones.pptx` (summary and patterns 1, 2 and 4, native charts)
     from the workbook's calculated values, so open the workbook in Excel and save it first.
-9. `aa_workbook.py` writes `reports/<date>-aks-aca/aks_aca_comparison.xlsx`. Add a `README.md` next to
-   it with the scope and gaps of the run (see `reports/2026-11-10-aks-aca/README.md` on the machine that
-   ran it).
 
 Smoke tests before a full run: `aa_metrics.py --clusters <one-cluster> --skip-apim --start <day>
 --end <day>` and `aa_container_insights.py --clusters <one-cluster> --start <day> --end <day>`, each

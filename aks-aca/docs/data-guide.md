@@ -15,6 +15,7 @@ Office hours everywhere: Monday to Friday, 8:00 to 19:59 Lima time. Holidays cou
 | `aa_container_insights.py` | Which workloads run, with how many replicas, and how much does each replica use and request? | Log Analytics (Container Insights tables) | `aa-container-insights` |
 | `aa_cost.py` | How much did each cluster cost each month? | Cost Management query API, `AmortizedCost` | `aa-cost` |
 | `aa_prices.py` | What are the list prices of VMs and Container Apps? | Azure Retail Prices API | `aa-prices` |
+| `aa_signals.py` | Are clusters short of capacity or memory? How slow is each API's backend? | Azure Monitor platform metrics; Container Insights | `aa-signals` |
 | `aa_k8s_snapshot.py` | Which microservices exist, with which HPA and BIA, and how did they behave in 3 months? | No Azure call: the platform team's exports joined with Container Insights | `aa-k8s-snapshot` |
 
 ## The CSVs
@@ -102,6 +103,21 @@ ACA vCPU-second), `retail_price` per `unit`, and `hourly_equivalent`. Only the m
 `replicas_needed_by_cpu` = office CPU used by all replicas / (request per replica x 0.7, a typical HPA
 target). `min_above_need_beyond_ha` = the minimum is above max(2, needed).
 
+### aa-signals
+
+| CSV | One row is | Main columns |
+|---|---|---|
+| `aks_autoscaler_monthly.csv` | Cluster x month | `hours_with_data` (0 = no autoscaler, the metric is not emitted), `hours_with_unschedulable`, `office_hours_with_unschedulable`, `unschedulable_pods_max` (highest hourly average) |
+| `aks_oomkilled_monthly.csv` | Cluster x namespace x workload x month | `oom_kills`, `pods` affected, `system_namespace` |
+| `apim_latency_monthly.csv` | APIM x API x month | `backend_duration_avg_ms`, `backend_duration_max_ms` (APIM to the backend and back), `duration_avg_ms`, `duration_max_ms` (whole gateway request) |
+
+- Unschedulable pods: `cluster_autoscaler_unschedulable_pods_count`, hourly average. An hour above 0
+  had pods waiting for a node at some point.
+- OOM kills: `KubePodInventory.ContainerLastStatus` = OOMKilled. One kill is one pod, container and
+  restart count with that status, so a status repeated in every inventory snapshot counts once.
+- Latency averages are per request over the whole month (metric interval `FULL`). The maximum is a
+  single slow request; use the average to compare with a Container Apps cold start (up to ~30 s).
+
 ## Building your own workbooks
 
 Open each CSV with *Data > From Text/CSV*, comma delimiter. Opening it with a double click splits the
@@ -136,6 +152,8 @@ Inputs: the four `aa-k8s-snapshot` CSVs, plus the cost per cluster from workbook
 | Inflated minimums | Same filter plus `behaviour_ci` = NUNCA_ESCALA; rows `min_above_need` or `min_above_need_beyond_ha` |
 | BIA (annex) | `cluster_snapshot` with the cost column; rows `bia`, columns `in_export` |
 | Fits Container Apps by size | `deployment_snapshot`; rows `fits_aca_by_request` |
+| Clusters short of capacity | `aks_autoscaler_monthly`, filter PROD; count clusters with `hours_with_unschedulable` > 0; sum the hours |
+| OOM kills | `aks_oomkilled_monthly`, filter PROD and `system_namespace` = NO; rows `cluster` or `workload`; sum `oom_kills` |
 
 ### 3. APIM traffic
 
@@ -145,6 +163,7 @@ Inputs: `apim_api_monthly.csv`, `apim_hourly_profile.csv`, `apim_apis.csv`.
 |---|---|
 | Requests per API and month | `apim_api_monthly`; rows `api_id`, columns `month`; sum `requests` |
 | APIs above 100 tps | Same CSV, last full month, count `peak_5min_requests` > 30,000 |
+| Backend latency | `apim_latency_monthly`, last full month; distribution of `backend_duration_avg_ms` (for example < 100 ms, 100–500 ms, > 500 ms) |
 | Off-hours share | Sum of `offhours_requests` / sum of `requests` |
 | Traffic class per API | `apim_hourly_profile`: helper `week = avg_requests_per_hour x (5 on weekday, 2 on weekend)` and helper window (office: weekday 8–19; extended: any day 6–21; rest). Pivot `api_id` x window, sum `week`. Office >= 90% → OFICINA; office + extended >= 90% → EXTENDIDO; else 24/7 |
 
@@ -156,13 +175,12 @@ Ready to add if a question needs them. Each one is a change to the script and a 
 
 | Metric | Source | Answers |
 |---|---|---|
-| `cluster_autoscaler_unschedulable_pods_count`, `cluster_autoscaler_cluster_safe_to_autoscale` | AKS platform metrics | Do clusters run short of capacity? |
+| `cluster_autoscaler_cluster_safe_to_autoscale` | AKS platform metrics | Is the autoscaler able to act? |
 | `kube_pod_status_ready`, `kube_pod_status_phase` | AKS platform metrics | Pods not ready or pending |
 | `node_disk_usage_percentage`, `node_network_in_bytes` / `_out_bytes` | AKS platform metrics | Disk and network use per node |
-| `KubeEvents` (reason `OOMKilled`, `FailedScheduling`, `BackOff`) | Container Insights | Pods killed for memory or not scheduled: evidence that requests are too low |
+| `KubeEvents` (reason `FailedScheduling`, `BackOff`) | Container Insights | Why pods were not scheduled or keep restarting |
 | `cpuLimitNanoCores`, `memoryLimitBytes` | Container Insights `Perf` | Limits measured, not only from the export |
 | `KubeNodeInventory` | Container Insights | Node labels, kubelet version, node conditions |
-| `Duration`, `BackendDuration` | APIM platform metrics | Latency per API: what a cold start in Container Apps would add |
 | `Capacity` | APIM platform metrics | APIM load |
 
 ## Documentation
