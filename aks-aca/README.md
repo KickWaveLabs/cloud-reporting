@@ -134,8 +134,9 @@ python aks-aca/src/aa_workbook.py
 10. `aa_workbook.py` writes `reports/<date>-aks-aca/aks_aca_comparison.xlsx`. Add a `README.md` next to
     it with the scope and gaps of the run (see `reports/2026-11-10-aks-aca/README.md` on the machine that
     ran it).
-11. Optional: `aa_deck.py` builds `aks_patrones.pptx` (summary and patterns 1, 2 and 4, native charts)
-    from the workbook's calculated values, so open the workbook in Excel and save it first.
+11. Optional: `aa_deck.py` builds `aks_aca_deck.pptx`, the whole presentation (diagnosis, technical criteria,
+    strategic front, proposal and annex; 18 slides, native charts) from the workbook's calculated values and
+    `results/aa-signals/`. Open the workbook in Excel and save it first. Its figures are a draft to check.
 
 Smoke tests before a full run: `aa_metrics.py --clusters <one-cluster> --skip-apim --start <day>
 --end <day>` and `aa_container_insights.py --clusters <one-cluster> --start <day> --end <day>`, each
