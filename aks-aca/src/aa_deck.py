@@ -828,7 +828,7 @@ def slide_pattern3(deck, p, source):
         for name, services, minimum, cost, workloads in top]
     table(slide, Inches(6.8), Inches(2.95), Inches(6.1), rows, [0.34, 0.18, 0.16, 0.13, 0.19], row_height=0.36, size=9)
     callout(slide, Inches(0.45), Inches(6.1), Inches(12.45), Inches(0.8),
-            "Apps productivas comparten nodos con CoreDNS, Istio y los agentes, fuera de la LBS (2 sistema + 2 user): "
+            "Apps productivas comparten nodos con CoreDNS, Istio y los agentes, fuera del mínimo de producción (2 sistema + 2 user): "
             "riesgo de estabilidad, no ahorro.", size=12)
 
 
@@ -985,7 +985,7 @@ def slide_configuration(deck, measured_summary, properties, criteria, source):
              "Dispersión respecto del valor más frecuente en PROD; el cumplimiento de la LBS lo valida el equipo de "
              "lineamientos.", size=9, italic=True)
     version = next((item for item in properties if item["name"] == "kubernetes_version"), None)
-    tiles = [(number(under), "clusters con mínimo configurado bajo 4 nodos (LBS: 4)", RED),
+    tiles = [(number(under), "clusters con mínimo configurado bajo 4 nodos (2 sistema + 2 user)", RED),
              (number(measured_summary.get("Clusters PROD con menos de 4 nodos al momento del inventario")),
               "clusters corriendo hoy con menos de 4 nodos", ORANGE),
              (number(version["other"]) if version else "-", "clusters fuera de la versión de Kubernetes más común", SKY),
@@ -1268,7 +1268,7 @@ def slide_quick_wins(deck, p, measured_summary, clusters, per_cluster, signals, 
             ["Mover a ACA los clusters chicos donde gana", f"{number(len(aca))} clusters con ≤15 workloads, "
              f"{money(sum(row['difference'] for row in aca if is_number(row['difference'])))} al mes", "Ahorro con ADT_019",
              "ACA_por_cluster"],
-            ["Llevar a 4 nodos los clusters bajo la LBS",
+            ["Llevar a 4 nodos los clusters bajo el mínimo",
              f"{number(measured_summary.get('Clusters PROD con mínimo configurado de menos de 4 nodos'))} clusters",
              "Resiliencia (sube el costo)", "Medido_AKS"],
             ["Ajustar memoria de workloads con OOMKilled",

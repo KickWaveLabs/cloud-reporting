@@ -834,7 +834,7 @@ def build_pattern3(sheet, k, base):
         ("Sin aplicaciones: solo agentes de plataforma", [k.col("ci_app_workloads"), "0"],
          "Container Insights no ve workloads de aplicación en su último mes"),
         ("Con mínimo configurado de menos de 4 nodos", [k.col("min_nodes"), '"<4"'],
-         "Suma de minCount (o nodos fijos) de sus pools; la LBS pide 4"),
+         "Suma de minCount (o nodos fijos) de sus pools; el mínimo de producción es 4 (2 sistema + 2 user)"),
         ("Con un solo nodo de sistema: sin alta disponibilidad del sistema", [k.col("system_min_nodes"), "1"],
          "Mínimo del pool de sistema = 1: si ese nodo cae, el cluster pierde CoreDNS y sus componentes"),
     ]

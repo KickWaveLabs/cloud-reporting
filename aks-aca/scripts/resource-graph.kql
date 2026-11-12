@@ -12,7 +12,7 @@
 // -----------------------------------------------------------------------------------------------------
 
 // Configured node minimum per PROD cluster (minCount when the pool autoscales, else its fixed count).
-// The bank's baseline asks for 4: 2 system + 2 user.
+// The production minimum given by architecture is 4: 2 system + 2 user.
 resources
 | where type =~ 'microsoft.containerservice/managedclusters' and name matches regex @'p\d+$'
 | mv-expand pool = properties.agentPoolProfiles

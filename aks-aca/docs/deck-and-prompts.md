@@ -23,7 +23,7 @@ The two decks became one presentation in four sections. Status:
 | | Pattern 2: 99 of 132 clusters with 15 microservices or fewer | Done | cluster_snapshot + cost_by_resource (last full month) |
 | | Pattern 4: HPAs at their minimum | Done | hpa_snapshot |
 | | Capacity health: low use is not a lack of capacity (hours with unschedulable pods, OOM kills, CPU vs memory) | Next | aks_autoscaler_monthly, aks_oomkilled_monthly, aks_usage_monthly |
-| | Fragmented configuration and clusters under the LBS node minimum | Later | aks_clusters, aks_node_pools; LBS level from the guidelines team |
+| | Fragmented configuration and clusters under the 4-node production minimum | Later | aks_clusters, aks_node_pools; LBS level from the guidelines team |
 | Technical criteria | Criteria AKS vs ACA with the PROD figure, including backend latency vs a cold start | Next | Criterios_tecnicos; each figure from its CSV; apim_latency_monthly |
 | | Cost under the ADT_019 rules | Next | Supuestos, Modelo, Equilibrio (estimate, prices.csv) |
 | Strategic front | Security, resilience, multicloud and key message | If time allows | app-level-comparison.md |
