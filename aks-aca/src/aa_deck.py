@@ -1027,7 +1027,10 @@ def slide_criteria(deck, criteria, keda, signals, source):
                      f"{percent(latency['under_100'])} de las APIs bajo 100 ms"])
     table(slide, Inches(0.35), Inches(1.25), Inches(12.6), rows, [0.17, 0.25, 0.25, 0.33], row_height=0.46, size=8.5,
           align_first=False)
-    text = " ".join(documented + ["Umbrales del ADT_019; límites según Microsoft Learn (fuentes en el workbook)."])
+    text = " ".join(documented + [
+        "El tope de 4 vCPU / 8 GiB por réplica es del perfil Consumption en un environment con workload profiles; "
+        "un environment «Consumption only» se queda en 2 vCPU / 4 GiB.",
+        "Umbrales del ADT_019; límites según Microsoft Learn (fuentes en el workbook)."])
     if keda:
         text = (f"Escenario aparte: con KEDA, AKS también escala pods a 0, pero los nodos mínimos se siguen pagando. "
                 f"Hoy {measured(keda['value'], keda['total'])} clusters PROD con KEDA; la iniciativa con autoscaler "
