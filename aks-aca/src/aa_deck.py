@@ -67,7 +67,6 @@ STEEL = RGBColor(0x4A, 0x8F, 0xB8)
 SKY = RGBColor(0x5D, 0xAD, 0xE2)
 GREEN = RGBColor(0x4C, 0xB0, 0x7A)
 RED = RGBColor(0xE8, 0x57, 0x4A)
-FOOTER_BLUE = RGBColor(0x3B, 0x6E, 0xB5)
 GREY = RGBColor(0x5B, 0x67, 0x70)
 LIGHT = RGBColor(0xEE, 0xF1, 0xF5)
 SOFT = RGBColor(0xC5, 0xCD, 0xD6)
@@ -554,8 +553,6 @@ def base_slide(deck, title, source, section=""):
     slide = deck.slides.add_slide(deck.slide_layouts[6])  # blank layout
     banner(slide, deck, title)
     text_box(slide, Inches(0.45), Inches(6.98), Inches(10.6), Inches(0.25), source, size=8, italic=True)
-    text_box(slide, Inches(0.45), Inches(7.18), Inches(10.6), Inches(0.25), "Datos elaborados por BCP para uso interno",
-             size=8, color=FOOTER_BLUE, align=PP_ALIGN.RIGHT)
     if section:
         text_box(slide, Inches(11.2), Inches(7.05), Inches(1.2), Inches(0.35), section, size=8, color=RUST,
                  bold=True, align=PP_ALIGN.RIGHT)
@@ -704,7 +701,7 @@ def slide_cover(deck, taken_on):
         text_box(slide, left + Inches(0.1), Inches(5.65), Inches(2.6), Inches(0.4), detail, size=10, color=SOFT,
                  align=PP_ALIGN.CENTER)
     text_box(slide, Inches(0.8), Inches(6.7), Inches(11.5), Inches(0.4),
-             "Uso interno · cifras de ejemplo generadas desde el workbook: verificar antes de presentar", size=10,
+             "Cifras generadas desde el workbook: verificar antes de presentar", size=10,
              italic=True, color=SOFT)
 
 
@@ -1407,10 +1404,10 @@ def main():
     taken_on = patterns["snapshot_date"]
     snapshot = f"; HPA y deployments al {taken_on}" if taken_on else ""
     measured_source = ("Fuente: Azure Cost Management (costo amortizado), Azure Monitor y Container Insights "
-                       f"(ago–nov 2026){snapshot}. Uso interno.")
+                       f"(ago–nov 2026){snapshot}.")
     model_source = ("Estimado: precios de lista (Azure Retail Prices), descuento real de nodos (Cost Management) y "
-                    "supuestos de la hoja Supuestos; reglas del ADT_019. Uso interno.")
-    strategic_source = "Fuente: Microsoft Learn (revisado nov-2026) y ADT_019. Uso interno."
+                    "supuestos de la hoja Supuestos; reglas del ADT_019.")
+    strategic_source = "Fuente: Microsoft Learn (revisado nov-2026) y ADT_019."
 
     slide_cover(deck, taken_on)
     slide_summary(deck, summary, patterns, measured_summary, clusters, measured_source)
@@ -1422,7 +1419,7 @@ def main():
                                                                            "(KubePodInventory), métricas del autoscaler"))
     slide_footprint(deck, summary, read_footprint(args.results), measured_source)
     slide_configuration(deck, measured_summary, read_config(book), criteria,
-                        "Fuente: Azure Resource Graph (configuración de clusters y node pools). Uso interno.")
+                        "Fuente: Azure Resource Graph (configuración de clusters y node pools).")
     slide_criteria(deck, criteria, signals, read_bia(book), measured_source)
     slide_cost(deck, summary, read_model(book), equilibrium, rules, read_assumptions(book), model_source)
     slide_application(deck, strategic_source)
@@ -1430,11 +1427,11 @@ def main():
     slide_resilience(deck, strategic_source)
     slide_multicloud(deck, strategic_source)
     slide_per_cluster(deck, per_cluster, "Costo AKS real (Cost Management, último mes completo); ACA estimado con "
-                                               "réplicas medidas por Container Insights. Uso interno.")
-    slide_traffic(deck, classes, settings, "Fuente: Azure Monitor, métrica Requests de APIM por API y hora. Uso interno.")
+                                               "réplicas medidas por Container Insights.")
+    slide_traffic(deck, classes, settings, "Fuente: Azure Monitor, métrica Requests de APIM por API y hora.")
     slide_quick_wins(deck, patterns, measured_summary, clusters, per_cluster, signals, measured_source)
     slide_bia(deck, read_bia(book), measured_source)
-    slide_sources(deck, read_sources(book), "Hojas Fuentes y Consultas del workbook. Uso interno.")
+    slide_sources(deck, read_sources(book), "Hojas Fuentes y Consultas del workbook.")
     output = args.output or os.path.join(os.path.dirname(path), "aks_aca_deck.pptx")
     deck.save(output)
     print(output)
