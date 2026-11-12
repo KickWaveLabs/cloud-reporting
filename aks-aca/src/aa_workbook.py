@@ -854,9 +854,13 @@ def build_pattern3(sheet, k, base):
     names = k.sheet.title
     for index, row in enumerate(k.rows, start=2):
         if row.get("environment") == "PROD" and row.get("in_inventory") == "SÍ" and row.get("user_pools") == 0:
-            sheet.append([row["cluster"], f"={names}!{k.letter('microservices')}{index}",
+            # A cluster missing from the export or without Container Insights has no figure, not 0.
+            export = f"{names}!{k.letter('in_export')}{index}"
+            services = f"{names}!{k.letter('microservices')}{index}"
+            workloads = f"{names}!{k.letter('ci_app_workloads')}{index}"
+            sheet.append([row["cluster"], f'=IF({export}="NO","sin dato",{services})',
                           f"={names}!{k.letter('min_nodes')}{index}", f"={names}!{k.letter('cost_month_usd')}{index}",
-                          f"={names}!{k.letter('ci_app_workloads')}{index}"])
+                          f'=IF({workloads}="","sin Container Insights",{workloads})'])
             sheet.cell(row=sheet.max_row, column=4).number_format = USD
 
 

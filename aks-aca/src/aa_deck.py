@@ -834,7 +834,8 @@ def slide_pattern3(deck, p, source):
     heading(slide, Inches(6.8), Inches(2.65), Inches(6.1), "Clusters sin pool user con más costo", size=12)
     top = sorted(p["no_user_pool"], key=lambda item: -(item[3] or 0))[:7]
     rows = [["Cluster", "Microserv. (export)", "Workloads (CI)", "Nodos mín.", "Costo/mes"]] + [
-        [name, number(services), number(workloads), number(minimum), money(cost)]
+        [name, number(services) if is_number(services) else "sin dato",
+         number(workloads) if is_number(workloads) else "sin CI", number(minimum), money(cost)]
         for name, services, minimum, cost, workloads in top]
     table(slide, Inches(6.8), Inches(2.95), Inches(6.1), rows, [0.34, 0.18, 0.16, 0.13, 0.19], row_height=0.36, size=9)
     callout(slide, Inches(0.45), Inches(6.1), Inches(12.45), Inches(0.8),
