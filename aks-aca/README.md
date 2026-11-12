@@ -11,6 +11,7 @@ and one slide deck built with Copilot.
 |---|---|---|
 | `src/` | Python scripts (`aa_*.py`) and `requirements.txt` | Yes |
 | `docs/` | Cost analysis views, application-level comparison, deck outline and Copilot prompts | Yes |
+| `scripts/` | KQL to check figures by hand: `container-insights.kql` (cluster > Logs), `resource-graph.kql` (Resource Graph Explorer) | Yes |
 | `results/aa-<source>/` | CSV and JSON written by each script | No |
 | `reports/<date>-aks-aca/` | `aks_aca_comparison.xlsx` and a README with that run's scope | No |
 
@@ -136,7 +137,7 @@ python aks-aca/src/aa_workbook.py
     it with the scope and gaps of the run (see `reports/2026-11-10-aks-aca/README.md` on the machine that
     ran it).
 11. Optional: `aa_deck.py` builds `aks_aca_deck.pptx`, the whole presentation (diagnosis, technical criteria,
-    strategic front, proposal and annex; 19 slides, native charts) from the workbook's calculated values and
+    strategic front, proposal and annex; 20 slides, native charts) from the workbook's calculated values and
     `results/` (signals, and node and workload usage for the CPU vs memory slide). Open the workbook in Excel and save it first. Its figures are a draft to check.
 
 Smoke tests before a full run: `aa_metrics.py --clusters <one-cluster> --skip-apim --start <day>
