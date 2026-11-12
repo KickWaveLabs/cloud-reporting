@@ -13,22 +13,23 @@ Slides:
    4. Pattern 2: clusters and monthly cost by number of microservices
    5. Pattern 4: current replicas, HPA behaviour and inflated minimums
    6. Capacity health: unschedulable pods, OOM kills, CPU vs memory
-   7. Configuration drift and clusters under the 4-node minimum
+   7. Why CPU is low and memory high: what uses node memory, requests vs use, memory per replica, hypotheses
+   8. Configuration drift and clusters under the 4-node minimum
   Technical criteria
-   8. Criteria AKS vs Container Apps with the PROD figure
-   9. Cost under the ADT_019 rules
+   9. Criteria AKS vs Container Apps with the PROD figure
+  10. Cost under the ADT_019 rules
   Strategic front
-  10. Application, configuration and releases
-  11. Security
-  12. Resilience
-  13. Multicloud and key message
+  11. Application, configuration and releases
+  12. Security
+  13. Resilience
+  14. Multicloud and key message
   Proposal
-  14. Per-cluster comparison with measured replicas
-  15. Traffic profile per API
-  16. Quick wins and next steps
+  15. Per-cluster comparison with measured replicas
+  16. Traffic profile per API
+  17. Quick wins and next steps
   Annex
-  17. Business criticality (BIA), information only
-  18. Sources and method
+  18. Business criticality (BIA), information only
+  19. Sources and method
 
 Output: aks_aca_deck.pptx next to the workbook (or --output). Charts are native and editable in PowerPoint.
 Every figure is an example to check against the workbook and the CSVs before presenting.
@@ -52,6 +53,7 @@ from pptx.enum.text import MSO_ANCHOR, PP_ALIGN
 from pptx.util import Emu, Inches, Pt
 
 import aa_common as aa
+from aa_k8s_snapshot import is_platform
 
 NAVY = RGBColor(0x1B, 0x2F, 0x5C)
 RUST = RGBColor(0xB5, 0x45, 0x2D)
@@ -355,6 +357,74 @@ def read_signals(folder):
                                   "under_100": sum(value < 100 for value in values) / len(values),
                                   "over_1000": sum(value >= 1000 for value in values)}
     return signals
+
+
+def is_platform_namespace(namespace):
+    name = str(namespace or "").lower()
+    return (is_platform(name) or name in aa.SYSTEM_NAMESPACES or name in ("orcasecurity", "tfc-system")
+            or name.startswith(("arc-", "shgw-")))
+
+
+def read_footprint(results):
+    """Node memory and CPU of PROD in office hours, split by what uses it, for the last full month.
+
+    Node usage is the platform metric (everything on the node); Container Insights gives the part of apps,
+    DaemonSets and platform pods. Only clusters with Container Insights are compared, so both sides match.
+    """
+    clusters = read_csv(os.path.join(results, "aa-inventory", "aks_clusters.csv"))
+    usage = read_csv(os.path.join(results, "aa-metrics", "aks_usage_monthly.csv"))
+    workloads = read_csv(os.path.join(results, "aa-container-insights", "aks_workloads_monthly.csv"))
+    if not (clusters and usage and workloads):
+        return None
+    prod = {row["name"] for row in clusters if row["environment"] == "PROD"}
+    current = date.today().strftime("%Y-%m")
+    months = sorted({row["month"] for row in workloads if row["month"] < current})
+    if not months:
+        return None
+    month = months[-1]
+    parts = {"apps": [0.0, 0.0, 0.0, 0.0], "daemonsets": [0.0, 0.0, 0.0, 0.0], "platform": [0.0, 0.0, 0.0, 0.0]}
+    per_replica, with_ci = [], set()
+    for row in workloads:
+        if row["month"] != month or row["period"] != "OFFICE" or row["cluster"] not in prod:
+            continue
+        with_ci.add(row["cluster"])
+        if row["kind"] == "DaemonSet":
+            key = "daemonsets"
+        elif row["system_namespace"] == "YES" or is_platform_namespace(row["namespace"]):
+            key = "platform"
+        else:
+            key = "apps"
+            if row["kind"] == "ReplicaSet" and row.get("mem_used_gib_per_replica"):
+                per_replica.append((to_float(row["mem_used_gib_per_replica"]), to_float(row.get("cpu_used_per_replica"))))
+        for index, field in enumerate(("mem_used_gib_avg", "cpu_used_avg", "mem_request_gib_avg", "cpu_request_avg")):
+            parts[key][index] += to_float(row.get(field))
+    node = {"mem_used": 0.0, "mem_alloc": 0.0, "cpu_used": 0.0, "cpu_alloc": 0.0}
+    for row in usage:
+        if row["month"] != month or row["cluster"] not in with_ci:
+            continue
+        if row["mode"] == "ALLOCATABLE":
+            node["mem_alloc"] += to_float(row["mem_allocatable_avg_gib"])
+            node["cpu_alloc"] += to_float(row["cpu_allocatable_avg"])
+        else:
+            node["mem_used"] += to_float(row["mem_used_office_avg_gib"])
+            node["cpu_used"] += to_float(row["cpu_used_office_avg"])
+    if not node["mem_used"] or not per_replica:
+        return None
+    buckets = [("< 128 MiB", 0, 0.125), ("128–512 MiB", 0.125, 0.5), ("512 MiB–1 GiB", 0.5, 1.0), ("≥ 1 GiB", 1.0, 10 ** 6)]
+    memory = [value for value, _ in per_replica]
+    apps = parts["apps"]
+    return {
+        "month": month, "clusters": len(with_ci), "node": node, "parts": parts,
+        "rest_mem": node["mem_used"] - sum(part[0] for part in parts.values()),
+        "buckets": [(label, sum(low <= value < high for value in memory)) for label, low, high in buckets],
+        "median_mem": statistics.median(memory), "median_cpu": statistics.median([cpu for _, cpu in per_replica]),
+        "workloads": len(memory),
+        "cpu_request_over_use": apps[3] / apps[1] if apps[1] else None,
+        "mem_use_over_request": apps[0] / apps[2] if apps[2] else None,
+        "ratio_used": apps[0] / apps[1] if apps[1] else None,
+        "ratio_requested": apps[2] / apps[3] if apps[3] else None,
+        "ratio_node": node["mem_alloc"] / node["cpu_alloc"] if node["cpu_alloc"] else None,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -785,6 +855,52 @@ def slide_capacity_health(deck, s, signals, source):
     callout(slide, Inches(0.45), Inches(6.15), Inches(12.45), Inches(0.75), message, size=12)
 
 
+def slide_footprint(deck, s, footprint, source):
+    cpu, mem = s.get("Uso de CPU en horario de oficina, PROD"), s.get("Uso de memoria en horario de oficina, PROD")
+    slide = base_slide(deck, f"Por qué la CPU está en {percent(cpu)} y la memoria en {percent(mem)}: hipótesis", source,
+                       "Diagnóstico")
+    if not footprint:
+        note_box(slide, Inches(0.45), Inches(3.0), Inches(12.45), Inches(1.0),
+                 "Faltan aks_workloads_monthly.csv o aks_usage_monthly.csv en results/: correr aa_metrics.py y "
+                 "aa_container_insights.py")
+        return
+    node, parts = footprint["node"], footprint["parts"]
+    heading(slide, Inches(0.45), Inches(1.2), Inches(6.2), f"Qué ocupa la memoria usada de los nodos ({footprint['month']})",
+            size=12)
+    items = [("SO, kubelet y caché", footprint["rest_mem"], SOFT), ("Plataforma", parts["platform"][0], NAVY),
+             ("DaemonSets", parts["daemonsets"][0], STEEL), ("Apps (con sidecar y agente)", parts["apps"][0], ORANGE)]
+    bar_chart(slide, Inches(0.3), Inches(1.5), Inches(6.2), Inches(2.3), [label for label, _, _ in items],
+              [share_of(value, node["mem_used"]) or 0 for _, value, _ in items], XL_CHART_TYPE.BAR_CLUSTERED,
+              [color for _, _, color in items], number_format="0%")
+    heading(slide, Inches(0.45), Inches(3.9), Inches(6.2), "Memoria usada por réplica de los microservicios", size=12)
+    bar_chart(slide, Inches(0.3), Inches(4.2), Inches(6.2), Inches(1.75), [label for label, _ in footprint["buckets"]],
+              [share_of(count, footprint["workloads"]) or 0 for _, count in footprint["buckets"]],
+              XL_CHART_TYPE.COLUMN_CLUSTERED, [GREEN, STEEL, ORANGE, RUST], number_format="0%")
+
+    tiles = [(f"{footprint['cpu_request_over_use']:.1f}×".replace(".", ",") if footprint["cpu_request_over_use"] else "-",
+              "CPU reservada (request) sobre la usada", RED),
+             (f"{footprint['mem_use_over_request']:.1f}×".replace(".", ",") if footprint["mem_use_over_request"] else "-",
+              "memoria usada sobre la reservada", GREEN),
+             (f"{footprint['median_mem']:.2f} GiB".replace(".", ","), "memoria mediana por réplica", ORANGE),
+             (f"{footprint['median_cpu'] * 1000:.0f} m", "CPU mediana por réplica (milicores)", SKY)]
+    for index, (value, label, color) in enumerate(tiles):
+        row, column = divmod(index, 2)
+        kpi(slide, Inches(6.9 + column * 3.05), Inches(1.25 + row * 1.15), Inches(2.9), Inches(1.05), value, label,
+            value_color=color, value_size=20, label_size=9)
+    ratio = (f"Proporción vCPU : GiB de las apps · reservada 1 : {footprint['ratio_requested']:.1f} · usada 1 : "
+             f"{footprint['ratio_used']:.0f} · forma del nodo 1 : {footprint['ratio_node']:.1f}").replace(".", ",")
+    note_box(slide, Inches(6.9), Inches(3.6), Inches(5.95), Inches(0.5), ratio, size=9)
+    heading(slide, Inches(6.9), Inches(4.2), Inches(5.9), "Hipótesis (a validar con los equipos)", size=12)
+    text_box(slide, Inches(6.9), Inches(4.5), Inches(5.95), Inches(1.6), [
+        "• JVM: reserva su heap aunque no haya tráfico; casi nada corre en modo nativo (Quarkus nativo < 128 MiB).",
+        "• Cada pod suma el sidecar de Istio y un agente Java inyectado (javaagent).",
+        "• Requests de CPU muy sobre el uso: el scheduler reserva CPU que nadie usa.",
+        "• La parte del SO, kubelet y caché no es de las apps."], size=9)
+    callout(slide, Inches(0.45), Inches(6.1), Inches(12.45), Inches(0.8),
+            "Las apps se configuran 1:4 pero se comportan como cargas de memoria: bajar requests de CPU, ajustar el heap "
+            "y evaluar nodos de memoria (serie E) antes de sumar nodos.", size=11)
+
+
 def slide_configuration(deck, measured_summary, properties, criteria, source):
     upgrade = next((item for item in criteria if item["measure"].startswith("Clusters sin upgrade")), None)
     under = measured_summary.get("Clusters PROD con mínimo configurado de menos de 4 nodos")
@@ -1181,6 +1297,7 @@ def main():
     slide_pattern4(deck, patterns, measured_source)
     slide_capacity_health(deck, summary, signals, measured_source.replace("Container Insights", "Container Insights "
                                                                            "(KubePodInventory), métricas del autoscaler"))
+    slide_footprint(deck, summary, read_footprint(args.results), measured_source)
     slide_configuration(deck, measured_summary, read_config(book), criteria,
                         "Fuente: Azure Resource Graph (configuración de clusters y node pools). Uso interno.")
     slide_criteria(deck, criteria, keda, signals, measured_source)
