@@ -354,7 +354,8 @@ def read_signals(folder):
                                  "hours_share": waiting / hours if hours else None}
     oom = read_csv(os.path.join(folder, "aks_oomkilled_monthly.csv"))
     if oom is not None:
-        apps = [row for row in oom if row["environment"] == "PROD" and row["system_namespace"] == "NO"]
+        apps = [row for row in oom if row["environment"] == "PROD" and row["system_namespace"] == "NO"
+                and not is_platform_namespace(row["namespace"])]
         by_workload = {}
         for row in apps:
             key = (row["cluster"], row["workload"])

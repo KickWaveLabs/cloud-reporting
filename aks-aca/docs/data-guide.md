@@ -160,7 +160,7 @@ Inputs: the four `aa-k8s-snapshot` CSVs, plus the cost per cluster from workbook
 | BIA (annex) | `cluster_snapshot` with the cost column; rows `bia`, columns `in_export` |
 | Fits Container Apps by size | `deployment_snapshot`; rows `fits_aca_by_request` |
 | Clusters short of capacity | `aks_autoscaler_monthly`, filter PROD; count clusters with `hours_with_unschedulable` > 0; sum the hours |
-| OOM kills | `aks_oomkilled_monthly`, filter PROD and `system_namespace` = NO; rows `cluster` or `workload`; sum `oom_kills` |
+| OOM kills | `aks_oomkilled_monthly`, filter PROD, `system_namespace` = NO and outside platform namespaces (`orcasecurity` included: its sensor is a security agent, not an app); rows `cluster` or `workload`; sum `oom_kills` |
 
 ### 3. APIM traffic
 
