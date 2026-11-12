@@ -127,6 +127,7 @@ def stack_rows(ctx, client, cluster, start, end):
 
 
 def autoscaler_rows(ctx, cluster, start, end, chunk_days):
+    azure.LOG.info("Unschedulable pods %s", cluster["name"])
     hours = {}
     for begin, finish in aa.chunks(start, end, chunk_days):
         values = ctx.try_arm("aks-autoscaler", cluster["name"], aa.get_metrics, ctx, cluster["id"],
@@ -164,6 +165,7 @@ def oom_rows(ctx, client, cluster, start, end):
 def latency_rows(ctx, service, start, end, top):
     out = {}
     for month, begin, finish in ci.month_windows(start, end):
+        azure.LOG.info("APIM latency %s %s", service["name"], month)
         values = ctx.try_arm("apim-latency", service["name"], aa.get_metrics, ctx, service["id"], LATENCY_METRICS,
                              begin, finish, "FULL", "Average,Maximum", "ApiId eq '*'", top=top)
         for metric in values or []:
