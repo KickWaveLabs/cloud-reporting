@@ -27,6 +27,8 @@ Guides:
   Copilot prompts to build the deck on the corporate laptop.
 - [docs/guidelines-compliance-checklist.md](docs/guidelines-compliance-checklist.md): questions to validate
   the guidelines deck with Compliance, and what to change in the script for each answer.
+- [docs/guidelines-references.md](docs/guidelines-references.md): the official source and link behind every
+  limit, RTO and price in the guidelines deck; the deck itself only lists the regulation.
 
 The workbook's `Por_ambiente` sheet splits every indicator and the vault and snapshot cost by the
 `environment` tag (PROD, CERT, DESA, untagged), without Databricks, ORCA, ARO or AKS node resources.

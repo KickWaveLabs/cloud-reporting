@@ -4,11 +4,12 @@
 Slides:
   1. Guidelines: the base PITR / LTR rule per service, and where it changes by the data a system holds
   2. List price per TB-month in East US 2 and Central US against the vendors' quoted tariffs
-  3. References: regulation, Microsoft Learn and pricing pages, each with its link
+  3. References: the regulation behind slide 1 (Microsoft and pricing sources are in docs/)
 
 Prices come from the public Azure Retail Prices API (no sign-in, no subscription data). Retention limits and
-regulatory articles are fixed in this file, checked against the official texts in November 2026; each one is
-listed on slide 3. Vendor tariffs are the ones quoted in the backup guidelines review (unit to be confirmed).
+regulatory articles are fixed in this file, checked against the official texts in November 2026. The regulation
+is listed on slide 3; every Microsoft and pricing source is in docs/guidelines-references.md. Vendor tariffs are
+the ones quoted in the backup guidelines review (unit to be confirmed).
 
 Usage:
   pip install python-pptx requests
@@ -90,54 +91,21 @@ SECTION = RGBColor(0xDD, 0xE3, 0xEC)
 WHITE = RGBColor(0xFF, 0xFF, 0xFF)
 FONT = "Arial"
 
-SBS_2660 = "https://intranet2.sbs.gob.pe/dv_int_cn/1540/v5.0/Adjuntos/2660-2015.r.pdf"
-SBS_504 = "https://intranet2.sbs.gob.pe/dv_int_cn/2046/v5.0/Adjuntos/504-2021.R.pdf"
-SBS_814 = "https://intranet2.sbs.gob.pe/dv_int_cn/2483/v1.0/Adjuntos/814-2025.R.pdf"
-BCRP_0011 = "https://www.bcrp.gob.pe/docs/Transparencia/Normas-Legales/Circulares/2026/circular-0011-2026-bcrp.pdf"
-SPIJ = "https://spij.minjus.gob.pe/"
-LEARN = "https://learn.microsoft.com/en-us/azure/"
-PRICING = "https://azure.microsoft.com/en-us/pricing/"
 
 REGULATION_REFERENCES = [
-    ("Ley 26702, Ley General del Sistema Financiero, art. 183",
-     "Libros y documentos: 10 años. Texto actualizado: buscar «Ley 26702» en el SPIJ.", SPIJ),
-    ("Res. SBS 2660-2015, Gestión de Riesgos de LA/FT (texto consolidado)",
-     "Arts. 49 y 54: registro de operaciones y copia trimestral. Arts. 55 y 58: KYC, contrapartes, inusuales.",
-     SBS_2660),
+    ("Ley 26702, Ley General del Sistema Financiero", "Art. 183: libros y documentos, 10 años",
+     "Texto del SPIJ con notas a mayo 2026", "SPIJ (Ministerio de Justicia)"),
+    ("Res. SBS 2660-2015, Gestión de Riesgos de LA/FT",
+     "Arts. 49 y 54: registro de operaciones y copia trimestral. Arts. 55 y 58: KYC, contrapartes e inusuales",
+     "Texto consolidado SBS, v5", "Portal de normas de la SBS"),
     ("Res. SBS 504-2021, Seguridad de la Información y Ciberseguridad",
-     "Art. 12, num. 3, lit. f) y h): copias de respaldo y pruebas. Arts. 23 y 25: nube y exterior.", SBS_504),
-    ("Res. SBS 00814-2025, modifica Res. SBS 877-2020 (Continuidad)",
-     "Productos pasivos: POR igual a cero y TOR de hasta 3 horas.", SBS_814),
+     "Art. 12, num. 3, lit. f) y h): copias de respaldo y pruebas. Arts. 23 y 25: nube y exterior",
+     "Texto consolidado SBS, v5", "Portal de normas de la SBS"),
+    ("Res. SBS 00814-2025, modifica la Res. SBS 877-2020 (Continuidad del Negocio)",
+     "Productos pasivos: POR igual a cero y TOR de hasta 3 horas", "Publicada el 04-03-2025", "Portal de normas de la SBS"),
     ("Circular BCRP 0011-2026, Reglamento del Sistema LBTR",
-     "Art. 46.5: 2 horas. Anexo V, sección VI: respaldo diario, prueba anual, 10 años.", BCRP_0011),
-]
-MICROSOFT_REFERENCES = [
-    ("Azure Backup para VMs: frecuencia y retención", LEARN + "backup/backup-support-matrix-iaas"),
-    ("Azure Backup para VMs: RPO y velocidad de restauración (FAQ)", LEARN + "backup/backup-azure-vm-backup-faq"),
-    ("Azure Backup para Files: snapshot y bóveda", LEARN + "backup/azure-file-share-backup-overview"),
-    ("Azure SQL Database: PITR 1–35 días, LTR 10 años", LEARN + "azure-sql/database/automated-backups-overview"),
-    ("Azure SQL Managed Instance: PITR 1–35 días, LTR 10 años",
-     LEARN + "azure-sql/managed-instance/automated-backups-overview"),
-    ("PostgreSQL Flexible: PITR 7–35 días", LEARN + "postgresql/backup-restore/concepts-backup-restore"),
-    ("PostgreSQL Flexible: LTR en bóveda hasta 10 años", LEARN + "backup/backup-azure-database-postgresql-flex-overview"),
-    ("MySQL Flexible: PITR 1–35 días; LTR en pausa", LEARN + "mysql/flexible-server/concepts-backup-restore"),
-    ("Cosmos DB: backup continuo 7, 30 o 35 días", LEARN + "cosmos-db/continuous-backup-restore-introduction"),
-    ("Cosmos DB: LTR en bóveda hasta 10 años", LEARN + "backup/backup-azure-cosmos-db-overview"),
-    ("Cosmos DB: restaurar 1 TB toma 30 a 90 min (FAQ)",
-     LEARN + "cosmos-db/restore-in-account-continuous-backup-frequently-asked-questions"),
-    ("SQL Database: RTO y RPO de cada opción de recuperación",
-     LEARN + "azure-sql/database/business-continuity-high-availability-disaster-recover-hadr-overview"),
-    ("Archive: rehidratación hasta 15 h (Standard)", LEARN + "storage/blobs/archive-rehydrate-overview"),
-]
-PRICING_REFERENCES = [
-    ("Calculadora de precios de Azure", PRICING + "calculator/"),
-    ("Azure Backup (bóveda, Archive, instancias protegidas)", PRICING + "details/backup/"),
-    ("Azure SQL Database (PITR y LTR)", PRICING + "details/azure-sql-database/single/"),
-    ("Azure SQL Managed Instance (PITR y LTR)", PRICING + "details/azure-sql-managed-instance/single/"),
-    ("PostgreSQL Flexible Server (almacenamiento de backup)", PRICING + "details/postgresql/flexible-server/"),
-    ("MySQL Flexible Server (almacenamiento de backup)", PRICING + "details/mysql/flexible-server/"),
-    ("Cosmos DB (backup continuo)", PRICING + "details/cosmos-db/autoscale-provisioned/"),
-    ("API pública de precios (Azure Retail Prices)", PRICES_API),
+     "Art. 46.5: recuperación en 2 horas. Anexo V, sección VI: respaldo diario, prueba anual, 10 años",
+     "Vigente desde junio 2026", "Circulares vigentes del BCRP"),
 ]
 
 
@@ -205,7 +173,7 @@ def amount(value):
 
 def text_box(slide, left, top, width, height, text, size=12, bold=False, color=GREY, align=PP_ALIGN.LEFT,
              italic=False, anchor=MSO_ANCHOR.TOP):
-    """Text box; text is a string, a list of lines, or a list of lines made of (text, bold, color, link) runs."""
+    """Text box; text is a string, a list of lines, or a list of lines made of (text, bold, color) runs."""
     shape = slide.shapes.add_textbox(left, top, width, height)
     frame = shape.text_frame
     frame.word_wrap = True
@@ -214,13 +182,11 @@ def text_box(slide, left, top, width, height, text, size=12, bold=False, color=G
     for index, line in enumerate(text if isinstance(text, list) else [text]):
         paragraph = frame.paragraphs[0] if index == 0 else frame.add_paragraph()
         paragraph.alignment = align
-        for part in line if isinstance(line, list) else [(line, bold, color, None)]:
+        for part in line if isinstance(line, list) else [(line, bold, color)]:
             run = paragraph.add_run()
             run.text = part[0]
             run.font.name, run.font.size, run.font.bold, run.font.italic = FONT, Pt(size), part[1], italic
             run.font.color.rgb = part[2]
-            if part[3]:
-                run.hyperlink.address = part[3]
     return shape
 
 
@@ -267,7 +233,7 @@ def heading(slide, left, top, width, text, size=13, color=NAVY):
     text_box(slide, left, top, width, Inches(0.32), text, size=size, bold=True, color=color)
 
 
-def style_cell(cell, text, size, bold=False, color=GREY, fill=WHITE, align=PP_ALIGN.CENTER, link=None):
+def style_cell(cell, text, size, bold=False, color=GREY, fill=WHITE, align=PP_ALIGN.CENTER):
     cell.text = text or " "  # an empty cell has no run to style
     cell.vertical_anchor = MSO_ANCHOR.MIDDLE
     cell.margin_left = cell.margin_right = Inches(0.05)
@@ -279,8 +245,6 @@ def style_cell(cell, text, size, bold=False, color=GREY, fill=WHITE, align=PP_AL
         for run in paragraph.runs:
             run.font.name, run.font.size, run.font.bold = FONT, Pt(size), bold
             run.font.color.rgb = color
-            if link:
-                run.hyperlink.address = link
 
 
 def table(slide, left, top, width, header, rows, widths, row_height=0.3, size=10, header_fill=CARD):
@@ -303,8 +267,7 @@ def table(slide, left, top, width, header, rows, widths, row_height=0.3, size=10
             style_cell(grid.cell(r, c), text, options.get("size", size), bold=options.get("bold", c == 0),
                        color=options.get("color", NAVY if c == 0 else GREY),
                        fill=options.get("fill", LIGHT if r % 2 else WHITE),
-                       align=PP_ALIGN.LEFT if c == 0 or options.get("left") else PP_ALIGN.CENTER,
-                       link=options.get("link"))
+                       align=PP_ALIGN.LEFT if c == 0 or options.get("left") else PP_ALIGN.CENTER)
     return grid
 
 
@@ -340,8 +303,8 @@ def slide_guidelines(deck):
     table(slide, left, Inches(1.45), width, ["Servicio", "Corto plazo", "Largo plazo"], rows, [0.38, 0.29, 0.33],
           row_height=0.6, size=9.5)
     text_box(slide, left, Inches(5.72), width, Inches(0.32), [
-        [("S4 · M12", True, NAVY, None), (" = se conservan las últimas 4 copias semanales y 12 mensuales.",
-                                           False, GREY, None)]], size=9)
+        [("S4 · M12", True, NAVY), (" = se conservan las últimas 4 copias semanales y 12 mensuales.",
+                                           False, GREY)]], size=9)
 
     # Right: where the rule changes, by the data the system holds.
     left, width = Inches(5.3), Inches(7.68)
@@ -366,14 +329,14 @@ def slide_guidelines(deck):
           scopes, [0.27, 0.17, 0.3, 0.26], row_height=0.6, size=9)
 
     note_box(slide, Inches(0.35), Inches(6.08), Inches(12.63), Inches(0.92), [
-        [("Redundancia del backup: ", True, NAVY, None),
+        [("Redundancia del backup: ", True, NAVY),
          ("PROD sin réplica en otra región: GRS (copia en Central US, región par). PROD con failover group o geo-réplica: "
-          "ZRS. No productivo: LRS, PITR 7 días y sin LTR.", False, GREY, None)],
-        [("PITR", True, NAVY, None),
-         (" recupera errores recientes: borrado, corrupción, ransomware.   ", False, GREY, None),
-         ("LTR", True, NAVY, None), (" cumple la conservación y los errores detectados tarde.", False, GREY, None)],
-        [("Recomendado en los ámbitos regulados: ", True, RUST, None),
-         ("bóveda inmutable y prueba de restauración documentada.", False, GREY, None)]], size=9.5)
+          "ZRS. No productivo: LRS, PITR 7 días y sin LTR.", False, GREY)],
+        [("PITR", True, NAVY),
+         (" recupera errores recientes: borrado, corrupción, ransomware.   ", False, GREY),
+         ("LTR", True, NAVY), (" cumple la conservación y los errores detectados tarde.", False, GREY)],
+        [("Recomendado en los ámbitos regulados: ", True, RUST),
+         ("bóveda inmutable y prueba de restauración documentada.", False, GREY)]], size=9.5)
     slide.notes_slide.notes_text_frame.text = (
         "S = semanales, M = mensuales, A = anuales (cantidad de puntos que se guardan). "
         "La regla base aplica a todo PROD; un sistema solo cambia si guarda uno de los datos de la tabla de ámbitos. "
@@ -410,7 +373,7 @@ def slide_prices(deck, tb, retrieved):
             return "–"
         return amount(region[key] * (2 if double else 1))
 
-    def priced(label, keys, rpo, rto, link, extra, best=False, geo_double=False):
+    def priced(label, keys, rpo, rto, extra, best=False, geo_double=False):
         """keys = (LRS, ZRS, GRS) meter keys; geo_double prices GRS as twice the local GB (PostgreSQL, MySQL)."""
         lrs, zrs, grs = keys
         options = {"color": GREEN, "bold": True} if best else {}
@@ -418,48 +381,40 @@ def slide_prices(deck, tb, retrieved):
         for region in regions:
             values += [(cell(region, lrs), options), (cell(region, zrs), options),
                        (cell(region, grs or (lrs if geo_double else None), double=geo_double and not grs), options)]
-        return [label, *values, (rpo, {"size": 8}), (rto, {**small, "link": link, "color": NAVY}), (extra, small)]
+        return [label, *values, (rpo, {"size": 8}), (rto, small), (extra, small)]
 
     def vendor(name, value, tier, rto):
         options = {"color": RUST, "bold": True}
         return [(f"{name} · {tier}", {"color": RUST}), *[(amount(value), options)] * 6,
                 ("Según su política", {"size": 8}), (rto, small),
-                ("Cotizada; confirmar TB protegido o almacenado", small)]
+                ("Confirmar TB protegido o almacenado", small)]
 
     sql_label = "SQL Database / Managed Instance"
     sql_equal = all(region[f"sqldb_{kind}"] == region[f"sqlmi_{kind}"] for region in regions
                     for kind in ("pitr_lrs", "pitr_zrs", "pitr_geo", "ltr_lrs", "ltr_zrs", "ltr_geo"))
     if not sql_equal:
         raise SystemExit("SQL Database and SQL Managed Instance backup prices differ; split their rows.")
-    vm_faq = LEARN + "backup/backup-azure-vm-backup-faq"
-    sql_rto = LEARN + "azure-sql/managed-instance/automated-backups-overview"
     rows = [
         ["Corto plazo: recuperación operativa"],
         priced("Azure Backup · VM (bóveda)", ("vault_lrs", "vault_zrs", "vault_grs"), "24 h (4 h Enhanced)",
-               f"Snapshot: más rápido; bóveda: {vault_hours}", vm_faq,
-               f"+ {usd(east['vm_instance'])} por TB protegido"),
+               f"Snapshot: más rápido; bóveda: {vault_hours}", f"+ {usd(east['vm_instance'])} por TB protegido"),
         priced("Azure Backup · Files (bóveda)", ("files_vault_lrs", "files_vault_zrs", "files_vault_grs"),
-               "24 h (diario)", "Snapshot: archivos al instante", LEARN + "backup/azure-file-share-backup-overview",
-               "+ instancia protegida (ver calculadora)"),
+               "24 h (diario)", "Snapshot: archivos al instante", "+ instancia protegida"),
         priced(f"{sql_label} · PITR", ("sqldb_pitr_lrs", "sqldb_pitr_zrs", "sqldb_pitr_geo"), "5 a 10 min",
-               "Normalmente < 12 h", sql_rto, "Gratis hasta el tamaño máximo de la base"),
+               "Normalmente < 12 h", "Gratis hasta el tamaño de la base"),
         priced("PostgreSQL / MySQL · PITR", ("pg_pitr", "mysql_pitr_zrs", None), "≤ 5 min", "Minutos a pocas horas",
-               LEARN + "postgresql/backup-restore/concepts-backup-restore",
-               "Gratis hasta el storage; geo cobra el doble de GB", geo_double=True),
+               "Gratis hasta el storage; geo x2 GB", geo_double=True),
         priced("Cosmos DB · continuo 30 días", ("cosmos_30d", None, None), "~100 s", "~30 a 90 min por TB",
-               LEARN + "cosmos-db/restore-in-account-continuous-backup-frequently-asked-questions",
-               f"Por región; restaurar {usd(east['cosmos_restore'])} por TB"),
+               f"Por región; restaurar {usd(east['cosmos_restore'])}/TB"),
         *[vendor(name, active, "Active", f"Restaurar + traer: {transfer}") for name, active, _ in VENDORS],
         ["Largo plazo: retención"],
         priced("Azure Backup · Archive (VM)", ("archive_lrs", None, "archive_grs"), "1 mes",
-               f"Rehidratar ≤ 15 h + {vault_hours}", LEARN + "storage/blobs/archive-rehydrate-overview",
-               "Puntos > 6 meses; mínimo 180 días; no en bóveda ZRS", best=True),
+               f"Rehidratar ≤ 15 h + {vault_hours}", "Puntos > 6 meses; mínimo 180 días", best=True),
         priced(f"{sql_label} · LTR", ("sqldb_ltr_lrs", "sqldb_ltr_zrs", "sqldb_ltr_geo"), "1 semana",
-               "Normalmente < 12 h", sql_rto, "Solo backups completos"),
+               "Normalmente < 12 h", "Solo backups completos"),
         priced("PostgreSQL / Cosmos · Backup vault", ("vault_lrs", "vault_zrs", "vault_grs"), "1 sem. / 1 día",
                "Cosmos ~30 a 90 min/TB; PG: horas",
-               LEARN + "backup/backup-azure-cosmos-db-overview",
-               f"+ PG {usd(east['pg_instance'])} · Cosmos {usd(east['cosmos_instance'])} por TB protegido"),
+               f"+ PG {usd(east['pg_instance'])} · Cosmos {usd(east['cosmos_instance'])}/TB protegido"),
         *[vendor(name, archive, "Archive", f"Su Archive + {transfer}") for name, _, archive in VENDORS],
     ]
     if any(east[key] != central[key] for key in ("vm_instance", "pg_instance", "cosmos_instance", "cosmos_restore")):
@@ -469,13 +424,13 @@ def slide_prices(deck, tb, retrieved):
                        f"Fuente: Azure Retail Prices API, precio de lista consultado el {retrieved}, sin descuento "
                        "del banco; 1 TB = 1.024 GB. Proveedores: tarifas cotizadas.")
     text_box(slide, Inches(0.35), Inches(1.0), Inches(12.63), Inches(0.28), [[
-        ("Unidad: US$ por TB almacenado al mes", True, NAVY, None),
-        (", precio de lista; EUS2 = East US 2, CUS = Central US. RTO aproximado con cifras de Microsoft Learn: clic "
-         "en el RTO para ver la fuente.", False, GREY, None)]], size=9)
+        ("Unidad: US$ por TB almacenado al mes", True, NAVY),
+        (", precio de lista; EUS2 = East US 2, CUS = Central US. RTO aproximado con cifras de Microsoft Learn.",
+         False, GREY)]], size=9)
     grid = table(slide, Inches(0.35), Inches(1.3), Inches(12.63),
                  ["Opción", "EUS2\nLRS", "EUS2\nZRS", "EUS2\nGRS", "CUS\nLRS", "CUS\nZRS", "CUS\nGRS", "RPO",
                   "RTO aprox. (restaurar)", "Qué más se cobra"], rows,
-                 [0.19, 0.048, 0.048, 0.048, 0.048, 0.048, 0.048, 0.095, 0.19, 0.237], row_height=0.3, size=8.5)
+                 [0.21, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.1, 0.19, 0.2], row_height=0.28, size=8.5)
     grid.rows[0].height = Inches(0.42)
     for r, values in enumerate(rows, start=1):
         if len(values) == 1:
@@ -495,18 +450,9 @@ def slide_prices(deck, tb, retrieved):
     ]
     for index, (title, text) in enumerate(takeaways):
         left = Inches(0.35 + index * 4.25)
-        rounded(slide, left, Inches(6.02), Inches(4.13), Inches(0.68), CARD)
-        text_box(slide, left + Inches(0.12), Inches(6.02), Inches(3.89), Inches(0.68),
-                 [[(title + ": ", True, ORANGE, None), (text, False, WHITE, None)]], size=9, anchor=MSO_ANCHOR.MIDDLE)
-    text_box(slide, Inches(0.35), Inches(6.76), Inches(12.6), Inches(0.3), [[
-        ("Calcula cada caso en la ", False, GREY, None), ("calculadora de Azure", True, NAVY, PRICING + "calculator/"),
-        ("; precios por servicio en ", False, GREY, None), ("Azure Backup", True, NAVY, PRICING + "details/backup/"),
-        (" · ", False, GREY, None), ("SQL Database", True, NAVY, PRICING + "details/azure-sql-database/single/"),
-        (" · ", False, GREY, None), ("SQL MI", True, NAVY, PRICING + "details/azure-sql-managed-instance/single/"),
-        (" · ", False, GREY, None), ("PostgreSQL", True, NAVY, PRICING + "details/postgresql/flexible-server/"),
-        (" · ", False, GREY, None), ("MySQL", True, NAVY, PRICING + "details/mysql/flexible-server/"),
-        (" · ", False, GREY, None), ("Cosmos DB", True, NAVY, PRICING + "details/cosmos-db/autoscale-provisioned/"),
-    ]], size=9)
+        rounded(slide, left, Inches(5.95), Inches(4.13), Inches(0.8), CARD)
+        text_box(slide, left + Inches(0.12), Inches(5.95), Inches(3.89), Inches(0.8),
+                 [[(title + ": ", True, ORANGE), (text, False, WHITE)]], size=9, anchor=MSO_ANCHOR.MIDDLE)
     meters = "; ".join(f"{meter} ({product})" for _, _, product, meter in METERS)
     slide.notes_slide.notes_text_frame.text = (
         "Cada precio por GB-mes se multiplica por 1.024. Las instancias protegidas se cobran por bloque de datos de "
@@ -527,32 +473,10 @@ def slide_prices(deck, tb, retrieved):
 
 
 def slide_references(deck):
-    slide = base_slide(deck, "Referencias", "Todos los enlaces son públicos y oficiales; revisados en noviembre de 2026.")
-    columns = [
-        ("Regulación (Perú)", Inches(0.35), Inches(4.6)),
-        ("Microsoft Learn: límites de cada servicio", Inches(5.1), Inches(4.0)),
-        ("Precios", Inches(9.25), Inches(3.73)),
-    ]
-    for title, left, width in columns:
-        rounded(slide, left, Inches(1.12), width, Inches(0.42), CARD, radius=0.2)
-        text_box(slide, left + Inches(0.1), Inches(1.12), width - Inches(0.2), Inches(0.42), title, size=12, bold=True,
-                 color=WHITE, anchor=MSO_ANCHOR.MIDDLE)
-
-    left, width = columns[0][1], columns[0][2]
-    top = Inches(1.66)
-    for name, detail, url in REGULATION_REFERENCES:
-        text_box(slide, left, top, width, Inches(0.98), [
-            [(name, True, NAVY, url)], [(detail, False, GREY, None)], [(url, False, RUST, url)]], size=9)
-        top += Inches(1.0)
-
-    for column, references in ((columns[1], MICROSOFT_REFERENCES), (columns[2], PRICING_REFERENCES)):
-        left, width = column[1], column[2]
-        top = Inches(1.66)
-        step = Inches(5.3 / len(references))
-        for name, url in references:
-            text_box(slide, left, top, width, step, [[(name, True, NAVY, url)], [(url, False, RUST, url)]],
-                     size=8.5 if len(references) <= 10 else 7.5)
-            top += step
+    slide = base_slide(deck, "Referencias: regulación", "Textos oficiales revisados en noviembre de 2026.")
+    rows = [list(reference) for reference in REGULATION_REFERENCES]
+    table(slide, Inches(0.35), Inches(1.2), Inches(12.63), ["Norma", "Qué se usa", "Versión revisada", "Fuente oficial"],
+          rows, [0.3, 0.38, 0.16, 0.16], row_height=0.7, size=10)
 
 
 def main():
