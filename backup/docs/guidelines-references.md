@@ -42,9 +42,19 @@ links are public and were checked in November 2026.
 | Archive: rehydrate up to 15 h | Standard priority "might take up to 15 hours"; High under 1 hour for objects under 10 GB | <https://learn.microsoft.com/en-us/azure/storage/blobs/archive-rehydrate-overview> |
 | Vendors: ~2.3 h per TB at 1 Gbps | Calculation, not a vendor figure: 1,024 GB x 8 bits / 1 Gbps = 8,192 s. The bank's real link speed changes it | — |
 
+## Backup redundancy names (slides 1 and 2)
+
+| Service | Options | Source |
+|---|---|---|
+| SQL Database and Managed Instance, PITR and LTR | LRS, ZRS, RA-GRS, RA-GZRS. There is no plain GRS meter; RA-GRS and RA-GZRS cost the same (PITR 0.20, LTR 0.05 US$/GB-month list in East US 2) | Retail Prices API meters `RA-GRS Data Stored`, `RA-GZRS Data Stored`; <https://learn.microsoft.com/en-us/azure/azure-sql/database/automated-backups-overview> |
+| Recovery Services vault (VM, Files) | LRS, ZRS, GRS. Cross Region Restore needs GRS, "incurs extra charges" (billed with the `Standard RA-GRS Data Stored` meter) and can't be reverted | <https://learn.microsoft.com/en-us/azure/backup/backup-create-recovery-services-vault> |
+| PostgreSQL and MySQL Flexible | Local, zone or geo-redundant backup; geo bills twice the backup GB | PostgreSQL and MySQL backup pages above |
+| Cosmos DB | Continuous: the region's redundancy, not selectable. Periodic extra copies: LRS, ZRS or RA-GRS | Retail Prices API meters `Periodic Backup - LRS/ZRS/RA-GRS Data Stored`; continuous backup page above |
+| Archive (Azure Backup) | LRS and GRS; not supported on ZRS vaults | Archive tier page above |
+
 ## Prices (slide 2)
 
-Every price comes from the Azure Retail Prices API (East US 2 and Central US) and the slide shows it less
+Every price comes from the Azure Retail Prices API; slide 2 shows Central US only, less
 the bank's 30% discount (`DISCOUNT` in the script, `--discount` to change it). On the October 2026 bill, SQL
 LTR came out about 38% below list, so 30% is on the conservative side. The exact meter names are in the
 speaker notes of slide 2.

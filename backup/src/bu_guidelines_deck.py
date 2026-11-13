@@ -3,7 +3,7 @@
 
 Slides:
   1. Guidelines: the base PITR / LTR rule per service, and where it changes by the data a system holds
-  2. List price per TB-month in East US 2 and Central US against the vendors' quoted tariffs
+  2. Price per TB-month in Central US by backup redundancy, net of the bank's discount, against the vendors
   3. References: the regulation behind slide 1 (Microsoft and pricing sources are in docs/)
 
 Prices come from the public Azure Retail Prices API (no sign-in, no subscription data). Retention limits and
@@ -46,9 +46,11 @@ METERS = [
     ("vault_lrs", "Backup", "Backup", "Standard LRS Data Stored"),
     ("vault_zrs", "Backup", "Backup", "Standard ZRS Data Stored"),
     ("vault_grs", "Backup", "Backup", "Standard GRS Data Stored"),
+    ("vault_ragrs", "Backup", "Backup", "Standard RA-GRS Data Stored"),
     ("files_vault_lrs", "Backup", "Backup", "Azure Files Vaulted LRS Data Stored"),
     ("files_vault_zrs", "Backup", "Backup", "Azure Files Vaulted ZRS Data Stored"),
     ("files_vault_grs", "Backup", "Backup", "Azure Files Vaulted GRS Data Stored"),
+    ("files_vault_ragrs", "Backup", "Backup", "Azure Files Vaulted RA-GRS Data Stored"),
     ("archive_lrs", "Backup", "Backup", "Archive LRS Data Stored"),
     ("archive_grs", "Backup", "Backup", "Archive GRS Data Stored"),
     ("vm_instance", "Backup", "Backup", "Azure VM Protected Instance"),
@@ -57,9 +59,12 @@ METERS = [
     ("sqldb_pitr_lrs", "SQL Database", "SQL Database Single/Elastic Pool PITR Backup Storage", "LRS Data Stored"),
     ("sqldb_pitr_zrs", "SQL Database", "SQL Database Single/Elastic Pool PITR Backup Storage", "ZRS Data Stored"),
     ("sqldb_pitr_geo", "SQL Database", "SQL Database Single/Elastic Pool PITR Backup Storage", "RA-GRS Data Stored"),
+    ("sqldb_pitr_ragzrs", "SQL Database", "SQL Database Single/Elastic Pool PITR Backup Storage",
+     "RA-GZRS Data Stored"),
     ("sqldb_ltr_lrs", "SQL Database", "SQL Database - LTR Backup Storage", "Backup LRS Data Stored"),
     ("sqldb_ltr_zrs", "SQL Database", "SQL Database - LTR Backup Storage", "Backup ZRS Data Stored"),
     ("sqldb_ltr_geo", "SQL Database", "SQL Database - LTR Backup Storage", "Backup RA-GRS Data Stored"),
+    ("sqldb_ltr_ragzrs", "SQL Database", "SQL Database - LTR Backup Storage", "Backup RA-GZRS Data Stored"),
     ("sqlmi_pitr_lrs", "SQL Managed Instance", "SQL Managed Instance PITR Backup Storage", "LRS Data Stored"),
     ("sqlmi_pitr_zrs", "SQL Managed Instance", "SQL Managed Instance PITR Backup Storage", "ZRS Data Stored"),
     ("sqlmi_pitr_geo", "SQL Managed Instance", "SQL Managed Instance PITR Backup Storage", "RA-GRS Data Stored"),
@@ -75,6 +80,9 @@ METERS = [
      "Backup Storage ZRS Data Stored"),
     ("cosmos_30d", "Azure Cosmos DB", "Azure Cosmos DB - PITR", "Cont 30D Bckp Continuous Backup"),
     ("cosmos_restore", "Azure Cosmos DB", "Azure Cosmos DB - PITR", "Cont 30D Bckp Data Restore"),
+    ("cosmos_periodic_lrs", "Azure Cosmos DB", "Azure Cosmos DB Snapshot", "Periodic Backup - LRS Data Stored"),
+    ("cosmos_periodic_zrs", "Azure Cosmos DB", "Azure Cosmos DB Snapshot", "Periodic Backup - ZRS Data Stored"),
+    ("cosmos_periodic_ragrs", "Azure Cosmos DB", "Azure Cosmos DB Snapshot", "Periodic Backup - RA-GRS Data Stored"),
 ]
 # Protected instance fees are charged per block of source data (Azure Backup pricing page).
 INSTANCE_BLOCK_GB = {"vm_instance": 500, "pg_instance": 250, "cosmos_instance": 500}
@@ -250,7 +258,8 @@ def style_cell(cell, text, size, bold=False, color=GREY, fill=WHITE, align=PP_AL
 
 
 def table(slide, left, top, width, header, rows, widths, row_height=0.3, size=10, header_fill=CARD):
-    """Rows are lists of cell values or of (text, options) pairs; a row of one value is a section row."""
+    """Rows are lists of cell values or of (text, options) pairs; a row of one value is a section row, and an
+    option "span" merges a cell over the next columns."""
     shape = slide.shapes.add_table(len(rows) + 1, len(header), left, top, width, Inches(row_height * (len(rows) + 1)))
     grid = shape.table
     for column, share in enumerate(widths):
@@ -264,12 +273,17 @@ def table(slide, left, top, width, header, rows, widths, row_height=0.3, size=10
             grid.cell(r, 0).merge(grid.cell(r, len(header) - 1))
             style_cell(grid.cell(r, 0), values[0], size, bold=True, color=NAVY, fill=SECTION, align=PP_ALIGN.LEFT)
             continue
-        for c, value in enumerate(values):
+        c = 0
+        for value in values:
             text, options = value if isinstance(value, tuple) else (value, {})
+            span = options.get("span", 1)
+            if span > 1:
+                grid.cell(r, c).merge(grid.cell(r, c + span - 1))
             style_cell(grid.cell(r, c), text, options.get("size", size), bold=options.get("bold", c == 0),
                        color=options.get("color", NAVY if c == 0 else GREY),
                        fill=options.get("fill", LIGHT if r % 2 else WHITE),
                        align=PP_ALIGN.LEFT if c == 0 or options.get("left") else PP_ALIGN.CENTER)
+            c += span
     return grid
 
 
@@ -332,8 +346,8 @@ def slide_guidelines(deck):
 
     note_box(slide, Inches(0.35), Inches(6.08), Inches(12.63), Inches(0.92), [
         [("Redundancia del backup: ", True, NAVY),
-         ("PROD sin réplica en otra región: GRS (copia en Central US, región par). PROD con failover group o geo-réplica: "
-          "ZRS. No productivo: LRS, PITR 7 días y sin LTR.", False, GREY)],
+         ("PROD sin réplica en otra región: geo-redundante, con copia en Central US (RA-GRS en SQL; GRS en bóvedas, "
+          "PostgreSQL y MySQL). PROD con failover group o geo-réplica: ZRS. No productivo: LRS.", False, GREY)],
         [("PITR", True, NAVY),
          (" recupera errores recientes: borrado, corrupción, ransomware.   ", False, GREY),
          ("LTR", True, NAVY), (" cumple la conservación y los errores detectados tarde.", False, GREY)],
@@ -352,7 +366,8 @@ def slide_guidelines(deck):
         "la fija) y qué aplicaciones guardan el registro de operaciones y el LBTR. "
         "Ninguna norma fija un plazo de PITR; PITR 7 días aplica a todo. "
         "Redundancia: una base sin réplica en otra región solo se recupera de un desastre regional con su backup "
-        "geo-redundante (geo-restore), por eso GRS. Con failover group o geo-réplica el DR ya está cubierto y ZRS basta "
+        "geo-redundante (geo-restore), por eso geo: en SQL las opciones geo son RA-GRS y RA-GZRS (mismo precio); en "
+        "las bóvedas es GRS, y activar Cross Region Restore la cobra como RA-GRS y no se puede revertir. Con failover group o geo-réplica el DR ya está cubierto y ZRS basta "
         "(en SQL, ZRS cuesta lo mismo que LRS y la mitad que RA-GRS). Las bóvedas ZRS no admiten Archive. "
         "PostgreSQL solo permite elegir backup geo-redundante al crear el servidor. "
         "Azure Backup cubre VMs y Azure Files (Recovery Services vault). El LTR de PostgreSQL y Cosmos DB va a un "
@@ -364,89 +379,89 @@ def slide_guidelines(deck):
 
 
 def slide_prices(deck, tb, retrieved, discount):
-    east, central = tb["eastus2"], tb["centralus"]
-    regions = (east, central)
+    prices = tb["centralus"]
     small = {"left": True, "size": 8}
     transfer = f"~{GB_PER_TB * 8 / 3600:.1f} h/TB a 1 Gbps".replace(".", ",")
     vault_hours = f"~{GB_PER_TB * 1024 / 30 / 3600:.0f} h/TB"
 
-    def cell(region, key, double=False):
-        if not key:
-            return "–"
-        return amount(region[key] * (2 if double else 1))
-
-    def priced(label, keys, rpo, rto, extra, best=False, geo_double=False):
-        """keys = (LRS, ZRS, GRS) meter keys; geo_double prices GRS as twice the local GB (PostgreSQL, MySQL)."""
-        lrs, zrs, grs = keys
+    def priced(label, keys, rpo, rto, extra, best=False):
+        """keys = meter keys for LRS, ZRS, GRS, RA-GRS and RA-GZRS; None when the option doesn't exist, and
+        ("x2", key) when geo bills twice the local GB."""
         options = {"color": GREEN, "bold": True} if best else {}
-        values = []
-        for region in regions:
-            values += [(cell(region, lrs), options), (cell(region, zrs), options),
-                       (cell(region, grs or (lrs if geo_double else None), double=geo_double and not grs), options)]
-        return [label, *values, (rpo, {"size": 8}), (rto, small), (extra, small)]
+        cells = []
+        for key in keys:
+            if key is None:
+                cells.append(("–", {}))
+            elif isinstance(key, tuple):
+                cells.append((amount(prices[key[1]] * 2) + "*", options))
+            else:
+                cells.append((amount(prices[key]), options))
+        return [label, *cells, (rpo, {"size": 8}), (rto, small), (extra, small)]
 
     def vendor(name, value, tier, rto):
-        options = {"color": RUST, "bold": True}
-        return [(f"{name} · {tier}", {"color": RUST}), *[(amount(value), options)] * 6,
-                ("Según su política", {"size": 8}), (rto, small),
-                ("Confirmar TB protegido o almacenado", small)]
+        return [(f"{name} · {tier}", {"color": RUST}),
+                (f"{amount(value)}  (redundancia según su servicio)", {"color": RUST, "bold": True, "span": 5}),
+                ("Según su política", {"size": 8}), (rto, small), ("Confirmar TB protegido o almacenado", small)]
 
     sql_label = "SQL Database / Managed Instance"
-    sql_equal = all(region[f"sqldb_{kind}"] == region[f"sqlmi_{kind}"] for region in regions
+    sql_equal = all(prices[f"sqldb_{kind}"] == prices[f"sqlmi_{kind}"]
                     for kind in ("pitr_lrs", "pitr_zrs", "pitr_geo", "ltr_lrs", "ltr_zrs", "ltr_geo"))
     if not sql_equal:
         raise SystemExit("SQL Database and SQL Managed Instance backup prices differ; split their rows.")
     rows = [
         ["Corto plazo: recuperación operativa"],
-        priced("Azure Backup · VM (bóveda)", ("vault_lrs", "vault_zrs", "vault_grs"), "24 h (4 h Enhanced)",
-               f"Snapshot: más rápido; bóveda: {vault_hours}", f"+ {usd(east['vm_instance'])} por TB protegido"),
-        priced("Azure Backup · Files (bóveda)", ("files_vault_lrs", "files_vault_zrs", "files_vault_grs"),
+        priced("Azure Backup · VM (bóveda)", ("vault_lrs", "vault_zrs", "vault_grs", "vault_ragrs", None),
+               "24 h (4 h Enhanced)", f"Snapshot: más rápido; bóveda: {vault_hours}",
+               f"+ {usd(prices['vm_instance'])}/TB protegido"),
+        priced("Azure Backup · Files (bóveda)",
+               ("files_vault_lrs", "files_vault_zrs", "files_vault_grs", "files_vault_ragrs", None),
                "24 h (diario)", "Snapshot: archivos al instante", "+ instancia protegida"),
-        priced(f"{sql_label} · PITR", ("sqldb_pitr_lrs", "sqldb_pitr_zrs", "sqldb_pitr_geo"), "5 a 10 min",
-               "Normalmente < 12 h", "Gratis hasta el tamaño de la base"),
-        priced("PostgreSQL / MySQL · PITR", ("pg_pitr", "mysql_pitr_zrs", None), "≤ 5 min", "Minutos a pocas horas",
-               "Gratis hasta el storage; geo x2 GB", geo_double=True),
-        priced("Cosmos DB · continuo 30 días", ("cosmos_30d", None, None), "~100 s", "~30 a 90 min por TB",
-               f"Por región; restaurar {usd(east['cosmos_restore'])}/TB"),
+        priced(f"{sql_label} · PITR", ("sqldb_pitr_lrs", "sqldb_pitr_zrs", None, "sqldb_pitr_geo", "sqldb_pitr_ragzrs"),
+               "5 a 10 min", "Normalmente < 12 h", "Gratis hasta el tamaño de la base"),
+        priced("PostgreSQL / MySQL · PITR", ("pg_pitr", "mysql_pitr_zrs", ("x2", "pg_pitr"), None, None),
+               "≤ 5 min", "Minutos a pocas horas", "Gratis hasta el storage; *geo cobra el doble de GB"),
+        priced("Cosmos DB · continuo 30 días", ("cosmos_30d", "cosmos_30d", None, None, None), "~100 s",
+               "~30 a 90 min por TB", "Por región; la redundancia la fija la región"),
+        priced("Cosmos DB · periódico (copias extra)",
+               ("cosmos_periodic_lrs", "cosmos_periodic_zrs", None, "cosmos_periodic_ragrs", None),
+               "Según intervalo", "Sin cifra publicada", "2 copias gratis; se cobran las extra"),
         *[vendor(name, active, "Active", f"Restaurar + traer: {transfer}") for name, active, _ in VENDORS],
         ["Largo plazo: retención"],
-        priced("Azure Backup · Archive (VM)", ("archive_lrs", None, "archive_grs"), "1 mes",
+        priced("Azure Backup · Archive (VM)", ("archive_lrs", None, "archive_grs", None, None), "1 mes",
                f"Rehidratar ≤ 15 h + {vault_hours}", "Puntos > 6 meses; mínimo 180 días", best=True),
-        priced(f"{sql_label} · LTR", ("sqldb_ltr_lrs", "sqldb_ltr_zrs", "sqldb_ltr_geo"), "1 semana",
-               "Normalmente < 12 h", "Solo backups completos"),
-        priced("PostgreSQL / Cosmos · Backup vault", ("vault_lrs", "vault_zrs", "vault_grs"), "1 sem. / 1 día",
-               "Cosmos ~30 a 90 min/TB; PG: horas",
-               f"+ PG {usd(east['pg_instance'])} · Cosmos {usd(east['cosmos_instance'])}/TB protegido"),
+        priced(f"{sql_label} · LTR", ("sqldb_ltr_lrs", "sqldb_ltr_zrs", None, "sqldb_ltr_geo", "sqldb_ltr_ragzrs"),
+               "1 semana", "Normalmente < 12 h", "Solo backups completos"),
+        priced("PostgreSQL / Cosmos · Backup vault", ("vault_lrs", "vault_zrs", "vault_grs", "vault_ragrs", None),
+               "1 sem. / 1 día", "Cosmos ~30 a 90 min/TB; PG: horas",
+               f"+ PG {usd(prices['pg_instance'])} · Cosmos {usd(prices['cosmos_instance'])}/TB protegido"),
         *[vendor(name, archive, "Archive", f"Su Archive + {transfer}") for name, _, archive in VENDORS],
     ]
-    if any(east[key] != central[key] for key in ("vm_instance", "pg_instance", "cosmos_instance", "cosmos_restore")):
-        print("Note: protected instance or restore fees differ between regions; the slide shows East US 2.")
 
     slide = base_slide(deck, "Costo por TB al mes: Azure vs proveedores",
-                       f"Fuente: Azure Retail Prices API, precio de lista consultado el {retrieved}, menos "
+                       f"Fuente: Azure Retail Prices API (Central US), precio de lista consultado el {retrieved}, menos "
                        f"{discount:.0%} de descuento del banco; 1 TB = 1.024 GB. Proveedores: tarifas cotizadas.")
     text_box(slide, Inches(0.35), Inches(1.0), Inches(12.63), Inches(0.28), [[
         ("Unidad: US$ por TB almacenado al mes", True, NAVY),
-        (f", Azure con {discount:.0%} de descuento del banco; EUS2 = East US 2, CUS = Central US. RTO aproximado con "
-         "cifras de Microsoft Learn.", False, GREY)]], size=9)
+        (f", Central US, Azure con {discount:.0%} de descuento. – = el servicio no ofrece esa redundancia. En bóvedas, "
+         "RA-GRS es GRS con Cross Region Restore.", False, GREY)]], size=9)
     grid = table(slide, Inches(0.35), Inches(1.3), Inches(12.63),
-                 ["Opción", "EUS2\nLRS", "EUS2\nZRS", "EUS2\nGRS", "CUS\nLRS", "CUS\nZRS", "CUS\nGRS", "RPO",
-                  "RTO aprox. (restaurar)", "Qué más se cobra"], rows,
-                 [0.21, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.1, 0.19, 0.2], row_height=0.28, size=8.5)
-    grid.rows[0].height = Inches(0.42)
+                 ["Opción", "LRS", "ZRS", "GRS", "RA-GRS", "RA-GZRS", "RPO", "RTO aprox. (restaurar)",
+                  "Qué más se cobra"], rows,
+                 [0.22, 0.055, 0.055, 0.055, 0.06, 0.065, 0.09, 0.18, 0.22], row_height=0.28, size=8.5)
+    grid.rows[0].height = Inches(0.36)
     for r, values in enumerate(rows, start=1):
         if len(values) == 1:
             grid.rows[r].height = Inches(0.26)
 
-    vault_protected = east["vault_grs"] + east["vm_instance"]
+    vault_protected = prices["vault_grs"] + prices["vm_instance"]
     actives = [active for _, active, _ in VENDORS]
     archives = [archive for _, _, archive in VENDORS]
     takeaways = [
-        ("Largo plazo", f"Archive GRS de Azure: {usd(east['archive_grs'])} por TB, más barato que el Archive de los "
+        ("Largo plazo", f"Archive GRS de Azure: {usd(prices['archive_grs'])} por TB, más barato que el Archive de los "
                         f"proveedores ({' y '.join(amount(value) for value in archives)})."),
-        ("PITR vs LTR", f"El PITR geo cuesta {east['sqldb_pitr_geo'] / east['sqldb_ltr_geo']:.0f} veces el LTR por TB "
-                        f"({amount(east['sqldb_pitr_geo'])} vs {amount(east['sqldb_ltr_geo'])}): PITR corto y LTR "
-                        "para retener."),
+        ("PITR vs LTR", f"En SQL, el PITR RA-GRS cuesta {prices['sqldb_pitr_geo'] / prices['sqldb_ltr_geo']:.0f} veces "
+                        f"el LTR RA-GRS por TB ({amount(prices['sqldb_pitr_geo'])} vs "
+                        f"{amount(prices['sqldb_ltr_geo'])}): PITR corto y LTR para retener."),
         ("Corto plazo", f"Bóveda GRS + instancia VM = {usd(vault_protected)} por TB protegido, "
                         f"{'más barato' if vault_protected < min(actives) else 'frente a'} que los proveedores "
                         f"({amount(min(actives))}–{amount(max(actives))}), que además suman la transferencia "
@@ -454,14 +469,21 @@ def slide_prices(deck, tb, retrieved, discount):
     ]
     for index, (title, text) in enumerate(takeaways):
         left = Inches(0.35 + index * 4.25)
-        rounded(slide, left, Inches(5.95), Inches(4.13), Inches(0.8), CARD)
-        text_box(slide, left + Inches(0.12), Inches(5.95), Inches(3.89), Inches(0.8),
+        rounded(slide, left, Inches(6.0), Inches(4.13), Inches(0.8), CARD)
+        text_box(slide, left + Inches(0.12), Inches(6.0), Inches(3.89), Inches(0.8),
                  [[(title + ": ", True, ORANGE), (text, False, WHITE)]], size=9, anchor=MSO_ANCHOR.MIDDLE)
     meters = "; ".join(f"{meter} ({product})" for _, _, product, meter in METERS)
     slide.notes_slide.notes_text_frame.text = (
-        f"Precios de Azure: lista de la API menos {discount:.0%} de descuento del banco. "
+        f"Precios de Azure en Central US: lista de la API menos {discount:.0%} de descuento del banco. East US 2 cuesta "
+        "lo mismo en bóvedas y entre 14% y 23% menos en bases de datos. "
         "Cada precio por GB-mes se multiplica por 1.024. Las instancias protegidas se cobran por bloque de datos de "
-        "origen: VM US$10 por 500 GB, PostgreSQL US$7,5 por 250 GB, Cosmos DB US$25 por 500 GB. "
+        "origen: VM US$10 por 500 GB, PostgreSQL US$7,5 por 250 GB, Cosmos DB US$25 por 500 GB (precio de lista). "
+        "Redundancia: SQL Database y Managed Instance no tienen GRS simple, solo RA-GRS y RA-GZRS, al mismo precio. "
+        "PostgreSQL Flexible publica un solo medidor de backup (zonal en regiones con zonas) y el backup "
+        "geo-redundante cobra el doble de GB; MySQL Flexible igual. Cosmos DB continuo usa la redundancia de la "
+        "región; el modo periódico permite LRS, ZRS o RA-GRS para las copias extra. Las bóvedas de Azure Backup "
+        "ofrecen LRS, ZRS y GRS; con Cross Region Restore el GRS se cobra como RA-GRS y no se puede revertir. "
+        "Archive no admite bóvedas ZRS. "
         "El PITR de SQL, PostgreSQL y MySQL solo cobra lo que excede el almacenamiento gratis. "
         "Azure Backup guarda incrementales: los TB almacenados son menos que los TB protegidos. "
         f"RTO de VM desde la bóveda: Microsoft considera óptimos 30 MB/s y da el ejemplo de 2 TB en hasta 20 h; a "
