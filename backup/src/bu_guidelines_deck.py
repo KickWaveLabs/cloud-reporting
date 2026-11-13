@@ -38,6 +38,8 @@ GB_PER_TB = 1024
 
 # Vendor tariffs in US$ per TB-month, as quoted. The unit (protected or stored TB) is still to be confirmed.
 VENDORS = [("D3", 56.01, 7.92), ("Opción 1", 49.90, 12.84)]
+# The bank's discount on Azure list prices, applied to every Azure price on slide 2 (vendors quote net prices).
+DISCOUNT = 0.30
 
 # (key, serviceName, productName, meterName) of every meter the deck prices.
 METERS = [
@@ -361,7 +363,7 @@ def slide_guidelines(deck):
         "6 meses; rehidratar toma hasta 15 h, menos que las 48 h hábiles de la SBS.")
 
 
-def slide_prices(deck, tb, retrieved):
+def slide_prices(deck, tb, retrieved, discount):
     east, central = tb["eastus2"], tb["centralus"]
     regions = (east, central)
     small = {"left": True, "size": 8}
@@ -421,12 +423,12 @@ def slide_prices(deck, tb, retrieved):
         print("Note: protected instance or restore fees differ between regions; the slide shows East US 2.")
 
     slide = base_slide(deck, "Costo por TB al mes: Azure vs proveedores",
-                       f"Fuente: Azure Retail Prices API, precio de lista consultado el {retrieved}, sin descuento "
-                       "del banco; 1 TB = 1.024 GB. Proveedores: tarifas cotizadas.")
+                       f"Fuente: Azure Retail Prices API, precio de lista consultado el {retrieved}, menos "
+                       f"{discount:.0%} de descuento del banco; 1 TB = 1.024 GB. Proveedores: tarifas cotizadas.")
     text_box(slide, Inches(0.35), Inches(1.0), Inches(12.63), Inches(0.28), [[
         ("Unidad: US$ por TB almacenado al mes", True, NAVY),
-        (", precio de lista; EUS2 = East US 2, CUS = Central US. RTO aproximado con cifras de Microsoft Learn.",
-         False, GREY)]], size=9)
+        (f", Azure con {discount:.0%} de descuento del banco; EUS2 = East US 2, CUS = Central US. RTO aproximado con "
+         "cifras de Microsoft Learn.", False, GREY)]], size=9)
     grid = table(slide, Inches(0.35), Inches(1.3), Inches(12.63),
                  ["Opción", "EUS2\nLRS", "EUS2\nZRS", "EUS2\nGRS", "CUS\nLRS", "CUS\nZRS", "CUS\nGRS", "RPO",
                   "RTO aprox. (restaurar)", "Qué más se cobra"], rows,
@@ -445,8 +447,10 @@ def slide_prices(deck, tb, retrieved):
         ("PITR vs LTR", f"El PITR geo cuesta {east['sqldb_pitr_geo'] / east['sqldb_ltr_geo']:.0f} veces el LTR por TB "
                         f"({amount(east['sqldb_pitr_geo'])} vs {amount(east['sqldb_ltr_geo'])}): PITR corto y LTR "
                         "para retener."),
-        ("Corto plazo", f"Bóveda GRS + instancia VM = {usd(vault_protected)} por TB protegido vs proveedores "
-                        f"{amount(min(actives))}–{amount(max(actives))}; su RTO suma la transferencia ({transfer})."),
+        ("Corto plazo", f"Bóveda GRS + instancia VM = {usd(vault_protected)} por TB protegido, "
+                        f"{'más barato' if vault_protected < min(actives) else 'frente a'} que los proveedores "
+                        f"({amount(min(actives))}–{amount(max(actives))}), que además suman la transferencia "
+                        f"({transfer})."),
     ]
     for index, (title, text) in enumerate(takeaways):
         left = Inches(0.35 + index * 4.25)
@@ -455,6 +459,7 @@ def slide_prices(deck, tb, retrieved):
                  [[(title + ": ", True, ORANGE), (text, False, WHITE)]], size=9, anchor=MSO_ANCHOR.MIDDLE)
     meters = "; ".join(f"{meter} ({product})" for _, _, product, meter in METERS)
     slide.notes_slide.notes_text_frame.text = (
+        f"Precios de Azure: lista de la API menos {discount:.0%} de descuento del banco. "
         "Cada precio por GB-mes se multiplica por 1.024. Las instancias protegidas se cobran por bloque de datos de "
         "origen: VM US$10 por 500 GB, PostgreSQL US$7,5 por 250 GB, Cosmos DB US$25 por 500 GB. "
         "El PITR de SQL, PostgreSQL y MySQL solo cobra lo que excede el almacenamiento gratis. "
@@ -483,6 +488,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--output", default=None,
                         help="Output .pptx. Default: backup/reports/<date>-lineamientos/lineamientos_backup.pptx")
+    parser.add_argument("--discount", type=float, default=DISCOUNT,
+                        help="Bank discount on Azure list prices, as a fraction (default 0.30)")
     args = parser.parse_args()
     today = date.today()
     output = args.output or os.path.join(TOPIC_DIR, "reports", f"{today:%Y-%m-%d}-lineamientos",
@@ -496,7 +503,8 @@ def main():
     deck = Presentation()
     deck.slide_width, deck.slide_height = Inches(13.333), Inches(7.5)
     slide_guidelines(deck)
-    slide_prices(deck, tb, f"{today:%d-%m-%Y}")
+    net = {region: {key: value * (1 - args.discount) for key, value in values.items()} for region, values in tb.items()}
+    slide_prices(deck, net, f"{today:%d-%m-%Y}", args.discount)
     slide_references(deck)
     os.makedirs(os.path.dirname(os.path.abspath(output)), exist_ok=True)
     deck.save(output)

@@ -13,7 +13,7 @@ Sheets:
   Supuestos        prices per GB and per protected instance, the LTR size factor, scope rules
   Como_se_calcula  the method in plain Spanish
 
-The estimate is list price before the bank's discount. LTR storage = size x copies kept x factor; the factor
+Costs are list price less the bank's discount (30%, editable in Supuestos). LTR storage = size x copies kept x factor; the factor
 (0.43) is the ratio between billed LTR GB and used size x copies measured on the October 2026 bill. Open the
 file in Excel and save it once so the formulas calculate.
 
@@ -134,13 +134,15 @@ def build_assumptions(book, raw, retrieved):
     sheet = book.create_sheet("Supuestos")
     header(sheet, ["Supuesto", "Valor", "Unidad", "Fuente"], [52, 12, 22, 70])
     rows = [("Factor de tamaño LTR", LTR_FACTOR, "GB facturado / (usado x copias)",
-             "Factura real oct-2026 de SQL LTR: 91.492 GB-mes facturados / suma(usado x copias) = 0,43")]
+             "Factura real oct-2026 de SQL LTR: 91.492 GB-mes facturados / suma(usado x copias) = 0,43"),
+            ("Descuento del banco sobre precio de lista", deck.DISCOUNT, "fracción",
+             "Se aplica a todos los costos de Azure de la hoja Bases")]
     for region, label in deck.REGIONS:
         for key, text in (("vm_instance", "Instancia protegida VM, por 500 GB"),
                           ("pg_instance", "Instancia protegida PostgreSQL, por 250 GB"),
                           ("cosmos_instance", "Instancia protegida Cosmos DB, por 500 GB")):
             rows.append((f"{text} ({label})", raw[region][key], "US$ al mes", deck.PRICES_API))
-    rows.append(("Precios consultados", retrieved, "", "Precio de lista, sin descuento del banco"))
+    rows.append(("Precios consultados", retrieved, "", "Precio de lista; el descuento se aplica en las fórmulas"))
     for row in rows:
         sheet.append(list(row))
     sheet.append([])
@@ -149,10 +151,10 @@ def build_assumptions(book, raw, retrieved):
                         ("Libros o KYC que purgan", (4, 12, 10))):
         sheet.append([scope, *rule])
     sheet.append(["No productivo", 0, 0, 0])
-    return "Supuestos!$B$2"
+    return "Supuestos!$B$2", "Supuestos!$B$3"
 
 
-def build_databases(book, rows, prices, raw, factor):
+def build_databases(book, rows, prices, raw, factor, discount):
     sheet = book.create_sheet("Bases")
     header(sheet, ["Servicio", "Base de datos", "Servidor", "Suscripción", "codApp", "Ambiente", "Región",
                    "Redundancia", "Tamaño GB", "Origen del tamaño", "PITR hoy (días)", "LTR hoy",
@@ -179,7 +181,7 @@ def build_databases(book, rows, prices, raw, factor):
         if service == "COSMOS_DB" and row["size"] is None:
             note.append("Completar el tamaño de datos de la cuenta (métrica DataUsage).")
         size = f"I{index}"
-        today = f"=IF(OR({size}=\"\",M{index}=0),0,{size}*M{index}*{factor}*W{index})"
+        today = f"=IF(OR({size}=\"\",M{index}=0),0,{size}*M{index}*{factor}*W{index}*(1-{discount}))"
         prod = f'F{index}="PROD"'
         proposed_copies = (f"=IF(B{index}=\"\",0,IF(A{index}=\"MySQL Flexible\",0,Q{index}+R{index}+S{index}))")
         storage = f"{size}*T{index}*{factor}*W{index}"
@@ -190,7 +192,7 @@ def build_databases(book, rows, prices, raw, factor):
             row["ltr_text"], row["copies"], today if service == "AZURE_SQL_DB" else 0, "Base", 7,
             f"=IF({prod},4,0)", f'=IF({prod},IF(O{index}="Registro de operaciones",60,12),0)',
             f'=IF(AND({prod},OR(O{index}="LBTR",O{index}="Libros o KYC que purgan")),10,0)', proposed_copies,
-            f"=IF(OR({size}=\"\",T{index}=0),0,{storage}+{instance_fee})", f"=U{index}-N{index}",
+            f"=IF(OR({size}=\"\",T{index}=0),0,({storage}+{instance_fee})*(1-{discount}))", f"=U{index}-N{index}",
             unit_price, instance, block, " ".join(note),
         ])
         sheet.cell(row=index, column=15).fill = INPUT_FILL
@@ -205,7 +207,8 @@ def build_databases(book, rows, prices, raw, factor):
 
 def build_summary(book, last_row, rows):
     sheet = book.create_sheet("Resumen", 0)
-    sheet["A1"] = "Costo de LTR de bases de datos: hoy vs lineamiento propuesto (US$ al mes, precio de lista)"
+    sheet["A1"] = ("Costo de LTR de bases de datos: hoy vs lineamiento propuesto (US$ al mes, con el descuento del "
+                   "banco)")
     sheet["A1"].font = Font(bold=True, size=13)
     sheet["A2"] = ("Cambia el Ámbito (columna O de Bases) o el tamaño (columna I) y guarda en Excel: los totales "
                    "se recalculan. PITR de 7 días no se suma: entra en el espacio de backup gratis de cada servicio. "
@@ -273,15 +276,16 @@ def build_method(book):
         "2. Copias LTR: semanas, meses y años que guarda la política. S4 · M12 = 4 + 12 = 16 copias.",
         "3. GB de LTR al mes = tamaño x copias x factor 0,43. El factor sale de la factura real de octubre 2026: lo "
         "facturado por LTR fue el 43% de (tamaño usado x copias), porque los backups van comprimidos.",
-        "4. Costo = GB de LTR x precio por GB de la región y redundancia (Supuestos y columna W).",
+        "4. Costo = GB de LTR x precio de lista por GB de la región y redundancia (columna W) x (1 - descuento del "
+        "banco, 30% en Supuestos).",
         "5. PostgreSQL y Cosmos DB guardan el LTR en un Backup vault: se suma la instancia protegida "
         "(US$7,5 por cada 250 GB en PostgreSQL, US$25 por cada 500 GB en Cosmos DB).",
         "6. PITR de 7 días: no se suma. SQL vCore, PostgreSQL y MySQL dan gratis backup hasta el tamaño de la base; "
         "en SQL DTU el PITR va incluido; Cosmos continuo 7 días no cobra.",
         "7. Ámbito: elige en la columna O. Base = S4 · M12; Registro de operaciones = S4 · M60; LBTR y Libros o KYC "
         "que purgan = S4 · M12 · A10. No productivo = sin LTR.",
-        "8. Todo es precio de lista; el costo real lleva el descuento del banco (para SQL LTR, ~0,0309 US$/GB-mes real "
-        "frente a 0,05 de lista RA-GRS).",
+        "8. El descuento de 30% es el acordado; en la factura de octubre 2026 el SQL LTR salió a ~0,0309 US$/GB-mes "
+        "frente a 0,05 de lista RA-GRS (38%), así que la estimación queda del lado conservador.",
     ]:
         sheet.append([line])
     sheet["A1"].font = Font(bold=True, size=13)
@@ -306,8 +310,8 @@ def main():
 
     book = Workbook()
     book.remove(book.active)
-    factor = build_assumptions(book, raw, f"{today:%d-%m-%Y}")
-    last_row = build_databases(book, rows, prices, raw, factor)
+    factor, discount = build_assumptions(book, raw, f"{today:%d-%m-%Y}")
+    last_row = build_databases(book, rows, prices, raw, factor, discount)
     build_summary(book, last_row, rows)
     build_today(book)
     build_method(book)

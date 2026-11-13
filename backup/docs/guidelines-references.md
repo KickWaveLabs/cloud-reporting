@@ -44,8 +44,10 @@ links are public and were checked in November 2026.
 
 ## Prices (slide 2)
 
-Every price comes from the Azure Retail Prices API, list price, East US 2 and Central US. The exact meter
-names are in the speaker notes of slide 2.
+Every price comes from the Azure Retail Prices API (East US 2 and Central US) and the slide shows it less
+the bank's 30% discount (`DISCOUNT` in the script, `--discount` to change it). On the October 2026 bill, SQL
+LTR came out about 38% below list, so 30% is on the conservative side. The exact meter names are in the
+speaker notes of slide 2.
 
 | Page | Link |
 |---|---|
