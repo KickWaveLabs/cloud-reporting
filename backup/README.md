@@ -66,7 +66,15 @@ script.
 
 ```bash
 python backup/src/bu_guidelines_deck.py   # backup/reports/<date>-lineamientos/lineamientos_backup.pptx
+python backup/src/bu_guidelines_cost.py   # costo_lineamiento_bases.xlsx in the same folder
 ```
+
+`bu_guidelines_cost.py` is a working file, not part of the deck: LTR cost per database today and under the
+proposed rule, with a scope drop-down per database and a sheet that shows how VMs, Files and databases are
+configured today. It reads `results/backup-database/database_inventory.csv` and, when present,
+`database_used_storage.csv`. Without that file it uses the maximum or provisioned size and the cost comes out
+inflated, so run `bu_database_used_storage.py` first. Open the workbook in Excel and save it once so the
+formulas calculate.
 
 Validate slide 1 with Compliance before sending it, using
 [docs/guidelines-compliance-checklist.md](docs/guidelines-compliance-checklist.md). When an answer, a
