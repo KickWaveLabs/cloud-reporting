@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""Build the backup insights workbook and a metrics JSON from the bu_*_inventory.py outputs.
+"""Build the backup insights workbook from the bu_*_inventory.py outputs.
 
 Reads the CSVs written by the four inventory scripts (and, if present, the cost CSVs and
 cached vault cost queries), then writes:
   backup_insights.xlsx  Summary, opportunities, risks, long-term restore risks, minimum
                         policy, assumptions and the detail sheets the formulas count over.
-  metrics.json          Figures used by the slide decks.
 
 Every count in the summary sheets is a COUNTIFS/SUMIFS formula over the detail sheets, and
 every saving is a formula over the assumptions sheet, so the workbook recalculates when an

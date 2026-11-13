@@ -1,18 +1,18 @@
 # Azure backup reporting
 
 Read-only inventory of how the Azure estate is backed up across four fronts (database, storage,
-compute, native), what it costs, and where to save or close gaps. Output: an Excel annex and two
-slide decks.
+compute, native), what it costs, and where to save or close gaps. Output: an Excel annex and the
+backup guidelines deck.
 
 ## Layout
 
 | Path | Content | In git |
 |---|---|---|
 | `src/` | Python scripts (`bu_*.py`) and `requirements.txt` | Yes |
-| `src/decks/` | `build_decks.js` and its `package.json` | Yes |
 | `scripts/` | KQL to check figures by hand: `resource-graph.kql` (Resource Graph Explorer): disk snapshots by source disk and cleanup rule, vaults with orphaned VM backup items | Yes |
 | `results/backup-<front>/` | CSV and JSON written by each inventory script | No |
-| `reports/<date>-backup/` | `backup_insights.xlsx`, `metrics.json`, the two `.pptx` and a README with that run's scope | No |
+| `reports/<date>-backup/` | `backup_insights.xlsx` and a README with that run's scope | No |
+| `reports/<date>-lineamientos/` | `lineamientos_backup.pptx` | No |
 
 Guides:
 
@@ -50,23 +50,24 @@ python backup/src/bu_backup_cost.py --from-date 2026-10-01 --to-date 2026-10-31
 python backup/src/bu_insights_workbook.py --output-dir backup/reports/<date>-backup
 ```
 
-Then:
+Then **open `backup_insights.xlsx` in Excel, save it and close it.** The workbook is written with
+formulas only; Excel computes and stores their values on save. Skipping this step leaves every
+saving, risk count and calibrated cost empty.
 
-1. **Open `backup_insights.xlsx` in Excel, save it and close it.** The workbook is written with
-   formulas only; Excel computes and stores their values on save. Skipping this step leaves every
-   saving, risk count and calibrated cost empty. `bu_deck_metrics.py` stops with an error if it finds
-   the workbook in that state.
-2. `python backup/src/bu_deck_metrics.py --workbook backup/reports/<date>-backup/backup_insights.xlsx --output backup/reports/<date>-backup/metrics.json`
-3. Build the decks with Node 18+:
-   ```bash
-   cd backup/src/decks
-   npm install
-   node build_decks.js ../../reports/<date>-backup/metrics.json ../../reports/<date>-backup
-   ```
+## Guidelines deck
 
-Without Node on the laptop, run step 3 in Azure Cloud Shell: clone the repository there, upload
-`metrics.json`, run the three commands with that path, and download the two `.pptx`. Only
-`metrics.json` leaves the laptop; steps 1 and 2 must still run where Excel is.
+`bu_guidelines_deck.py` builds the three-slide guidelines deck: PITR and LTR rules per service for
+regular and regulated data, list price per TB-month in East US 2 and Central US against the vendors'
+quoted tariffs, and the references. It needs no Azure sign-in and reads no estate data: prices come
+from the public Azure Retail Prices API, and the rules and regulatory articles are fixed in the
+script.
+
+```bash
+python backup/src/bu_guidelines_deck.py   # backup/reports/<date>-lineamientos/lineamientos_backup.pptx
+```
+
+When a regulation or a Microsoft limit changes, edit the slide text and the reference lists in the
+script; the prices refresh on every run.
 
 Runtime on 350 subscriptions: compute ~1.5 min, database ~4 min (includes SQL server locks and backups of deleted databases), native ~1 min, restore <1 min,
 storage ~25 min, cost ~70 min (Cost Management throttles; the cost script caches per subscription and
