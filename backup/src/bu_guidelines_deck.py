@@ -2,7 +2,7 @@
 """Build the backup guidelines deck: retention rules, price per TB against the vendors, and references.
 
 Slides:
-  1. Guidelines: which data the regulation covers, and PITR / LTR per service for regular and regulated data
+  1. Guidelines: the base PITR / LTR rule per service, and where it changes by the data a system holds
   2. List price per TB-month in East US 2 and Central US against the vendors' quoted tariffs
   3. References: regulation, Microsoft Learn and pricing pages, each with its link
 
@@ -312,88 +312,70 @@ def slide_guidelines(deck):
                        "Fuente: Ley 26702; Res. SBS 2660-2015, 504-2021 y 00814-2025; Circular BCRP 0011-2026; "
                        "Microsoft Learn (revisado nov-2026). Plazos legales a validar por Cumplimiento.")
 
-    # Left: which data the regulation covers.
-    left, width = Inches(0.35), Inches(3.95)
-    heading(slide, left, Inches(1.08), width, "Datos regulados: 10 años como mínimo")
-    regulated = [
-        ("Libros y documentos de la empresa", "Ley 26702, art. 183",
-         "Se conservan 10 años; si hay un juicio, mientras dure. Se permiten medios análogos (backup, archivo)."),
-        ("Registro de operaciones", "Res. SBS 2660-2015, arts. 49 y 54",
-         "Operaciones ≥ US$10 mil; múltiples ≥ US$50 mil al mes. Copia al cierre de cada trimestre, "
-         "agrupada por 5 años, entregable en 48 h hábiles."),
-        ("KYC, contrapartes e inusuales", "Res. SBS 2660-2015, arts. 55 y 58",
-         "Debida diligencia de clientes, contrapartes y proveedores, y el análisis de operaciones inusuales."),
-        ("Información del LBTR", "Circular BCRP 0011-2026, Anexo V",
-         "Respaldo diario, prueba de restauración al menos una vez al año, conservación de 10 años."),
-    ]
-    top = Inches(1.45)
-    for name, norm, detail in regulated:
-        rounded(slide, left, top, width, Inches(1.08), LIGHT, radius=0.08)
-        rail = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, left, top, Inches(0.07), Inches(1.08))
-        rail.fill.solid()
-        rail.fill.fore_color.rgb = RUST
-        rail.line.fill.background()
-        text_box(slide, left + Inches(0.15), top + Inches(0.02), width - Inches(0.2), Inches(0.25), name, size=10,
-                 bold=True, color=NAVY)
-        text_box(slide, left + Inches(0.15), top + Inches(0.23), width - Inches(0.2), Inches(0.22), norm, size=8.5,
-                 bold=True, color=RUST)
-        text_box(slide, left + Inches(0.15), top + Inches(0.44), width - Inches(0.2), Inches(0.62), detail, size=9)
-        top += Inches(1.16)
-
-    # Right: retention per service.
-    left, width = Inches(4.5), Inches(8.48)
-    heading(slide, left, Inches(1.08), width, "Retención por servicio (PROD)")
-    base, regulated_fill = {"fill": WHITE}, {"fill": RGBColor(0xFB, 0xEE, 0xE9)}
+    # Left: the rule every production service follows.
+    left, width = Inches(0.35), Inches(4.75)
+    heading(slide, left, Inches(1.08), width, "Lineamiento base: todo PROD")
     rows = [
-        ["Azure Backup\n(VM y Files)", "Diario\n7 diarios", "4 semanales\n12 mensuales",
-         ("Diario\n14 diarios", regulated_fill), ("4 sem · 60 mens · 10 anuales\nVM: Archive desde 6 meses",
-                                                  regulated_fill)],
-        ["Azure SQL Database", "PITR 7 días", "LTR S4 · M12", ("PITR 14 días", regulated_fill),
-         ("LTR S4 · M60 · A10\ninmutable", regulated_fill)],
-        ["Azure SQL Managed\nInstance", "PITR 7 días", "LTR S4 · M12", ("PITR 14 días", regulated_fill),
-         ("LTR S4 · M60 · A10\nsin inmutable: lock y RBAC", regulated_fill)],
-        ["PostgreSQL Flexible", "PITR 7 días", "Backup vault\nS4 · M12", ("PITR 14 días", regulated_fill),
-         ("Backup vault S4 · M60 · A10\nhasta 1 TiB por servidor", regulated_fill)],
-        ["MySQL Flexible", "PITR 7 días", "Sin LTR de Azure\n(en pausa)", ("PITR 14 días", regulated_fill),
-         ("Export mensual a\nBlob inmutable, 10 años", regulated_fill)],
-        ["Cosmos DB", "Continuo 7 días\n(sin costo)", "Backup vault\nS4 · M12", ("Continuo 30 días", regulated_fill),
-         ("Backup vault S4 · M60 · A10", regulated_fill)],
+        ["Azure Backup\n(VM y Files)", "Diario\n7 diarios", "4 semanales\n12 mensuales"],
+        ["Azure SQL Database", "PITR 7 días", "LTR S4 · M12"],
+        ["Azure SQL Managed\nInstance", "PITR 7 días", "LTR S4 · M12"],
+        ["PostgreSQL Flexible", "PITR 7 días", "Backup vault\nS4 · M12"],
+        ["MySQL Flexible", "PITR 7 días", "Sin LTR de Azure\n(en pausa)"],
+        ["Cosmos DB", "Continuo 7 días\n(sin costo)", "Backup vault\nS4 · M12"],
     ]
-    for row in rows:
-        for index in (1, 2):
-            row[index] = (row[index], base)
-    grid = table(slide, left, Inches(1.45), width,
-                 ["Servicio", "Base: corto plazo", "Base: largo plazo", "Regulado: corto plazo",
-                  "Regulado: largo plazo"], rows, [0.19, 0.16, 0.18, 0.19, 0.28], row_height=0.56, size=9.5)
-    style_cell(grid.cell(0, 3), "Regulado: corto plazo", 9.5, bold=True, color=WHITE, fill=RUST)
-    style_cell(grid.cell(0, 4), "Regulado: largo plazo", 9.5, bold=True, color=WHITE, fill=RUST)
+    table(slide, left, Inches(1.45), width, ["Servicio", "Corto plazo", "Largo plazo"], rows, [0.38, 0.29, 0.33],
+          row_height=0.6, size=9.5)
+    text_box(slide, left, Inches(5.72), width, Inches(0.32), [
+        [("S4 · M12", True, NAVY, None), (" = 4 semanales y 12 mensuales.  ", False, GREY, None),
+         ("No productivo: ", True, NAVY, None), ("PITR 7 días, sin LTR.", False, GREY, None)]], size=9)
 
-    text_box(slide, left, Inches(5.47), width, Inches(0.62), [
-        [("Controles para datos regulados: ", True, RUST, None),
-         ("copia geo-redundante a Central US (región par, a más de 500 km); bóveda inmutable con borrado temporal y "
-          "autorización multiusuario; prueba de restauración documentada al menos una vez al año. ", False, GREY, None),
-         ("No productivo: ", True, NAVY, None), ("PITR 7 días, sin LTR.", False, GREY, None)]], size=9.5)
-    note_box(slide, Inches(0.35), Inches(6.18), Inches(12.63), Inches(0.82), [
+    # Right: where the rule changes, by the data the system holds.
+    left, width = Inches(5.3), Inches(7.68)
+    heading(slide, left, Inches(1.08), width, "Cuándo varía: según el dato que guarda el sistema")
+    default, dr = {"fill": RGBColor(0xE4, 0xEA, 0xF4)}, {"fill": LIGHT, "color": GREY}
+    scopes = [
+        [("Cualquier otro dato", default), ("SBS 504-2021, art. 12", default),
+         ("Estrategia de respaldo y pruebas de restauración", default), ("Lineamiento base", default)],
+        ["Libros y documentos contables", "Ley 26702, art. 183",
+         "Conservar el dato 10 años (más si hay juicio)", "Base si la aplicación no purga; si purga, + A10"],
+        ["Registro de operaciones\n(≥ US$10 mil; múltiples ≥ US$50 mil/mes)", "SBS 2660-2015,\narts. 49 y 54",
+         "Copia al cierre de cada trimestre por 5 años (20 copias); entrega en 48 h",
+         "+ copia trimestral a Archive inmutable (o LTR M60); A10 si purga"],
+        ["KYC, contrapartes y operaciones inusuales", "SBS 2660-2015,\narts. 55 y 58",
+         "Conservar el dato 10 años", "Base si la aplicación no purga; si purga, + A10"],
+        ["Sistemas del LBTR", "BCRP 0011-2026,\nAnexo V, sec. VI",
+         "Respaldo diario, prueba anual, respaldos por 10 años", "+ A10 y prueba de restauración anual"],
+        [("Productos pasivos (core)", dr), ("SBS 00814-2025", dr), ("RPO cero y RTO de hasta 3 h", dr),
+         ("Replicación y failover; no es backup", dr)],
+    ]
+    table(slide, left, Inches(1.45), width, ["Ámbito (dato)", "Norma", "Qué exige", "Cómo se aplica en Azure"],
+          scopes, [0.27, 0.17, 0.3, 0.26], row_height=0.6, size=9)
+
+    note_box(slide, Inches(0.35), Inches(6.08), Inches(12.63), Inches(0.9), [
         [("PITR", True, NAVY, None),
-         (" recupera errores recientes: borrado, corrupción, ransomware (RPO de 5 a 10 minutos).   ", False, GREY, None),
+         (" recupera errores recientes: borrado, corrupción, ransomware.   ", False, GREY, None),
          ("LTR", True, NAVY, None), (" cumple la conservación y los errores detectados tarde.", False, GREY, None)],
-        [("RPO cero de productos pasivos (SBS 00814-2025) y recuperación del LBTR en 2 horas (BCRP 0011-2026): ",
-          True, RUST, None),
-         ("se cumplen con replicación y failover, no con backup.", False, GREY, None)]], size=10)
+        [("Recomendado en los ámbitos regulados: ", True, RUST, None),
+         ("copia geo-redundante en Central US (región par), bóveda inmutable y prueba de restauración documentada.",
+          False, GREY, None)]], size=10)
     slide.notes_slide.notes_text_frame.text = (
         "S = semanales, M = mensuales, A = anuales (cantidad de puntos que se guardan). "
-        "M60 cubre la copia trimestral agrupada por 5 años del art. 54 de la Res. SBS 2660-2015; A10 cubre los 10 años "
-        "de la Ley 26702 art. 183, la Res. SBS 2660-2015 arts. 54-55 y la Circular BCRP 0011-2026. "
-        "La obligación es sobre el dato: si el dato regulado ya se conserva 10 años en otro repositorio inmutable, el "
-        "backup de ese sistema puede quedarse en el lineamiento base. "
-        "PITR regulado de 14 días: ninguna norma fija un plazo de PITR, y el PITR cuesta unas 4 veces el LTR por TB "
-        "(slide 2); los S4 del LTR cubren hasta 4 semanas. Cosmos DB no tiene tier de 14 días (solo 7, 30 o 35). "
+        "La regla base aplica a todo PROD; un sistema solo cambia si guarda uno de los datos de la tabla de ámbitos. "
+        "La Ley 26702 art. 183 y la Res. SBS 2660-2015 arts. 55 y 58 obligan a conservar el dato, no el backup: si la "
+        "aplicación no borra esos registros antes de 10 años, el backup se queda en la regla base. "
+        "Solo dos normas piden backups: la Res. SBS 2660-2015 art. 54 (copia al final de cada trimestre, agrupada por "
+        "5 años: 20 copias) y la Circular BCRP 0011-2026 Anexo V sección VI (conservar los respaldos 10 años). "
+        "SQL LTR no tiene frecuencia trimestral: M60 la cubre guardando 60 copias; una copia trimestral a Archive "
+        "inmutable guarda solo las 20 que pide la norma. "
+        "Cumplimiento debe confirmar con qué frecuencia se guardan los respaldos de 10 años del LBTR (la circular no "
+        "la fija) y qué aplicaciones guardan el registro de operaciones y el LBTR. "
+        "Ninguna norma fija un plazo de PITR; PITR 7 días aplica a todo. "
         "Azure Backup cubre VMs y Azure Files (Recovery Services vault). El LTR de PostgreSQL y Cosmos DB va a un "
         "Backup vault de Azure Backup, aparte de la base; su PITR nativo queda en el servicio. "
-        "MySQL Flexible: el LTR con Azure Backup está en pausa por Microsoft; el export (mysqldump) a Blob con "
-        "inmutabilidad lo reemplaza. PostgreSQL LTR: semanal, mensual o anual, máximo 1 TiB, restaura como archivos. "
-        "SQL Managed Instance no admite LTR inmutable. Archive: puntos mensuales y anuales con más de 6 meses; "
-        "rehidratar toma horas, menos que las 48 h hábiles de la SBS.")
+        "MySQL Flexible: el LTR con Azure Backup está en pausa por Microsoft; si un ámbito lo exige, el export "
+        "(mysqldump) a Blob inmutable lo reemplaza. PostgreSQL LTR: semanal, mensual o anual, máximo 1 TiB, restaura "
+        "como archivos. SQL Managed Instance no admite LTR inmutable. Archive: puntos mensuales y anuales con más de "
+        "6 meses; rehidratar toma hasta 15 h, menos que las 48 h hábiles de la SBS.")
 
 
 def slide_prices(deck, tb, retrieved):

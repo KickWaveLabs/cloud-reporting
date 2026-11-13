@@ -25,6 +25,8 @@ Guides:
   or moved to another vendor, and how.
 - [docs/deck-and-prompts.md](docs/deck-and-prompts.md): slide order, the source of each slide and the
   Copilot prompts to build the deck on the corporate laptop.
+- [docs/guidelines-compliance-checklist.md](docs/guidelines-compliance-checklist.md): questions to validate
+  the guidelines deck with Compliance, and what to change in the script for each answer.
 
 The workbook's `Por_ambiente` sheet splits every indicator and the vault and snapshot cost by the
 `environment` tag (PROD, CERT, DESA, untagged), without Databricks, ORCA, ARO or AKS node resources.
@@ -66,8 +68,10 @@ script.
 python backup/src/bu_guidelines_deck.py   # backup/reports/<date>-lineamientos/lineamientos_backup.pptx
 ```
 
-When a regulation or a Microsoft limit changes, edit the slide text and the reference lists in the
-script; the prices refresh on every run.
+Validate slide 1 with Compliance before sending it, using
+[docs/guidelines-compliance-checklist.md](docs/guidelines-compliance-checklist.md). When an answer, a
+regulation or a Microsoft limit changes, edit the slide text and the reference lists in the script; the
+prices refresh on every run.
 
 Runtime on 350 subscriptions: compute ~1.5 min, database ~4 min (includes SQL server locks and backups of deleted databases), native ~1 min, restore <1 min,
 storage ~25 min, cost ~70 min (Cost Management throttles; the cost script caches per subscription and
