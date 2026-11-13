@@ -53,14 +53,25 @@ def lima_month(moment):
     return moment.astimezone(LIMA).strftime("%Y-%m")
 
 
+def last_full_month():
+    """(first day, last day) of the last full calendar month in Lima, as Cost Management's "last month"."""
+    last_day = datetime.now(LIMA).date().replace(day=1) - timedelta(days=1)
+    return last_day.replace(day=1), last_day
+
+
 def metrics_window(start=None, end=None):
-    """Default window: the last 92 full days up to yesterday, inside the 93-day metrics retention.
+    """Default window: the last full calendar month (Lima). With only --end, from the first day of that
+    month; with only --start, up to yesterday. Never older than the 93-day metrics retention.
 
     Returns (start, end) as UTC datetimes; end is exclusive (midnight Lima after the last day).
     """
     today = datetime.now(LIMA).date()
-    last_day = date.fromisoformat(end) if end else today - timedelta(days=1)
-    first_day = date.fromisoformat(start) if start else last_day - timedelta(days=METRICS_RETENTION_DAYS - 2)
+    month_first, month_last = last_full_month()
+    if not start and not end:
+        first_day, last_day = month_first, month_last
+    else:
+        last_day = date.fromisoformat(end) if end else today - timedelta(days=1)
+        first_day = date.fromisoformat(start) if start else last_day.replace(day=1)
     oldest = today - timedelta(days=METRICS_RETENTION_DAYS - 1)
     if first_day < oldest:
         azure.LOG.warning("Start %s is older than the metrics retention; using %s", first_day, oldest)
@@ -68,6 +79,34 @@ def metrics_window(start=None, end=None):
     begin = datetime(first_day.year, first_day.month, first_day.day, tzinfo=LIMA).astimezone(timezone.utc)
     finish = datetime(last_day.year, last_day.month, last_day.day, tzinfo=LIMA) + timedelta(days=1)
     return begin, finish.astimezone(timezone.utc)
+
+
+def cod_app_by_cluster(clusters):
+    """Cluster name (lowercase) -> app code, from aks_clusters.csv rows."""
+    return {row["name"].lower(): row.get("cod_app", "") for row in clusters}
+
+
+def cod_app_by_api(apis):
+    """(APIM, API id) -> app code of the AKS ingress behind the API, from apim_apis.csv rows."""
+    return {(row["apim"], row["api_id"]): row.get("backend_cod_app", "") for row in apis}
+
+
+def with_cod_app(rows, after, code_of):
+    """Copy rows adding a cod_app column right after column `after`; code_of(row) returns the code."""
+    result = []
+    for row in rows:
+        copy = {}
+        for key, value in row.items():
+            copy[key] = value
+            if key == after:
+                copy["cod_app"] = code_of(row)
+        result.append(copy)
+    return result
+
+
+def cluster_cod_app(lookup):
+    """code_of for with_cod_app on rows keyed by `cluster`: inventory code, else the naming convention."""
+    return lambda row: lookup.get(str(row.get("cluster", "")).lower()) or azure.cod_app_from_name(row.get("cluster"))
 
 
 def chunks(start, end, days):

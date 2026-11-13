@@ -11,7 +11,7 @@ and one slide deck built with Copilot.
 |---|---|---|
 | `src/` | Python scripts (`aa_*.py`) and `requirements.txt` | Yes |
 | `docs/` | Cost analysis views, application-level comparison, deck outline and Copilot prompts | Yes |
-| `scripts/` | KQL to check figures by hand: `container-insights.kql` (cluster > Logs), `resource-graph.kql` (Resource Graph Explorer) | Yes |
+| `scripts/` | Queries to check figures by hand: `container-insights.kql` (cluster > Logs), `resource-graph.kql` (Resource Graph Explorer), `grafana.promql` (Grafana > Explore), `deployment-prefixes.pq` (Excel Power Query on the deployment export) | Yes |
 | `results/aa-<source>/` | CSV and JSON written by each script | No |
 | `reports/<date>-aks-aca/` | `aks_aca_comparison.xlsx` and a README with that run's scope | No |
 
@@ -29,12 +29,18 @@ Guides:
   Copilot prompts.
 - [docs/data-guide.md](docs/data-guide.md): what each CSV holds, how to rebuild every deck figure with
   pivot tables, and metrics not collected yet.
+- [docs/adt-019-runtime.md](docs/adt-019-runtime.md): the bank's runtime decision tree (ADT_019: AKS,
+  Container Apps, App Service, Functions or VM), summarised.
+- [docs/fat-001-monolith-vs-distributed.md](docs/fat-001-monolith-vs-distributed.md): the bank's
+  monolith vs distributed decision tree (FAT_001), summarised.
+- [docs/microservice-sizing-criteria.md](docs/microservice-sizing-criteria.md): the bank's seven
+  criteria to size a microservice, summarised.
 
 ## Sources
 
 | Need | Source | Script | Data type |
 |---|---|---|---|
-| Clusters, node pools, add-ons, ACA apps, APIM APIs | Resource Graph; ARM GET `{apim}/apis` | `aa_inventory.py` | Measured |
+| Clusters, node pools, add-ons, ACA apps, App Service plans and sites, APIM APIs | Resource Graph; ARM GET `{apim}/apis` | `aa_inventory.py` | Measured |
 | Node CPU and memory, requests per API | Azure Monitor platform metrics (GET) | `aa_metrics.py` | Measured |
 | Workloads, replicas, CPU/memory per replica | Container Insights (Log Analytics, GET) | `aa_container_insights.py` | Measured |
 | Actual cost of clusters and ACA environments | Cost Management query API, `AmortizedCost` | `aa_cost.py` | Measured |
@@ -75,15 +81,16 @@ session; if `AZURE_CONFIG_DIR` is set in the shell, `az login` and the scripts m
 ### Run
 
 Run in office hours (Lima). Every script writes to `aks-aca/results/aa-<source>/` and overwrites the
-previous run.
+previous run: copy `results/` first to keep it. Without dates, every script reads the last full calendar
+month (Lima), the same as Cost Management's "last month"; the scripts need no date arguments.
 
 ```bash
 python aks-aca/src/aa_inventory.py
 python aks-aca/src/aa_metrics.py --apim-names apigp01,apigp03,apigp05
 python aks-aca/src/aa_container_insights.py
-python aks-aca/src/aa_cost.py --from-date 2026-08-01 --to-date 2026-10-31
+python aks-aca/src/aa_cost.py
 python aks-aca/src/aa_prices.py
-python aks-aca/src/aa_k8s_snapshot.py --snapshot-date 2026-11-10   # optional, needs the exports below
+python aks-aca/src/aa_k8s_snapshot.py --snapshot-date <export-day>   # optional, needs the exports below
 python aks-aca/src/aa_signals.py --apim-names apigp01,apigp03,apigp05   # optional
 python aks-aca/src/aa_workbook.py
 ```
@@ -103,14 +110,15 @@ python aks-aca/src/aa_workbook.py
 2. Pick the APIM fragments from `custom_domains` in `apim_services.csv`: BS is `apibs.lima.bcp.com.pe`
    (`apimeu2apigp01` and `apimeu2apigp05`, which took over BS traffic in October 2026), Core is
    `apicr.lima.bcp.com.pe` (`apimeu2apigp03`). `apimeu2apigp02` is the UX layer and stays out.
-3. `aa_metrics.py` next: platform metrics are kept for 93 days. Default window: the last 92 days up to
-   yesterday (Lima). Windows that return more than 8 MB are split automatically.
-4. After the inventory, `aa_metrics.py`, `aa_container_insights.py` and `aa_cost.py` can run at the
-   same time in separate terminals: they use different APIs and limits.
+3. `aa_metrics.py` next: platform metrics are kept for 93 days, so the last full month is always
+   available. Windows that return more than 8 MB are split automatically.
+4. After the inventory, `aa_metrics.py`, `aa_container_insights.py`, `aa_cost.py` and `aa_prices.py` can
+   run at the same time in separate terminals: they use different APIs and limits. Start `aa_signals.py`
+   when `aa_metrics.py` ends, since both call Azure Monitor metrics.
 5. `aa_container_insights.py` only covers clusters with the add-on, and only as far back as the
    workspace retention; `ci_coverage.csv` shows empty months.
-6. `aa_cost.py` without dates takes the last three full months. Keep the period inside the metrics
-   window: the measured node discount only uses months that both sources cover end to end.
+6. `aa_cost.py` without dates takes the last full month. Keep the same period as the metrics: the
+   measured node discount only uses months that both sources cover end to end.
    It caches each subscription in `results/aa-cost/_cache/<type>_<from>_<to>/`; rerun it to
    resume after throttling (429), delete the folder to fetch again.
 7. `aa_prices.py` needs no sign-in.

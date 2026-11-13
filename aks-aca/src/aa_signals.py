@@ -19,7 +19,7 @@ clusters are not short of capacity (unschedulable pods) and the containers are n
   APIM platform metrics BackendDuration and Duration (milliseconds, Average and Maximum) per API and month,
                         one data point per month (interval FULL), so the average is per request.
 
-Run aa_inventory.py first. The window matches aa_metrics.py: the last 92 days up to yesterday (Lima).
+Run aa_inventory.py first. The window matches aa_metrics.py: the last full month by default (Lima).
 
 Outputs (in --output-dir):
   aks_autoscaler_monthly.csv  cluster x month: hours with data, hours with unschedulable pods (all, office),
@@ -184,8 +184,8 @@ def latency_rows(ctx, service, start, end, top):
 def main():
     parser = azure.build_parser(__doc__.splitlines()[0], aa.results_path("aa-signals"))
     aa.add_common_arguments(parser)
-    parser.add_argument("--start", default=None, help="First day (YYYY-MM-DD, Lima). Default: 92 days before --end")
-    parser.add_argument("--end", default=None, help="Last day (YYYY-MM-DD, Lima). Default: yesterday")
+    parser.add_argument("--start", default=None, help="First day (YYYY-MM-DD, Lima). Default: first day of last month")
+    parser.add_argument("--end", default=None, help="Last day (YYYY-MM-DD, Lima). Default: last day of last month")
     parser.add_argument("--clusters", default="", help="Comma-separated cluster names. Default: clusters in --environments")
     parser.add_argument("--apim-names", default="", help="Comma-separated APIM name fragments. Default: APIM in --environments")
     parser.add_argument("--skip-autoscaler", action="store_true")
@@ -206,6 +206,8 @@ def main():
     services = aa.read_csv(os.path.join(args.inventory, "apim_services.csv"))
     if not clusters and not services:
         raise SystemExit("Run aa_inventory.py first: no aks_clusters.csv or apim_services.csv in " + args.inventory)
+    cluster_codes = aa.cluster_cod_app(aa.cod_app_by_cluster(clusters))
+    api_codes = aa.cod_app_by_api(aa.read_csv(os.path.join(args.inventory, "apim_apis.csv")))
     wanted = {name.strip().lower() for name in args.clusters.split(",") if name.strip()}
     clusters = [row for row in clusters
                 if (wanted and row["name"].lower() in wanted)
@@ -224,7 +226,7 @@ def main():
         for result in ctx.parallel(lambda cluster: autoscaler_rows(ctx, cluster, start, end, args.chunk_days),
                                    clusters, label="aks-autoscaler"):
             autoscaler.extend(result or [])
-        output.csv("aks_autoscaler_monthly.csv", autoscaler)
+        output.csv("aks_autoscaler_monthly.csv", aa.with_cod_app(autoscaler, "cluster", cluster_codes))
 
     client = ci.LogsClient(ctx, args.pause)
     with_ci = [row for row in clusters if row.get("container_insights", "").lower() == "true"]
@@ -247,7 +249,7 @@ def main():
                                      "query": " ".join(OOM_QUERY.replace("{workload}", ci.WORKLOAD_NAME).split()),
                                      "rows": len(ooms), "subscriptions": "", "seconds": "",
                                      "timestamp": azure.iso(azure.utc_now())})
-        output.csv("aks_oomkilled_monthly.csv", ooms)
+        output.csv("aks_oomkilled_monthly.csv", aa.with_cod_app(ooms, "cluster", cluster_codes))
 
     stack, stack_clusters = [], 0
     if not args.skip_stack:
@@ -265,13 +267,14 @@ def main():
                                          "query": " ".join(query.replace("{workload}", ci.WORKLOAD_NAME).split()),
                                          "rows": len(stack), "subscriptions": "", "seconds": "",
                                          "timestamp": azure.iso(azure.utc_now())})
-        output.csv("aks_stack_memory.csv", stack)
+        output.csv("aks_stack_memory.csv", aa.with_cod_app(stack, "cluster", cluster_codes))
 
     latency = []
     if not args.skip_apim:
         for service in services:
             latency.extend(latency_rows(ctx, service, start, end, args.top))
-        output.csv("apim_latency_monthly.csv", latency)
+        output.csv("apim_latency_monthly.csv", aa.with_cod_app(
+            latency, "api_id", lambda row: api_codes.get((row["apim"], row["api_id"]), "")))
 
     output.csv("signals_errors.csv", ctx.errors.rows, azure.ErrorLog.FIELDS)
     summary = {"autoscaler_rows": len(autoscaler), "oom_rows": len(ooms), "oom_clusters_queried": oom_clusters,

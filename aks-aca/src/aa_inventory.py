@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
-"""AKS and Azure Container Apps inventory, plus the API Management APIs that front them.
+"""AKS, Azure Container Apps and App Service inventory, plus the API Management APIs that front them.
 
-Resource Graph for clusters, node pools, Container Apps environments and apps, and APIM services;
-read-only ARM GET for the APIs of each APIM service (name, path and backend host). Tags are only
-used to derive the environment and are not written. Identity fields (aadProfile, identity,
-servicePrincipalProfile, linuxProfile, windowsProfile) are never projected.
+Resource Graph for clusters, node pools, Container Apps environments and apps, App Service plans and
+sites, and APIM services; read-only ARM GET for the APIs of each APIM service (name, path and backend
+host). Tags are only used to derive the environment and the app code and are not written. Identity
+fields (aadProfile, identity, servicePrincipalProfile, linuxProfile, windowsProfile) and app settings
+are never projected.
+
+App code (cod_app): the codApp tag first, then the naming convention (aksveu2coaap01 -> COAA);
+cod_app_evidence says which (TAG, NAME, or ENVIRONMENT for a Container App without either). An API's
+backend_cod_app comes from its AKS ingress host (azingressscrmeu2... -> SCRM).
 
 Outputs (in --output-dir):
   aks_clusters.csv       one row per cluster: version, tier, size, add-ons and the configuration
@@ -13,11 +18,14 @@ Outputs (in --output-dir):
   aca_environments.csv   Container Apps environments: workload profiles, VNet, zone redundancy
   aca_apps.csv           one row per app: environment, profile, min/max replicas, CPU/memory, scale rules
   apim_services.csv      API Management services: SKU, capacity, region, custom domains (to tell BS from Core)
-  apim_apis.csv          APIs of the selected APIM services: id, path, backend host
+  apim_apis.csv          APIs of the selected APIM services: id, path, backend host and its app code
+  app_service_plans.csv  App Service plans: SKU, tier, workers, OS, number of sites
+  app_services.csv       web and function apps: type, container or code, state, plan and its SKU
   inventory_errors.csv
   inventory_summary.json counts by environment, and every query run
 """
 
+import re
 from collections import Counter
 from urllib.parse import urlparse
 
@@ -115,6 +123,21 @@ QUERIES = {
         " hostnameConfigurations = properties.hostnameConfigurations,"
         " additionalLocations = array_length(properties.additionalLocations)"
     ),
+    # App Service plans and sites (web apps and function apps): size and state only, no app settings.
+    "app_service_plans": (
+        "resources"
+        " | where type =~ 'microsoft.web/serverfarms'"
+        " | project id, name, resourceGroup, subscriptionId, location, tags, kind,"
+        " sku = tostring(sku.name), tier = tostring(sku.tier), workers = toint(sku.capacity),"
+        " linux = tostring(properties.reserved), sites = toint(properties.numberOfSites),"
+        " zoneRedundant = tostring(properties.zoneRedundant), status = tostring(properties.status)"
+    ),
+    "app_services": (
+        "resources"
+        " | where type =~ 'microsoft.web/sites'"
+        " | project id, name, resourceGroup, subscriptionId, location, tags, kind,"
+        " state = tostring(properties.state), planId = tolower(tostring(properties.serverFarmId))"
+    ),
 }
 
 
@@ -124,6 +147,7 @@ def text(value):
 
 def base_row(ctx, row):
     environment, evidence = aa.cluster_environment(row, ctx.subscription_name(row["subscriptionId"]))
+    cod_app, cod_app_evidence = azure.resolve_cod_app(row.get("tags"), row["name"])
     return {
         "subscription": ctx.subscription_name(row["subscriptionId"]),
         "subscription_id": row["subscriptionId"],
@@ -132,7 +156,8 @@ def base_row(ctx, row):
         "location": row["location"],
         "environment": environment,
         "environment_evidence": evidence,
-        "cod_app": azure.normalize_cod_app(row.get("tags")),
+        "cod_app": cod_app,
+        "cod_app_evidence": cod_app_evidence,
     }
 
 
@@ -142,6 +167,7 @@ def pool_rows(cluster, pools):
         rows.append({
             "cluster_id": cluster["id"].lower(),
             "cluster": cluster["name"],
+            "cod_app": cluster["cod_app"],
             "environment": cluster["environment"],
             "pool": pool.get("name", ""),
             "mode": pool.get("mode", ""),
@@ -251,9 +277,12 @@ def build_aca(ctx, environments, apps):
         })
         env_rows.append(environment)
     env_names = {row["id"].lower(): row["name"] for row in env_rows}
+    env_codes = {row["id"].lower(): row["cod_app"] for row in env_rows}
     app_rows = []
     for row in apps:
         app = base_row(ctx, row)
+        if not app["cod_app"] and env_codes.get(row.get("environmentId", "")):
+            app.update(cod_app=env_codes[row["environmentId"]], cod_app_evidence="ENVIRONMENT")
         containers = row.get("containers") or []
         app.update({
             "kind": "JOB" if row["type"].lower().endswith("/jobs") else "APP",
@@ -286,6 +315,40 @@ def backend_host(service_url):
     return (parsed.hostname or "").lower()
 
 
+# AKS ingress hosts carry the app code: azingressscrmeu2.lima.bcp.com.pe -> SCRM. A region right after
+# "azingress" (azingresseu2yape...) is not a code.
+INGRESS_COD_APP = re.compile(r"^azingress(?![a-z]{2}\d)([a-z0-9]{4})")
+
+
+def backend_cod_app(host):
+    """App code of the AKS ingress behind an API; empty for other backends (App Service, external)."""
+    match = INGRESS_COD_APP.match(host or "")
+    return match.group(1).upper() if match else ""
+
+
+def build_app_service(ctx, plans, sites):
+    plan_rows = []
+    for row in plans:
+        plan = base_row(ctx, row)
+        plan.update({"sku": row.get("sku", ""), "tier": row.get("tier", ""), "workers": row.get("workers") or 0,
+                     "os": "LINUX" if str(row.get("linux", "")).lower() == "true" else "WINDOWS",
+                     "kind": row.get("kind", ""), "sites": row.get("sites") or 0,
+                     "zone_redundant": row.get("zoneRedundant", ""), "status": row.get("status", ""), "id": row["id"]})
+        plan_rows.append(plan)
+    by_id = {row["id"].lower(): row for row in plan_rows}
+    site_rows = []
+    for row in sites:
+        site = base_row(ctx, row)
+        plan = by_id.get(row.get("planId", ""), {})
+        kind = str(row.get("kind", "")).lower()
+        site.update({"type": "FUNCTION" if "functionapp" in kind else "WEB",
+                     "container": "YES" if "container" in kind else "NO", "kind": row.get("kind", ""),
+                     "state": row.get("state", ""), "plan": plan.get("name", row.get("planId", "").split("/")[-1]),
+                     "plan_sku": plan.get("sku", ""), "id": row["id"]})
+        site_rows.append(site)
+    return plan_rows, site_rows
+
+
 def build_apim(ctx, services, args):
     service_rows = []
     for row in services:
@@ -312,10 +375,11 @@ def build_apim(ctx, services, args):
         rows = []
         for api in apis or []:
             properties = api.get("properties", {})
+            host = backend_host(properties.get("serviceUrl"))
             rows.append({
                 "apim": service["name"], "apim_environment": service["environment"], "api_id": api.get("name", ""),
                 "display_name": properties.get("displayName", ""), "path": properties.get("path", ""),
-                "backend_host": backend_host(properties.get("serviceUrl")),
+                "backend_host": host, "backend_cod_app": backend_cod_app(host),
                 "api_type": properties.get("type", "") or properties.get("apiType", ""),
                 "is_current": text(properties.get("isCurrent")), "apim_id": service["id"],
             })
@@ -354,6 +418,7 @@ def main():
     clusters, pools = build_clusters(ctx, results["aks"], results["extensions"])
     environments, apps = build_aca(ctx, results["aca_environments"], results["aca_apps"])
     services, apis = build_apim(ctx, results["apim"], args)
+    plans, sites = build_app_service(ctx, results["app_service_plans"], results["app_services"])
 
     output = azure.Output(args.output_dir, args.delimiter)
     output.csv("aks_clusters.csv", clusters)
@@ -362,6 +427,8 @@ def main():
     output.csv("aca_apps.csv", apps)
     output.csv("apim_services.csv", services)
     output.csv("apim_apis.csv", apis)
+    output.csv("app_service_plans.csv", plans)
+    output.csv("app_services.csv", sites)
     output.csv("inventory_errors.csv", ctx.errors.rows, azure.ErrorLog.FIELDS)
     output.json("inventory_summary.json", azure.run_metadata(ctx, {
         "aks_by_environment": dict(Counter(row["environment"] for row in clusters)),
@@ -372,6 +439,9 @@ def main():
         "apim_services": [{"name": row["name"], "environment": row["environment"], "sku": row["sku"],
                            "custom_domains": row["custom_domains"]} for row in services],
         "apim_apis": dict(Counter(row["apim"] for row in apis)),
+        "apim_apis_with_cod_app": sum(1 for row in apis if row["backend_cod_app"]),
+        "app_service_sites_by_environment": azure.count_by(sites, "environment", "type"),
+        "cod_app_evidence": dict(Counter(row["cod_app_evidence"] for row in clusters + sites)),
         "excluded_poc_subscriptions": sorted(poc),
     }))
     if args.xlsx:

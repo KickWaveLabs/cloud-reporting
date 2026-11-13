@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Monthly AKS node usage and APIM requests per API, from Azure Monitor platform metrics.
 
-Platform metrics are kept for 93 days, so run this first: the default window is the last 92 days up
-to yesterday. Office hours are Monday to Friday, 8:00 to 20:00 Lima time (UTC-5); holidays count as
-working days.
+Platform metrics are kept for 93 days. The default window is the last full calendar month (Lima), the
+same period as aa_cost.py; --start and --end pick another one inside the retention. Office hours are
+Monday to Friday, 8:00 to 20:00 Lima time (UTC-5); holidays count as working days.
 
 AKS (per cluster and node pool, hourly points):
   node_cpu_usage_millicores, node_memory_working_set_bytes (Average and Maximum), split by node.
@@ -234,8 +234,8 @@ def day_counts(start, end):
 def main():
     parser = azure.build_parser(__doc__.splitlines()[0], aa.results_path("aa-metrics"))
     aa.add_common_arguments(parser)
-    parser.add_argument("--start", default=None, help="First day (YYYY-MM-DD, Lima). Default: 92 days before --end")
-    parser.add_argument("--end", default=None, help="Last day (YYYY-MM-DD, Lima). Default: yesterday")
+    parser.add_argument("--start", default=None, help="First day (YYYY-MM-DD, Lima). Default: first day of last month")
+    parser.add_argument("--end", default=None, help="Last day (YYYY-MM-DD, Lima). Default: last day of last month")
     parser.add_argument("--clusters", default="", help="Comma-separated cluster names. Default: every cluster in --environments")
     parser.add_argument("--apim-names", default="", help="Comma-separated APIM name fragments. Default: APIM in --environments")
     parser.add_argument("--skip-aks", action="store_true")
@@ -254,6 +254,8 @@ def main():
     clusters = aa.read_csv(os.path.join(args.inventory, "aks_clusters.csv"))
     pools = aa.read_csv(os.path.join(args.inventory, "aks_node_pools.csv"))
     services = aa.read_csv(os.path.join(args.inventory, "apim_services.csv"))
+    cluster_codes = aa.cluster_cod_app(aa.cod_app_by_cluster(clusters))
+    api_codes = aa.cod_app_by_api(aa.read_csv(os.path.join(args.inventory, "apim_apis.csv")))
     if not clusters and not services:
         raise SystemExit("Run aa_inventory.py first: no aks_clusters.csv or apim_services.csv in " + args.inventory)
     wanted_clusters = {name.strip().lower() for name in args.clusters.split(",") if name.strip()}
@@ -277,7 +279,7 @@ def main():
         for result in ctx.parallel(lambda cluster: cluster_usage(ctx, cluster, pools_by_cluster[cluster["id"].lower()],
                                                                  start, end, args), clusters, label="aks-metrics"):
             usage_rows.extend(result or [])
-        output.csv("aks_usage_monthly.csv", usage_rows)
+        output.csv("aks_usage_monthly.csv", aa.with_cod_app(usage_rows, "cluster", cluster_codes))
 
     api_rows, profile_rows = [], []
     if not args.skip_apim:
@@ -287,8 +289,9 @@ def main():
             for api_id, state in sorted(apim_requests(ctx, service, start, end, args).items()):
                 api_rows.extend(state.rows(service["name"], api_id, calendar))
                 profile_rows.extend(state.profile_rows(service["name"], api_id, days))
-        output.csv("apim_api_monthly.csv", api_rows)
-        output.csv("apim_hourly_profile.csv", profile_rows)
+        api_code = lambda row: api_codes.get((row["apim"], row["api_id"]), "")
+        output.csv("apim_api_monthly.csv", aa.with_cod_app(api_rows, "api_id", api_code))
+        output.csv("apim_hourly_profile.csv", aa.with_cod_app(profile_rows, "api_id", api_code))
 
     output.csv("metrics_errors.csv", ctx.errors.rows, azure.ErrorLog.FIELDS)
     output.json("metrics_summary.json", azure.run_metadata(ctx, {

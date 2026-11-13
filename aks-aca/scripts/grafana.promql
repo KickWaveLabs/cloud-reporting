@@ -1,0 +1,168 @@
+# =====================================================================================================
+# Grafana queries for AKS (PromQL, Prometheus data source)
+# =====================================================================================================
+# Where to run: Grafana > Explore, Prometheus data source. Paste one query at a time.
+#
+# Rules:
+# - Run query 0 first: it shows which metric families exist. Istio metrics only exist in clusters with
+#   Istio; HPA metrics need kube-state-metrics.
+# - The `cluster` label depends on how Prometheus is set up (external_labels). If it is missing, pick
+#   one cluster's data source and drop `cluster` from the `by (...)` clauses.
+# - Office hours = Monday to Friday, 8:00 to 19:59 Lima time (UTC-5), as in the aks-aca scripts.
+#   Append OFFICE inside a subquery to keep only those steps:
+#     and on() (hour(vector(time() - 18000)) >= 8 < 20) and on() (day_of_week(vector(time() - 18000)) >= 1 <= 5)
+# - Long windows ([30d:5m]) are heavy: try [7d:5m] first, and use Explore's "Instant" query type for
+#   the *_over_time queries so they return one value per series.
+# - Export with Inspect > Data > Download CSV. Office hours do not exclude public holidays.
+# =====================================================================================================
+
+
+# -----------------------------------------------------------------------------------------------------
+# 0. WHAT EXISTS
+# -----------------------------------------------------------------------------------------------------
+
+# Metric families available (one row each, value = number of series).
+count by (__name__) ({__name__=~"istio_requests_total|istio_request_duration_milliseconds_bucket|container_cpu_usage_seconds_total|container_memory_working_set_bytes|kube_pod_container_resource_requests|kube_node_status_allocatable|kube_horizontalpodautoscaler_status_current_replicas|kube_deployment_spec_replicas|nginx_ingress_controller_requests|http_server_requests_seconds_count"})
+
+# Clusters scraped by this data source.
+count by (cluster) (up)
+
+
+# -----------------------------------------------------------------------------------------------------
+# 1. CLUSTER TYPE: application or infrastructure
+# -----------------------------------------------------------------------------------------------------
+
+# Namespaces per cluster, with the number of pods. Shared agents (orcasecurity, tfc-system, istio,
+# monitoring) run everywhere; a cluster whose only other namespaces are tools is infrastructure.
+count by (cluster, namespace) (kube_pod_info)
+
+# Pods with an Istio sidecar (istio-proxy container) vs all pods, per namespace. An ingress gateway alone
+# does not inject sidecars; only namespaces labelled for injection get them.
+count by (cluster, namespace) (kube_pod_container_info{container="istio-proxy", namespace!~"aks-istio.*|istio-.*"})
+count by (cluster, namespace) (kube_pod_info)
+
+# Pods running known infrastructure tools, by image.
+count by (cluster, namespace, image) (kube_pod_container_info{image=~".*(sonarqube|sonar|actions-runner|arc-|awx|ansible|automation-controller|terraform|tfc-agent|atlantis|jenkins|gitlab-runner|argocd|tekton|nexus|harbor).*"})
+
+
+# -----------------------------------------------------------------------------------------------------
+# 2. TRAFFIC: transactions per second (TPS)
+# -----------------------------------------------------------------------------------------------------
+
+# TPS per microservice, as received (Istio, server side).
+sum by (cluster, destination_workload_namespace, destination_workload) (rate(istio_requests_total{reporter="destination"}[5m]))
+
+# TPS per cluster.
+sum by (cluster) (rate(istio_requests_total{reporter="destination"}[5m]))
+
+# Peak TPS per cluster over 30 days (5-minute average, comparable with the APIM peak_5min_requests / 300).
+max_over_time((sum by (cluster) (rate(istio_requests_total{reporter="destination"}[5m])))[30d:5m])
+
+# Clusters without Istio: TPS from the ingress controller, or from Spring Boot / Quarkus (Micrometer).
+sum by (cluster, ingress) (rate(nginx_ingress_controller_requests[5m]))
+sum by (cluster, namespace, job) (rate(http_server_requests_seconds_count[5m]))
+
+
+# -----------------------------------------------------------------------------------------------------
+# 3. VARIABILITY AND IDLE TIME
+# -----------------------------------------------------------------------------------------------------
+
+# Share of 5-minute windows without a single request, per microservice, over 7 days
+# (1 = always idle). Add OFFICE inside the subquery for office hours only.
+avg_over_time((sum by (cluster, destination_workload) (rate(istio_requests_total{reporter="destination"}[5m])) == bool 0)[7d:5m])
+
+# Peak-to-average ratio of TPS per microservice over 7 days. Close to 1 = flat load; high = spikes
+# with valleys, the profile where scaling (and scale to zero) pays off.
+max_over_time((sum by (cluster, destination_workload) (rate(istio_requests_total{reporter="destination"}[5m])))[7d:5m])
+/
+avg_over_time((sum by (cluster, destination_workload) (rate(istio_requests_total{reporter="destination"}[5m])))[7d:5m])
+
+# Coefficient of variation of CPU used per cluster over 7 days (stddev / average).
+stddev_over_time((sum by (cluster) (rate(container_cpu_usage_seconds_total{container!="", container!="POD"}[5m])))[7d:5m])
+/
+avg_over_time((sum by (cluster) (rate(container_cpu_usage_seconds_total{container!="", container!="POD"}[5m])))[7d:5m])
+
+
+# -----------------------------------------------------------------------------------------------------
+# 4. CPU AND MEMORY: used vs reserved vs available
+# -----------------------------------------------------------------------------------------------------
+
+# CPU used / CPU requested, per namespace (1 = uses all it reserves).
+sum by (cluster, namespace) (rate(container_cpu_usage_seconds_total{container!="", container!="POD"}[5m]))
+/
+sum by (cluster, namespace) (kube_pod_container_resource_requests{resource="cpu"})
+
+# Memory used / memory requested, per namespace.
+sum by (cluster, namespace) (container_memory_working_set_bytes{container!="", container!="POD"})
+/
+sum by (cluster, namespace) (kube_pod_container_resource_requests{resource="memory"})
+
+# CPU used / CPU allocatable of the nodes, per cluster (same idea as aks_usage_monthly).
+sum by (cluster) (rate(container_cpu_usage_seconds_total{container!="", container!="POD"}[5m]))
+/
+sum by (cluster) (kube_node_status_allocatable{resource="cpu"})
+
+# Memory used / memory allocatable, per cluster.
+sum by (cluster) (container_memory_working_set_bytes{container!="", container!="POD"})
+/
+sum by (cluster) (kube_node_status_allocatable{resource="memory"})
+
+# p95 of CPU used per cluster in office hours over 30 days (vCPU).
+quantile_over_time(0.95, (sum by (cluster) (rate(container_cpu_usage_seconds_total{container!="", container!="POD"}[5m]))
+  and on() (hour(vector(time() - 18000)) >= 8 < 20) and on() (day_of_week(vector(time() - 18000)) >= 1 <= 5))[30d:5m])
+
+
+# -----------------------------------------------------------------------------------------------------
+# 5. INSTANCES AND AUTOSCALING (HPA)
+# -----------------------------------------------------------------------------------------------------
+
+# HPA limits and current replicas, one row per HPA.
+kube_horizontalpodautoscaler_spec_min_replicas
+kube_horizontalpodautoscaler_spec_max_replicas
+kube_horizontalpodautoscaler_status_current_replicas
+
+# Highest replica count each HPA reached in office hours over 30 days.
+max_over_time((kube_horizontalpodautoscaler_status_current_replicas
+  and on() (hour(vector(time() - 18000)) >= 8 < 20) and on() (day_of_week(vector(time() - 18000)) >= 1 <= 5))[30d:5m])
+
+# Same, as a share of the configured maximum (1 = reached its maximum).
+max_over_time((kube_horizontalpodautoscaler_status_current_replicas
+  and on() (hour(vector(time() - 18000)) >= 8 < 20) and on() (day_of_week(vector(time() - 18000)) >= 1 <= 5))[30d:5m])
+/ on(cluster, namespace, horizontalpodautoscaler)
+kube_horizontalpodautoscaler_spec_max_replicas
+
+# Share of time each HPA sat at its minimum over 30 days (1 = never scaled).
+avg_over_time((kube_horizontalpodautoscaler_status_current_replicas
+  == bool on(cluster, namespace, horizontalpodautoscaler) kube_horizontalpodautoscaler_spec_min_replicas)[30d:5m])
+
+# Share of time each HPA sat at its maximum (close to 1 = the maximum is too low).
+avg_over_time((kube_horizontalpodautoscaler_status_current_replicas
+  == bool on(cluster, namespace, horizontalpodautoscaler) kube_horizontalpodautoscaler_spec_max_replicas)[30d:5m])
+
+# Deployments scaled to 0 (zombie candidates).
+kube_deployment_spec_replicas == 0
+
+
+# -----------------------------------------------------------------------------------------------------
+# 6. LATENCY AND START-UP (to weigh a Container Apps cold start)
+# -----------------------------------------------------------------------------------------------------
+
+# p95 latency per microservice, in ms (Istio, server side).
+histogram_quantile(0.95, sum by (le, cluster, destination_workload) (rate(istio_request_duration_milliseconds_bucket{reporter="destination"}[5m])))
+
+# Seconds from process start to "ready", Spring Boot 2.6+ only. Long start-up = slow cold start.
+application_ready_time_seconds
+
+
+# -----------------------------------------------------------------------------------------------------
+# 7. STABILITY
+# -----------------------------------------------------------------------------------------------------
+
+# Containers whose last restart was an out-of-memory kill.
+kube_pod_container_status_last_terminated_reason{reason="OOMKilled"} == 1
+
+# Restarts per workload in the last day.
+sum by (cluster, namespace, pod) (increase(kube_pod_container_status_restarts_total[1d])) > 0
+
+# Pods waiting to be scheduled, per cluster.
+sum by (cluster) (kube_pod_status_phase{phase="Pending"})

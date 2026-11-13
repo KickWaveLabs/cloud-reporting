@@ -6,17 +6,27 @@ tables, without `aa_workbook.py`.
 
 Office hours everywhere: Monday to Friday, 8:00 to 19:59 Lima time. Holidays count as working days.
 
+Period: by default every script reads the last full calendar month (Lima), the same as Cost
+Management's "last month". `--start`/`--end` (`--from-date`/`--to-date` in `aa_cost.py`) pick another.
+
+App code: every CSV keyed by cluster, cost owner or API carries `cod_app`, the 4-character application
+code. Inventory rows take it from the `codApp` tag, else from the naming convention
+(`aksveu2coaap01` -> `COAA`); `cod_app_evidence` says which (`TAG`, `NAME`, or `ENVIRONMENT` for a
+Container App that inherits its environment's code). For APIs, `cod_app` is the code in the AKS ingress
+host of the backend (`azingressscrmeu2.lima.bcp.com.pe` -> `SCRM`); it is empty for App Service or
+external backends. Pivot by `cod_app` to see one application across clusters, cost and traffic.
+
 ## The scripts at a glance
 
 | Script | Question it answers | Azure source | Output folder |
 |---|---|---|---|
-| `aa_inventory.py` | Which clusters, node pools, Container Apps and APIM APIs exist, and how are they configured? | Resource Graph; ARM GET for the APIM APIs | `aa-inventory` |
+| `aa_inventory.py` | Which clusters, node pools, Container Apps, App Services and APIM APIs exist, and how are they configured? | Resource Graph; ARM GET for the APIM APIs | `aa-inventory` |
 | `aa_metrics.py` | How much CPU and memory do the nodes use? How many requests reach each API, and when? | Azure Monitor platform metrics (cluster and APIM resources) | `aa-metrics` |
 | `aa_container_insights.py` | Which workloads run, with how many replicas, and how much does each replica use and request? | Log Analytics (Container Insights tables) | `aa-container-insights` |
-| `aa_cost.py` | How much did each cluster cost each month? | Cost Management query API, `AmortizedCost` | `aa-cost` |
+| `aa_cost.py` | How much did each cluster and Container Apps environment cost in the month? | Cost Management query API, `AmortizedCost` | `aa-cost` |
 | `aa_prices.py` | What are the list prices of VMs and Container Apps? | Azure Retail Prices API | `aa-prices` |
 | `aa_signals.py` | Are clusters short of capacity or memory? How slow is each API's backend? | Azure Monitor platform metrics; Container Insights | `aa-signals` |
-| `aa_k8s_snapshot.py` | Which microservices exist, with which HPA and BIA, and how did they behave in 3 months? | No Azure call: the platform team's exports joined with Container Insights | `aa-k8s-snapshot` |
+| `aa_k8s_snapshot.py` | Which microservices exist, with which HPA and BIA, and how did they behave in the month? | No Azure call: the platform team's exports joined with Container Insights | `aa-k8s-snapshot` |
 
 ## The CSVs
 
@@ -28,7 +38,9 @@ Office hours everywhere: Monday to Friday, 8:00 to 19:59 Lima time. Holidays cou
 | `aks_node_pools.csv` | A node pool | `cluster`, `mode` (System/User), `vm_size`, `count` (now), `autoscaling`, `min_count`, `max_count`, `zones`, `max_pods` |
 | `aca_environments.csv`, `aca_apps.csv` | A Container Apps environment or app | plan, workload profiles, min and max replicas, CPU and memory per replica |
 | `apim_services.csv` | An APIM instance | `sku`, `capacity`, `custom_domains` (tells BS from Core) |
-| `apim_apis.csv` | An API | `api_id`, `path`, `backend_host` |
+| `apim_apis.csv` | An API | `api_id`, `path`, `backend_host`, `backend_cod_app` (app code of the AKS ingress behind it) |
+| `app_service_plans.csv` | An App Service plan | `sku`, `tier`, `workers`, `os`, `sites` |
+| `app_services.csv` | A web app or function app | `type` (`WEB`/`FUNCTION`), `container` (`YES` = Docker image), `state`, `plan`, `plan_sku` |
 
 The configured node minimum of a cluster is the sum over its pools of `min_count` when `autoscaling`
 is true, else `count`.

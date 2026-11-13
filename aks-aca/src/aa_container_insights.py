@@ -148,8 +148,8 @@ def workload_rows(cluster, rows):
 def main():
     parser = azure.build_parser(__doc__.splitlines()[0], aa.results_path("aa-container-insights"))
     aa.add_common_arguments(parser)
-    parser.add_argument("--start", default=None, help="First day (YYYY-MM-DD, Lima). Default: 92 days before --end")
-    parser.add_argument("--end", default=None, help="Last day (YYYY-MM-DD, Lima). Default: yesterday")
+    parser.add_argument("--start", default=None, help="First day (YYYY-MM-DD, Lima). Default: first day of last month")
+    parser.add_argument("--end", default=None, help="Last day (YYYY-MM-DD, Lima). Default: last day of last month")
     parser.add_argument("--clusters", default="", help="Comma-separated cluster names. Default: clusters in --environments")
     parser.add_argument("--pause", type=float, default=2.0, help="Seconds between Log Analytics queries")
     args = parser.parse_args()
@@ -160,6 +160,7 @@ def main():
     clusters = aa.read_csv(os.path.join(args.inventory, "aks_clusters.csv"))
     if not clusters:
         raise SystemExit("Run aa_inventory.py first: no aks_clusters.csv in " + args.inventory)
+    cluster_codes = aa.cluster_cod_app(aa.cod_app_by_cluster(clusters))
     wanted = {name.strip().lower() for name in args.clusters.split(",") if name.strip()}
     clusters = [row for row in clusters
                 if (wanted and row["name"].lower() in wanted)
@@ -199,9 +200,9 @@ def main():
                                  "query": " ".join(SERVICES_QUERY.split()), "rows": len(services),
                                  "subscriptions": "", "seconds": "", "timestamp": azure.iso(azure.utc_now())})
     output = azure.Output(args.output_dir, args.delimiter)
-    output.csv("aks_workloads_monthly.csv", workloads)
-    output.csv("aks_services.csv", services)
-    output.csv("ci_coverage.csv", coverage)
+    output.csv("aks_workloads_monthly.csv", aa.with_cod_app(workloads, "cluster", cluster_codes))
+    output.csv("aks_services.csv", aa.with_cod_app(services, "cluster", cluster_codes))
+    output.csv("ci_coverage.csv", aa.with_cod_app(coverage, "cluster", cluster_codes))
     output.csv("ci_errors.csv", ctx.errors.rows, azure.ErrorLog.FIELDS)
     output.json("ci_summary.json", azure.run_metadata(ctx, {
         "window_utc": {"from": aa.iso_z(start), "to": aa.iso_z(end)},

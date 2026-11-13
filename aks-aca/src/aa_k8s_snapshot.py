@@ -432,10 +432,12 @@ def main():
             row.pop("trend_max_export", None)
             row.pop("environment_export", None)
 
+    cluster_codes = aa.cluster_cod_app({name: row.get("cod_app", "") for name, row in inventory.items()})
     output = azure.Output(args.output_dir, args.delimiter)
-    output.csv("hpa_snapshot.csv", hpas)
-    output.csv("deployment_snapshot.csv", deployments)
-    output.csv("cluster_snapshot.csv", cluster_rows(deployments, hpas, inventory, statefulsets_by_cluster(workloads)))
+    output.csv("hpa_snapshot.csv", aa.with_cod_app(hpas, "cluster", cluster_codes))
+    output.csv("deployment_snapshot.csv", aa.with_cod_app(deployments, "cluster", cluster_codes))
+    output.csv("cluster_snapshot.csv", aa.with_cod_app(
+        cluster_rows(deployments, hpas, inventory, statefulsets_by_cluster(workloads)), "cluster", cluster_codes))
     output.csv("capability_domains.csv", capability_rows(deployments))
     output.json("snapshot_summary.json", {
         "generated_at": azure.iso(azure.utc_now()),

@@ -540,6 +540,25 @@ def normalize_cod_app(tags):
     return get_tag(tags, *COD_APP_TAG_KEYS).upper()
 
 
+# Naming convention: type + region (eu2, cu1, ac1...) + 4-character app code + P/C/D + digits.
+NAME_COD_APP = re.compile(r"[a-z]{2}\d([a-z0-9]{4})[pcd]\d+$")
+
+
+def cod_app_from_name(name):
+    """App code from the naming convention (aksveu2coaap01 -> COAA); empty when the name does not follow it."""
+    match = NAME_COD_APP.search(str(name or "").lower())
+    return match.group(1).upper() if match else ""
+
+
+def resolve_cod_app(tags, name):
+    """Return (code, evidence): the codApp tag first, then the naming convention."""
+    code = normalize_cod_app(tags)
+    if code:
+        return code, "TAG"
+    code = cod_app_from_name(name)
+    return (code, "NAME") if code else ("", "")
+
+
 NAME_SUFFIX_ENVIRONMENTS = {"p": "PROD", "c": "CERT", "d": "DESA"}
 
 

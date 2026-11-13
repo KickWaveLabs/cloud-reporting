@@ -20,17 +20,14 @@ Outputs (in --output-dir):
 import json
 import os
 import time
-from datetime import date, timedelta
 
 import aa_common as aa
 
 azure = aa.azure
 
 
-def last_three_months():
-    first = date.today().replace(day=1)
-    end = first - timedelta(days=1)
-    start = (first - timedelta(days=85)).replace(day=1)
+def last_month():
+    start, end = aa.last_full_month()
     return start.isoformat(), end.isoformat()
 
 
@@ -55,14 +52,16 @@ def owners(clusters, environments, apps):
     """Map resource groups and resource ids to the cluster or environment that owns their cost."""
     by_group, by_resource = {}, {}
     for row in clusters:
-        owner = {"owner_type": "AKS", "owner": row["name"], "environment": row["environment"],
+        owner = {"owner_type": "AKS", "owner": row["name"], "cod_app": row.get("cod_app", ""),
+                 "environment": row["environment"],
                  "location": row["location"], "owner_id": row["id"].lower()}
         by_resource[row["id"].lower()] = owner
         if row.get("node_resource_group"):
             by_group[(row["subscription_id"].lower(), row["node_resource_group"].lower())] = owner
     env_owner = {}
     for row in environments:
-        owner = {"owner_type": "ACA", "owner": row["name"], "environment": row["environment"],
+        owner = {"owner_type": "ACA", "owner": row["name"], "cod_app": row.get("cod_app", ""),
+                 "environment": row["environment"],
                  "location": row["location"], "owner_id": row["id"].lower()}
         env_owner[row["name"].lower()] = owner
         by_resource[row["id"].lower()] = owner
@@ -79,7 +78,7 @@ def main():
     parser = azure.build_parser(__doc__.splitlines()[0], aa.results_path("aa-cost"))
     aa.add_common_arguments(parser)
     parser.set_defaults(environments="ALL")
-    parser.add_argument("--from-date", default=None, help="Start date (YYYY-MM-DD). Default: first day, three months ago")
+    parser.add_argument("--from-date", default=None, help="Start date (YYYY-MM-DD). Default: first day of last month")
     parser.add_argument("--to-date", default=None, help="End date (YYYY-MM-DD). Default: last day of last month")
     parser.add_argument("--pause", type=float, default=2.0, help="Seconds each worker waits between queries")
     parser.add_argument("--cost-workers", type=int, default=2, help="Concurrent Cost Management queries")
@@ -87,7 +86,7 @@ def main():
                         help="AmortizedCost spreads reservations and savings plans over the resources that use them")
     args = parser.parse_args()
     azure.setup_logging(args.verbose)
-    start, end = last_three_months()
+    start, end = last_month()
     start, end = args.from_date or start, args.to_date or end
     environments = aa.wanted_environments(args)
 
