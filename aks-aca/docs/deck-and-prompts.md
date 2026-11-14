@@ -12,13 +12,34 @@ Two decks, as the manager asked:
 Both follow [presenting-findings.md](../../docs/presenting-findings.md): evidence first, then the
 comparison and the decision.
 
-## Current plan (2026-11-11)
+## Plan update (2026-11-13)
+
+Feedback on the first presentation: the forum wants a corporate deck, readable by a non-technical audience
+that knows TPS, CPU, RAM and time to market. The technical deck stays as backup for architects.
+
+- Data: one month (the last full month, October 2026) for every Azure source; configuration from the
+  platform team's exports of the export day.
+- Only APPLICATION clusters count (categories in [data-guide.md](data-guide.md)); infrastructure clusters are
+  mentioned as excluded and clusters without applications are a finding of their own.
+- Pattern 3 is dropped. Pattern 4 shows "does not scale" as a total, split into "stays at its minimum"
+  (load) and "min = max" (configuration), plus the time without scaling.
+- Corporate deck (slides 1–5 by the user; slide 6, effort and migration estimate, by the manager's team):
+  1. Context: workloads and the runtimes for each (no monolith vs microservice debate).
+  2. The runtime estate today: AKS, Container Apps, App Service.
+  3. Criteria to sort the estate (ADT_019 tree; see [adt-019-runtime.md](adt-019-runtime.md)), each with the
+     PROD figure: TPS, hours with traffic, microservices, size per instance, scales or not, batch, cold start.
+  4. Theoretical distribution after applying the criteria.
+  5. Cost optimization: logic and rates, monthly and annual, with and without discount; growth scenario;
+     operating effort as a non-monetary benefit.
+- Traffic classes (office, extended, 24x7) stay in the technical deck until another architect validates them.
+
+## Plan (2026-11-11)
 
 The two decks became one presentation in four sections. Status:
 
 | Section | Slide | Status | Source |
 |---|---|---|---|
-| Diagnosis | Summary | Done | Resumen; Medido_AKS |
+| Diagnosis | Summary | Done | Summary; Measured_AKS |
 | | Pattern 1: microservices per layer, repeated capabilities | Done | deployment_snapshot, capability_domains |
 | | Pattern 2: 99 of 132 clusters with 15 microservices or fewer | Done | cluster_snapshot + cost_by_resource (last full month) |
 | | Pattern 3: apps on system nodes, clusters without apps | New, optional | cluster_snapshot + aks_node_pools + aks_workloads_monthly |
@@ -26,11 +47,11 @@ The two decks became one presentation in four sections. Status:
 | | BIA, information only (slide 5 of the current deck) | Done | cluster_snapshot.bia + cost_by_resource |
 | | Capacity health: low use is not a lack of capacity (hours with unschedulable pods, OOM kills, CPU vs memory) | Next | aks_autoscaler_monthly, aks_oomkilled_monthly, aks_usage_monthly |
 | | Fragmented configuration and clusters under the 4-node production minimum | Later | aks_clusters, aks_node_pools; LBS level from the guidelines team |
-| Technical criteria | Criteria AKS vs ACA with the PROD figure, including backend latency vs a cold start | Next | Criterios_tecnicos; each figure from its CSV; apim_latency_monthly |
-| | Cost under the ADT_019 rules | Next | Supuestos, Modelo, Equilibrio (estimate, prices.csv) |
+| Technical criteria | Criteria AKS vs ACA with the PROD figure, including backend latency vs a cold start | Next | Technical_criteria; each figure from its CSV; apim_latency_monthly |
+| | Cost under the ADT_019 rules | Next | Assumptions, Model, Break_even (estimate, prices.csv) |
 | Strategic front | Security, resilience, multicloud and key message | If time allows | app-level-comparison.md |
-| Proposal | Per-cluster comparison, traffic profile, HPA minimums, quick wins | Last | ACA_por_cluster, Perfil_trafico, hpa_snapshot |
-| Annex | Sources and method | Later | Fuentes, Consultas |
+| Proposal | Per-cluster comparison, traffic profile, HPA minimums, quick wins | Last | ACA_by_cluster, Traffic_profile, hpa_snapshot |
+| Annex | Sources and method | Later | Sources, Queries |
 
 The deck has no cover slide: it opens with the summary. Every diagnosis figure can be rebuilt with a pivot table on the CSV
 named in the Source column; the cost slide is a model estimate and says so.
@@ -54,19 +75,19 @@ labelled as information only.
 
 | # | Slide title (conclusion) | Content | Source |
 |---|---|---|---|
-| 1 | AKS PROD combina alto costo fijo con baja utilización de CPU | Eight figures (clusters, monthly cost, average per cluster, clusters with 4 nodes or fewer, CPU and memory in office hours, clusters with 15 microservices or fewer, HPAs at their minimum); use table (average, p95, maximum); minimum AKS cluster vs one microservice on ACA | Resumen; Medido_AKS; Patrones |
-| 2 | Patrón 1: [N] microservicios; capacidades repetidas en hasta [N] dominios | Bars by layer; table of repeated capabilities | Patrones §1 |
-| 3 | Patrón 2: [N] de [N] clusters tienen 15 microservicios o menos | Column chart of clusters by microservices; cost of those with 3 or fewer; clusters missing from the export as a note | Patrones §2 |
-| 3b | Patrón 3 (new, optional): [N] clusters corren sus apps en los nodos de sistema | Clusters without a user pool, without apps, under the 4-node minimum, with one system node; list of clusters without a user pool | Patrones §3 |
-| 4 | Patrón 4: [X]% de los HPA se queda en su mínimo durante 3 meses | Replicas histogram; HPA behaviour over 3 months of Container Insights; inflated minimums | Patrones §4 |
-| 5 | Anexo BIA: la criticidad prioriza; la decisión de plataforma sigue siendo técnica | Monthly cost by BIA level; share of MUY ALTA; clusters with high BIA, without BIA, total; how to use BIA. Information only | Resumen (BIA table); cluster_snapshot.bia |
-| 6 | La configuración se fragmenta y mantenerla cuesta horas-hombre: [N] clusters difieren en [M] propiedades, [Z]% no cumple la LBS | Top differing properties; LBS level from the guidelines team; upgrades manual in [N] PROD (qualitative, no amounts) | Config_AKS; Criterios_tecnicos; guidelines team |
-| 7 | Cómo decidimos si un AKS puede pasar a Container Apps | The seven decision rules of ADT_019 with today's PROD figure next to each; the full criteria table (what favours each platform, limits, sources) stays in the workbook | Criterios_tecnicos; Resumen (BIA) |
-| 8 | Con los mínimos de AKS del banco, ACA cuesta menos en infraestructura; AKS gana si el cluster se comparte o el servicio está activo más del ~60% del tiempo | ADT_019 model (1 replica 8–20, scale to zero); line chart AKS vs ACA | Supuestos; Modelo; Equilibrio |
-| 9 | Peticiones y umbrales del ADT_019 no cambian la decisión hasta [X] M peticiones/mes | Heat map microservices × requests; table rule, threshold, model result | Mapa; Equilibrio |
-| 10 | Hoja de ruta y decisiones | Quick wins (consolidate small clusters, right-size HPA minimums and requests), ACA where it wins, guidelines baseline; approvals with owner and date | Patrones; Config_K8s; ACA_por_cluster |
+| 1 | AKS PROD combina alto costo fijo con baja utilización de CPU | Eight figures (clusters, monthly cost, average per cluster, clusters with 4 nodes or fewer, CPU and memory in office hours, clusters with 15 microservices or fewer, HPAs at their minimum); use table (average, p95, maximum); minimum AKS cluster vs one microservice on ACA | Summary; Measured_AKS; Patterns |
+| 2 | Patrón 1: [N] microservicios; capacidades repetidas en hasta [N] dominios | Bars by layer; table of repeated capabilities | Patterns §1 |
+| 3 | Patrón 2: [N] de [N] clusters tienen 15 microservicios o menos | Column chart of clusters by microservices; cost of those with 3 or fewer; clusters missing from the export as a note | Patterns §2 |
+| 3b | Patrón 3 (new, optional): [N] clusters corren sus apps en los nodos de sistema | Clusters without a user pool, without apps, under the 4-node minimum, with one system node; list of clusters without a user pool | Patterns §3 |
+| 4 | Patrón 4: [X]% de los HPA se queda en su mínimo durante 3 meses | Replicas histogram; HPA behaviour over 3 months of Container Insights; inflated minimums | Patterns §4 |
+| 5 | Anexo BIA: la criticidad prioriza; la decisión de plataforma sigue siendo técnica | Monthly cost by BIA level; share of MUY ALTA; clusters with high BIA, without BIA, total; how to use BIA. Information only | Summary (BIA table); cluster_snapshot.bia |
+| 6 | La configuración se fragmenta y mantenerla cuesta horas-hombre: [N] clusters difieren en [M] propiedades, [Z]% no cumple la LBS | Top differing properties; LBS level from the guidelines team; upgrades manual in [N] PROD (qualitative, no amounts) | Config_AKS; Technical_criteria; guidelines team |
+| 7 | Cómo decidimos si un AKS puede pasar a Container Apps | The seven decision rules of ADT_019 with today's PROD figure next to each; the full criteria table (what favours each platform, limits, sources) stays in the workbook | Technical_criteria; Summary (BIA) |
+| 8 | Con los mínimos de AKS del banco, ACA cuesta menos en infraestructura; AKS gana si el cluster se comparte o el servicio está activo más del ~60% del tiempo | ADT_019 model (1 replica 8–20, scale to zero); line chart AKS vs ACA | Assumptions; Model; Break_even |
+| 9 | Peticiones y umbrales del ADT_019 no cambian la decisión hasta [X] M peticiones/mes | Heat map microservices × requests; table rule, threshold, model result | Map; Break_even |
+| 10 | Hoja de ruta y decisiones | Quick wins (consolidate small clusters, right-size HPA minimums and requests), ACA where it wins, guidelines baseline; approvals with owner and date | Patterns; Config_K8s; ACA_by_cluster |
 
-Annex, outside the count: where each figure comes from (Fuentes, Consultas, Supuestos). The manager
+Annex, outside the count: where each figure comes from (Sources, Queries, Assumptions). The manager
 asked to keep BIA out of the technical argument: slide 5 says it is information only, and it can move to
 the annex without changing anything else.
 
@@ -92,11 +113,11 @@ Usa SOLO las cifras del archivo adjunto aks_aca_comparison.xlsx. Si una cifra no
 No redondees de forma distinta a la del archivo y no calcules cifras nuevas salvo que te lo pida.
 
 Arma un resumen en cuatro secciones, con una tabla por sección (indicador, valor, tipo de dato, hoja y fila de origen):
-A. Costo actual: hojas Resumen y Medido_AKS (costo mensual por cluster PROD, total, nodos, tamaños de VM).
-B. Insights PROD: Medido_AKS (vCPU asignables vs usados en oficina, pico), Workloads (workloads por cluster) y Config_AKS (propiedades con más clusters distintos al valor más frecuente).
-C. Comparación: Supuestos (valores de la columna C), Modelo (costo con 1, 5, 10, 15 y 20 microservicios), Equilibrio (puntos de equilibrio y tabla de umbrales del ADT_019) y Mapa (fila de 15 microservicios).
-D. Supuestos que más afectan el resultado: lista los de la hoja Supuestos marcados como supuesto y su valor.
-Marca cada cifra como medida, derivada, estimada o dato del proveedor según la hoja Fuentes.
+A. Costo actual: hojas Summary y Measured_AKS (costo mensual por cluster PROD, total, nodos, tamaños de VM).
+B. Insights PROD: Measured_AKS (vCPU asignables vs usados en oficina, pico), Workloads (workloads por cluster) y Config_AKS (propiedades con más clusters distintos al valor más frecuente).
+C. Comparación: Assumptions (valores de la columna C), Model (costo con 1, 5, 10, 15 y 20 microservicios), Break_even (puntos de equilibrio y tabla de umbrales del ADT_019) y Map (fila de 15 microservicios).
+D. Supuestos que más afectan el resultado: lista los de la hoja Assumptions marcados como supuesto y su valor.
+Marca cada cifra como medida, derivada, estimada o dato del proveedor según la hoja Sources.
 ```
 
 Save the answer as a Word document (for example `brief_aks_aca.docx`) after checking it.
@@ -119,16 +140,16 @@ Break-even:
 
 ```text
 Agrega una diapositiva titulada "ACA es más barato hasta [N] microservicios; desde ahí conviene AKS".
-Inserta como imagen el gráfico de la hoja Modelo (lo pego yo) y a la derecha tres cifras: costo ACA por microservicio al mes,
+Inserta como imagen el gráfico de la hoja Model (lo pego yo) y a la derecha tres cifras: costo ACA por microservicio al mes,
 costo del cluster AKS mínimo a precio de lista y con el descuento medido. Pie de página: "Estimado con precios de lista de Azure
-(Retail Prices API) y supuestos de la hoja Supuestos; costo AKS efectivo derivado de Cost Management, ago-oct 2026".
+(Retail Prices API) y supuestos de la hoja Assumptions; costo AKS efectivo derivado de Cost Management, ago-oct 2026".
 ```
 
 ADT thresholds:
 
 ```text
 Agrega una diapositiva con una tabla de cuatro filas: regla del ADT_019, umbral del ADT, resultado del modelo y lectura,
-copiando la tabla de la hoja Equilibrio. Título: "[Lectura de la fila de 15 microservicios]".
+copiando la tabla de la hoja Break_even. Título: "[Lectura de la fila de 15 microservicios]".
 Nota del orador: los demás criterios del ADT (4 vCPU / 8 GiB por réplica, batch, cold start, ambiente dedicado) no son de costo
 y pueden descartar Container Apps aunque sea más barato.
 ```

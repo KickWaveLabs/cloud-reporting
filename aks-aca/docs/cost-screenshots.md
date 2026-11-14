@@ -29,7 +29,7 @@ Steps for view 1:
    date range Aug 1 – Oct 31, 2026.
 3. Add filter Resource group name: the cluster RG and its `MC_` RG.
 4. Group by Meter category. Chart: Column (stacked).
-5. Check: the total for each month equals `Medido_AKS` column "Costo mensual" × months for that
+5. Check: the total for each month equals `Measured_AKS` column "Monthly cost (USD)" × months for that
    cluster (the workbook shows the monthly average).
 
 ## Before taking the screenshots

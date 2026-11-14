@@ -32,6 +32,86 @@ SYSTEM_NAMESPACES = ("kube-system", "kube-public", "kube-node-lease", "gatekeepe
                      "tigera-operator", "aks-command", "app-routing-system", "dataprotection-microsoft")
 
 
+# ---------------------------------------------------------------------------
+# What counts as an application: one definition for every script
+# ---------------------------------------------------------------------------
+# Namespaces of the platform and of agents that run in every cluster (security, Terraform, GitOps).
+PLATFORM_NAMESPACES = set(SYSTEM_NAMESPACES) | {"orcasecurity", "tfc-system", "flux-system", "argocd", "cert-manager",
+                                                "keda", "monitoring", "default", "ibm-finops-agent", "reflector",
+                                                "synthetic-monitoring", "operators", "prometheus", "thanos"}
+PLATFORM_NAMESPACE_PREFIXES = ("aks-istio", "istio-", "calico", "tigera", "gatekeeper")
+# Workloads that are tools, not microservices, even in an application namespace (name prefix).
+TOOL_WORKLOAD_PREFIXES = ("pod-restart-cronjob", "agic-ingress", "otel-", "opentelemetry", "shgw", "chaos",
+                          "arc-", "actions-runner", "github-runner", "tfc-agent", "sonarqube", "demo-sonarqube",
+                          "connectivity-toolbox", "grafana", "alloy", "elasticsearch", "kibana", "logstash", "memcached",
+                          "envoy-rw", "apollo-router")
+# Applications whose clusters only run infrastructure tools: excluded from every application figure.
+INFRASTRUCTURE_APPS = {
+    "COAA": "GitHub Actions runners", "VSDP": "GitHub Actions runners", "HTFC": "Terraform Cloud agents",
+    "INCT": "SonarQube", "O11Y": "Observability (Grafana, Alloy)", "ELKP": "Observability (Elasticsearch, Kibana)",
+    "APIG": "APIM self-hosted gateway", "GFED": "Shared GraphQL gateway (Apollo Router)",
+}
+# Cluster categories. Only APPLICATION clusters enter the analysis.
+APPLICATION, INFRASTRUCTURE, NO_APPLICATIONS, NO_DATA = "APPLICATION", "INFRASTRUCTURE", "NO_APPLICATIONS", "NO_DATA"
+
+
+def is_platform_namespace(namespace):
+    name = str(namespace or "").lower()
+    return name in PLATFORM_NAMESPACES or name.startswith(PLATFORM_NAMESPACE_PREFIXES) or "ingress" in name
+
+
+# Tools that belong to the application itself (its own API gateway, ingress and telemetry): a cluster that only
+# runs these is still an application cluster.
+APP_GATEWAY_PREFIXES = ("shgw", "agic-ingress", "otel-", "opentelemetry")
+
+
+def is_tool_workload(name):
+    return str(name or "").lower().startswith(TOOL_WORKLOAD_PREFIXES)
+
+
+def is_app_gateway(name):
+    return str(name or "").lower().startswith(APP_GATEWAY_PREFIXES)
+
+
+def is_microservice(namespace, workload):
+    """A deployment that belongs to an application: outside platform namespaces and not a known tool."""
+    return not is_platform_namespace(namespace) and not is_tool_workload(workload)
+
+
+# AKS ingress hosts carry the app code: azingressscrmeu2.lima.bcp.com.pe -> SCRM. A region right after
+# "azingress" (azingresseu2yape...) is not a code.
+INGRESS_COD_APP = re.compile(r"^azingress(?![a-z]{2}\d)([a-z0-9]{4})")
+
+
+def backend_cod_app(host):
+    """App code of the AKS ingress behind an API; empty for other backends (App Service, external)."""
+    match = INGRESS_COD_APP.match(str(host or "").lower())
+    return match.group(1).upper() if match else ""
+
+
+def cluster_ids_by_name(clusters):
+    """Cluster name (lowercase) -> list of resource ids (lowercase), from aks_clusters.csv rows.
+
+    Two clusters can share a name in different subscriptions, so a name maps to a list.
+    """
+    ids = {}
+    for row in clusters:
+        ids.setdefault(row["name"].lower(), []).append(row["id"].lower())
+    return ids
+
+
+def cluster_id_of(row, ids_by_name):
+    """Resource id of the row's cluster: its own cluster_id column, else the only inventory cluster with that name.
+
+    Empty when the name is unknown or shared by several clusters.
+    """
+    own = str(row.get("cluster_id") or "").lower()
+    if own:
+        return own
+    ids = ids_by_name.get(str(row.get("cluster") or "").lower(), [])
+    return ids[0] if len(ids) == 1 else ""
+
+
 def results_path(*parts):
     return os.path.join(RESULTS_DIR, *parts)
 

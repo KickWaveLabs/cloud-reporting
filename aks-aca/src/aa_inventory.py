@@ -25,7 +25,6 @@ Outputs (in --output-dir):
   inventory_summary.json counts by environment, and every query run
 """
 
-import re
 from collections import Counter
 from urllib.parse import urlparse
 
@@ -315,16 +314,6 @@ def backend_host(service_url):
     return (parsed.hostname or "").lower()
 
 
-# AKS ingress hosts carry the app code: azingressscrmeu2.lima.bcp.com.pe -> SCRM. A region right after
-# "azingress" (azingresseu2yape...) is not a code.
-INGRESS_COD_APP = re.compile(r"^azingress(?![a-z]{2}\d)([a-z0-9]{4})")
-
-
-def backend_cod_app(host):
-    """App code of the AKS ingress behind an API; empty for other backends (App Service, external)."""
-    match = INGRESS_COD_APP.match(host or "")
-    return match.group(1).upper() if match else ""
-
 
 def build_app_service(ctx, plans, sites):
     plan_rows = []
@@ -379,7 +368,7 @@ def build_apim(ctx, services, args):
             rows.append({
                 "apim": service["name"], "apim_environment": service["environment"], "api_id": api.get("name", ""),
                 "display_name": properties.get("displayName", ""), "path": properties.get("path", ""),
-                "backend_host": host, "backend_cod_app": backend_cod_app(host),
+                "backend_host": host, "backend_cod_app": aa.backend_cod_app(host),
                 "api_type": properties.get("type", "") or properties.get("apiType", ""),
                 "is_current": text(properties.get("isCurrent")), "apim_id": service["id"],
             })

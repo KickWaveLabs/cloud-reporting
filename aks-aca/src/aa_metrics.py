@@ -93,7 +93,7 @@ def cluster_usage(ctx, cluster, pools, start, end, args):
         cpu_all = [bucket["cpu_avg"] / 1000 for _, bucket in points]
         mem_all = [bucket["mem_avg"] / GIB for _, bucket in points]
         rows.append({
-            "cluster": cluster["name"], "environment": cluster["environment"], "month": month, "pool": pool,
+            "cluster": cluster["name"], "cluster_id": cluster["id"].lower(), "environment": cluster["environment"], "month": month, "pool": pool,
             "mode": pool_modes.get(pool, ""), "hours": len(points),
             "nodes_avg": round(mean([len(bucket["nodes"]) for _, bucket in points]), 2),
             "nodes_max": max(len(bucket["nodes"]) for _, bucket in points),
@@ -114,7 +114,7 @@ def cluster_usage(ctx, cluster, pools, start, end, args):
         by_month[aa.lima_month(moment)].append(values)
     for month, values in sorted(by_month.items()):
         rows.append({
-            "cluster": cluster["name"], "environment": cluster["environment"], "month": month, "pool": "*",
+            "cluster": cluster["name"], "cluster_id": cluster["id"].lower(), "environment": cluster["environment"], "month": month, "pool": "*",
             "mode": "ALLOCATABLE", "hours": len(values),
             "cpu_allocatable_avg": round(mean([v["cpu"] for v in values if "cpu" in v] or [0]), 2),
             "mem_allocatable_avg_gib": round(mean([v["mem"] / GIB for v in values if "mem" in v] or [0]), 2),

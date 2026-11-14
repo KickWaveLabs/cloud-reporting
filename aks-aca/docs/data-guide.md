@@ -95,25 +95,84 @@ ACA vCPU-second), `retail_price` per `unit`, and `hourly_equivalent`. Only the m
 
 ### aa-k8s-snapshot
 
+Configuration comes from the platform team's exports (the export day); behaviour comes from Container
+Insights (the period). Every row carries `cluster_id` and `cod_app`; clusters are joined by resource id.
+
 | CSV | One row is | Main columns |
 |---|---|---|
-| `deployment_snapshot.csv` | A deployment | `platform_component` (`SÍ` for platform namespaces), `layer` (first word of the name), `bia`, `capabilities`, `cpu_request_vcpu`, `mem_request_gib`, `has_hpa`, `ci_replicas_avg_office`, `ci_cpu_used_per_replica`, `fits_aca_by_request` (request within 4 vCPU / 8 GiB) |
-| `hpa_snapshot.csv` | An HPA | `replicas_now` (export day), `hpa_min`, `hpa_max`, `ci_replicas_avg_office`, `behaviour_ci`, `replicas_needed_by_cpu`, `min_above_need`, `min_above_need_beyond_ha` |
-| `cluster_snapshot.csv` | A cluster | `in_inventory`, `in_export` (`NO` = not in the export, so its 0 microservices mean "unknown"), `microservices`, `namespaces`, `hpas`, `bia` (highest among its microservices), `statefulsets`, `aca_technical_fit` |
-| `capability_domains.csv` | A capability keyword | `namespaces_prod` (domains), `deployments_prod` |
+| `cluster_snapshot.csv` | A cluster (inventory and export) | `category`, `category_reason`, `in_inventory`, `in_export`, `microservices`, `tool_deployments`, `ci_app_workloads`, `namespaces`, `hpas`, `bia` (highest among its microservices), `statefulsets`, `aca_technical_fit` |
+| `deployment_snapshot.csv` | A deployment | `microservice` (`YES` = an application deployment), `platform_component`, `layer`, `bia`, `capabilities`, `cpu_request_vcpu`, `mem_request_gib`, `has_hpa`, `ci_replicas_avg_office`, `ci_cpu_used_per_replica`, `ci_request_minus_export_vcpu`, `node_vcpu`, `node_mem_gib`, `pod_too_big_for_node`, `fits_aca_by_request` (request within 4 vCPU / 8 GiB) |
+| `hpa_snapshot.csv` | An HPA | `microservice`, `hpa_min`, `hpa_max`, `replicas_now` (export day), `last_scale_time`, `days_since_last_scale`, `last_scale_bucket`, `ci_replicas_avg_office`, `ci_replicas_max_office`, `office_max_reached_hpa_max`, `behaviour_ci`, `no_scale_cause`, `replicas_needed_by_cpu`, `min_above_need` |
+| `capability_domains.csv` | A capability keyword | `namespaces_prod` (domains), `deployments_prod`, both in APPLICATION clusters |
+| `application_snapshot.csv` | A PROD application (app code of APPLICATION clusters) | `clusters`, `cost_month_usd`, `bia`, `microservices`, `hpas_not_scaling_share`, `apis_with_traffic`, `requests_month`, `office_share`, `peak_tps_upper_bound`, `busiest_hour_tps`, `weekday_hours_with_traffic`, `batch_jobs`, `statefulsets`, `microservices_over_aca_size`, `possible_monolith`, `adt_runtime`, `adt_reason` |
 
-`behaviour_ci` compares the 3-month office average of replicas with the HPA limits:
+#### Definitions
+
+| Term | Definition |
+|---|---|
+| Application | An app code (`cod_app`) with at least one APPLICATION cluster |
+| Microservice | A deployment outside platform namespaces and not a known tool (`aa_common.is_microservice`) |
+| Domain | A namespace with at least one microservice |
+| Deployment | Any row of the export, unfiltered |
+
+Platform namespaces, tool prefixes, the application's own gateway prefixes and the infrastructure app codes are
+defined once, in `aa_common.py`.
+
+#### Cluster category
+
+Only APPLICATION clusters enter the analysis. `cluster_overrides.csv` in the inputs folder (columns
+`cluster_id` or `cluster`, `category`, `reason`) corrects a cluster by hand.
+
+| Category | Rule |
+|---|---|
+| `INFRASTRUCTURE` | App code in `aa_common.INFRASTRUCTURE_APPS` (runners, Terraform agents, SonarQube, observability, shared gateways), or only tool workloads (for example chaos testing) |
+| `APPLICATION` | At least one microservice in the export or in Container Insights, or only the application's own gateway |
+| `NO_APPLICATIONS` | In the export or with Container Insights data, but without a single microservice: created before its application, or left empty |
+| `NO_DATA` | Not in the export and without Container Insights data |
+
+#### Application runtime (ADT_019)
+
+`application_snapshot.csv` applies the ADT_019 tree to each application ([adt-019-runtime.md](adt-019-runtime.md)):
+
+| `adt_runtime` | Rule |
+|---|---|
+| `AKS` | Busiest hour above 100 TPS; or traffic more than 10 weekday hours and more than 15 microservices; or a microservice requests more than 4 vCPU / 8 GiB |
+| `ACA_WITH_REVIEW` | Within the thresholds but with StatefulSets, batch jobs, BIA ALTA or MUY ALTA (consult architecture governance), or no APIM traffic mapped |
+| `ACA` | Within every threshold |
+
+- Traffic: each API maps to an app code through the AKS ingress host of its backend. `busiest_hour_tps` adds
+  the application's APIs hour by hour (average weekday or weekend profile of the month); `peak_tps_upper_bound`
+  adds each API's 5-minute peak, so it overstates the real peak.
+- An hour has traffic when it carries at least 10% of the busiest hour; `weekday_hours_with_traffic` counts them.
+- `possible_monolith` = a single microservice. The tree sends internal monoliths to App Service, but a single
+  deployment is not proof of a monolith: confirm with the application team.
+- The tree's questions on Azure-event functions and multi-application platforms are not tested: every cluster
+  serves one application today.
+
+#### HPA codes
+
+`behaviour_ci` compares the office-hours average of replicas in the period with the HPA limits:
 
 | Code | Rule |
 |---|---|
-| `NUNCA_ESCALA` | Average <= 1.1 x min |
-| `LLEGA_AL_MAX` | Average >= 0.9 x max |
-| `FIJO` | min = max |
-| `ESCALA` | Anything else |
-| `SIN_DATO` | No Container Insights history |
+| `NEVER_SCALES` | Average <= 1.1 x min |
+| `AT_MAX` | Average >= 0.9 x max |
+| `FIXED` | min = max |
+| `SCALES` | Anything else |
+| `NO_DATA` | No Container Insights history |
+
+`last_scale_bucket` groups `days_since_last_scale` (from `lastScaleTime` to the export day): `UNDER_1_MONTH`,
+`1_TO_3_MONTHS`, `3_TO_12_MONTHS`, `OVER_1_YEAR`, `NO_DATA`. `no_scale_cause` says why an HPA does not scale:
+`FIXED_MIN_MAX` (it cannot; the date is when it was set), `MIN_ABOVE_NEED` (the minimum exceeds what the CPU
+needs), `LOAD_BELOW_TARGET` (the load never reaches the target), `SCALES`, `NO_DATA`.
 
 `replicas_needed_by_cpu` = office CPU used by all replicas / (request per replica x 0.7, a typical HPA
-target). `min_above_need_beyond_ha` = the minimum is above max(2, needed).
+target). `min_above_need_beyond_ha` = the minimum is above max(2, needed). `ci_replicas_max_office` is the
+hourly maximum and overstates scaling during rolling deployments.
+
+`pod_too_big_for_node` = the request is above half of a node's allocatable CPU or memory (node size from
+`aks_usage_monthly`, approximate), so each new replica needs its own node. `ci_request_minus_export_vcpu`
+above 0 means the export holds only the application container and Container Insights adds the Istio sidecar.
 
 ### aa-signals
 
@@ -121,7 +180,7 @@ target). `min_above_need_beyond_ha` = the minimum is above max(2, needed).
 |---|---|---|
 | `aks_autoscaler_monthly.csv` | Cluster x month | `hours_with_data` (0 = no autoscaler, the metric is not emitted), `hours_with_unschedulable`, `office_hours_with_unschedulable`, `unschedulable_pods_max` (highest hourly average) |
 | `aks_oomkilled_monthly.csv` | Cluster x namespace x workload x month | `oom_kills`, `pods` affected, `system_namespace` |
-| `aks_stack_memory.csv` | Cluster x namespace x workload (last `--stack-days`, office hours) | `stack` (Quarkus, Spring Boot, Java, .NET, Node.js, Python, Sin identificar), `replicas_avg`, `app_mem_gib_per_replica`, `sidecar_mem_gib_per_replica` (Istio; empty when the pod has no sidecar) |
+| `aks_stack_memory.csv` | Cluster x namespace x workload (last `--stack-days`, office hours) | `stack` (Quarkus, Spring Boot, Java, .NET, Node.js, Python, Unidentified), `replicas_avg`, `app_mem_gib_per_replica`, `sidecar_mem_gib_per_replica` (Istio; empty when the pod has no sidecar) |
 | `apim_latency_monthly.csv` | APIM x API x month | `backend_duration_avg_ms`, `backend_duration_max_ms` (APIM to the backend and back), `duration_avg_ms`, `duration_max_ms` (whole gateway request) |
 
 - Unschedulable pods: `cluster_autoscaler_unschedulable_pods_count`, hourly average. An hour above 0
@@ -147,10 +206,10 @@ Inputs: `aks_clusters.csv`, `aks_node_pools.csv`, `aks_usage_monthly.csv`, `cost
 
 | Figure | Pivot or formula |
 |---|---|
-| PROD clusters | `aks_clusters`, filter `environment` = PROD, count `name` |
+| PROD clusters | `aks_clusters`, filter `environment` = PROD, count `id` (two clusters can share a name) |
 | Monthly cost | `cost_by_resource`, filter `owner_type` = AKS, `environment` = PROD; rows `month`; sum `cost_usd` |
 | Cost by type | Same pivot with `meter_category` in rows |
-| Cost per cluster | Same pivot with `owner` in rows and `month` = last full month |
+| Cost per cluster | Same pivot with `owner_id` in rows |
 | Clusters with 4 nodes or fewer now | `aks_clusters`: helper column `system_nodes + user_nodes`, count <= 4 |
 | Clusters under the 4-node minimum | `aks_node_pools`: helper column `IF(autoscaling="true", min_count, count)`; pivot by `cluster`, sum it, count < 4 |
 | CPU and memory use in office hours | `aks_usage_monthly`, filter PROD; sum of `cpu_used_office_avg` / sum of `cpu_allocatable_avg` (same for memory, p95 and max) |
@@ -162,13 +221,15 @@ Inputs: the four `aa-k8s-snapshot` CSVs, plus the cost per cluster from workbook
 
 | Figure | Pivot or formula |
 |---|---|
-| Microservices per layer (pattern 1) | `deployment_snapshot`, filter PROD and `platform_component` = NO; rows `layer`; count |
+| Clusters by category | `cluster_snapshot`, filter PROD; rows `category`; count. Every figure below keeps only `APPLICATION` clusters (join by `cluster_id`) |
+| Microservices per layer (pattern 1) | `deployment_snapshot`, filter PROD and `microservice` = YES; rows `layer`; count |
 | Repeated capabilities | `capability_domains` as is |
-| Clusters per microservices bucket (pattern 2) | `cluster_snapshot`, filter PROD, `in_inventory` = SÍ, `in_export` = SÍ; helper bucket column on `microservices`; add the cost with `XLOOKUP(cluster, owner, cost)` |
-| Apps on system nodes (pattern 3) | `aks_node_pools`, filter PROD; pivot `cluster` x `mode`, count `pool`: clusters without a `User` column run their apps on the system pool. Add the cost per cluster from workbook 1. Clusters without apps: `aks_workloads_monthly`, last month, `kind` not DaemonSet, `system_namespace` = NO, outside platform namespaces; clusters with 0 workloads |
-| Replicas now (pattern 4) | `hpa_snapshot`, filter PROD and `platform_component` = NO; helper bucket column on `replicas_now` |
+| Clusters per microservices bucket (pattern 2) | `cluster_snapshot`, filter PROD, `category` = APPLICATION; helper bucket column on `microservices`; add the cost with `XLOOKUP(cluster_id, owner_id, cost)` |
+| Clusters without applications | `cluster_snapshot`, filter PROD, `category` = NO_APPLICATIONS; add the cost the same way |
+| Replicas now (pattern 4) | `hpa_snapshot`, filter PROD and `microservice` = YES; helper bucket column on `replicas_now` |
+| Time without scaling | Same filter; rows `last_scale_bucket`, columns `no_scale_cause`; count |
 | HPA behaviour | Same filter; rows `behaviour_ci`; count as % of total |
-| Inflated minimums | Same filter plus `behaviour_ci` = NUNCA_ESCALA; rows `min_above_need` or `min_above_need_beyond_ha` |
+| Inflated minimums | Same filter plus `behaviour_ci` = NEVER_SCALES; rows `min_above_need` or `min_above_need_beyond_ha` |
 | BIA (annex) | `cluster_snapshot` with the cost column; rows `bia`, columns `in_export` |
 | Fits Container Apps by size | `deployment_snapshot`; rows `fits_aca_by_request` |
 | Clusters short of capacity | `aks_autoscaler_monthly`, filter PROD; count clusters with `hours_with_unschedulable` > 0; sum the hours |

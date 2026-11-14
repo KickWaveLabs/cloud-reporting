@@ -130,7 +130,7 @@ def workload_rows(cluster, rows):
     for row in rows:
         key = (row["Month"], row["Office"], row["Namespace"], row["Workload"], row["ControllerKind"])
         target = merged.setdefault(key, {
-            "cluster": cluster["name"], "environment": cluster["environment"], "month": row["Month"],
+            "cluster": cluster["name"], "cluster_id": cluster["id"].lower(), "environment": cluster["environment"], "month": row["Month"],
             "period": "OFFICE" if row["Office"] else "OFFHOURS", "namespace": row["Namespace"],
             "workload": row["Workload"], "kind": row["ControllerKind"],
             "system_namespace": "YES" if row["Namespace"] in aa.SYSTEM_NAMESPACES
@@ -183,13 +183,13 @@ def main():
             kql = WORKLOADS_QUERY.format(start=aa.iso_z(begin), end=aa.iso_z(finish), workload=WORKLOAD_NAME)
             rows = ctx.try_arm("ci-workloads", cluster["name"], client.query, cluster["id"], kql, timespan)
             workloads.extend(workload_rows(cluster, rows or []))
-            coverage.append({"cluster": cluster["name"], "month": month, "rows": len(rows or []),
+            coverage.append({"cluster": cluster["name"], "cluster_id": cluster["id"].lower(), "month": month, "rows": len(rows or []),
                              "status": "ERROR" if rows is None else ("EMPTY" if not rows else "OK")})
         kql = SERVICES_QUERY.format(start=aa.iso_z(start), end=aa.iso_z(end))
         rows = ctx.try_arm("ci-services", cluster["name"], client.query, cluster["id"], kql,
                            f"{aa.iso_z(start)}/{aa.iso_z(end)}")
         for row in rows or []:
-            services.append({"cluster": cluster["name"], "environment": cluster["environment"],
+            services.append({"cluster": cluster["name"], "cluster_id": cluster["id"].lower(), "environment": cluster["environment"],
                              "namespace": row["Namespace"], "service": row["ServiceName"],
                              "service_type": row["ServiceType"], "last_seen": row["LastSeen"]})
 

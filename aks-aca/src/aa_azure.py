@@ -528,12 +528,12 @@ def normalize_environment(tags, subscription_name=""):
         value = ENVIRONMENT_VALUES.get(raw.strip().lower())
         if value:
             return value, "TAG_ENVIRONMENT"
-        return "UNKNOWN", f"TAG_ENVIRONMENT_NO_RECONOCIDO:{raw}"
+        return "UNKNOWN", f"TAG_ENVIRONMENT_UNKNOWN:{raw}"
     tokens = set(re.split(r"[^A-Z0-9]+", str(subscription_name or "").upper()))
     for token, value in SUBSCRIPTION_ENVIRONMENT_TOKENS.items():
         if token in tokens:
             return value, f"SUBSCRIPTION_NAME:{token}"
-    return "UNKNOWN", "TAG_ENVIRONMENT_AUSENTE"
+    return "UNKNOWN", "TAG_ENVIRONMENT_MISSING"
 
 
 def normalize_cod_app(tags):

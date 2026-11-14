@@ -58,7 +58,7 @@ named values, Container Apps secrets and environment variables, container logs, 
 - AKS when total load is above 100 tps, use is constant more than 10 h a day with more than 15
   microservices, or a multi-application platform is needed.
 
-The `Equilibrio` sheet tests these thresholds against the cost model. Today every AKS cluster serves a
+The `Break_even` sheet tests these thresholds against the cost model. Today every AKS cluster serves a
 single application, so the model compares one application against a whole cluster.
 
 ## Run order
@@ -93,6 +93,8 @@ python aks-aca/src/aa_prices.py
 python aks-aca/src/aa_k8s_snapshot.py --snapshot-date <export-day>   # optional, needs the exports below
 python aks-aca/src/aa_signals.py --apim-names apigp01,apigp03,apigp05   # optional
 python aks-aca/src/aa_workbook.py
+python aks-aca/src/aa_deck.py        # after opening the workbook in Excel and saving it
+python aks-aca/src/aa_deck_exec.py
 ```
 
 | Step | Scope by default | Time on 2026-11-10 | Check |
@@ -102,7 +104,7 @@ python aks-aca/src/aa_workbook.py
 | `aa_container_insights.py` | PROD clusters with the add-on | ~80 min | `ci_errors.csv`, `ci_coverage.csv` |
 | `aa_cost.py` | Every environment, `AmortizedCost` | ~10 min | `cost_errors.csv` |
 | `aa_prices.py` | VM sizes in the inventory; eastus2, centralus | < 1 min | `queries_without_rows` in `prices_summary.json` |
-| `aa_k8s_snapshot.py` | Every row of the exports; the workbook counts PROD | < 10 s | `clusters_not_in_inventory`, `hpa_without_ci_history` in `snapshot_summary.json` |
+| `aa_k8s_snapshot.py` | Every row of the exports; the workbook counts PROD application clusters | < 10 s | `prod_clusters_by_category`, `cluster_names_shared_by_several_clusters`, `prod_application` in `snapshot_summary.json` |
 | `aa_signals.py` | PROD clusters; the APIM in `--apim-names` | not timed yet (smoke test: 3 clusters + 1 APIM, 1 month, 20 s) | `signals_errors.csv` |
 | `aa_workbook.py` | Everything above | ~30 s | Open in Excel and save once |
 
@@ -124,17 +126,21 @@ python aks-aca/src/aa_workbook.py
 7. `aa_prices.py` needs no sign-in.
 8. `aa_k8s_snapshot.py` needs no sign-in either. It reads the platform team's `reportHpa*` and
    `reportDeployment*` exports (CSV with `;` or XLSX) from `.local/aks-aca-inputs/` (`--inputs` for another
-   folder), keeps only the columns it needs and joins them with the Container Insights history by
-   cluster, namespace and deployment. The exports hold one day of configuration, so pass that day with
-   `--snapshot-date`. Run it after `aa_container_insights.py`. `ValTrend` in the HPA export covers a short
-   recent window; the 3-month replica history comes from Container Insights. It also writes the inputs of
-   the `Patrones` sheet (microservices per layer and per cluster, capabilities repeated across namespaces)
-   and of part of `Criterios_tecnicos`; without the exports both sheets skip those rows. `Candidatos_BIA`
-   crosses the Container Apps technical fit per cluster with its BIA; which BIA levels stay on AKS is an
-   editable cell.
-   `ACA_por_cluster` compares each PROD cluster's cost today with Container Apps running the replicas
+   folder), keeps only the columns it needs and joins them with the Container Insights history by cluster
+   id, namespace and deployment. The exports hold one day of configuration, so pass that day with
+   `--snapshot-date`. Run it after `aa_container_insights.py` and `aa_metrics.py` (node size per cluster).
+   `ValTrend` in the HPA export covers the last 30 days in ~11-hour averages; the replica history of the
+   period comes from Container Insights.
+   It classifies every cluster as `APPLICATION`, `INFRASTRUCTURE`, `NO_APPLICATIONS` or `NO_DATA` (rules in
+   [docs/data-guide.md](docs/data-guide.md)); only APPLICATION clusters enter the workbook figures. To
+   correct one by hand, add `cluster_overrides.csv` (`cluster_id` or `cluster`, `category`, `reason`) to the
+   inputs folder. It also writes the inputs of the `Patterns` sheet (microservices per layer and per
+   cluster, capabilities repeated across namespaces, time without scaling) and of part of
+   `Technical_criteria`; without the exports both sheets skip those rows. `BIA_candidates` crosses the
+   Container Apps technical fit per cluster with its BIA; which BIA levels stay on AKS is an editable cell.
+   `ACA_by_cluster` compares each PROD application cluster's cost with Container Apps running the replicas
    Container Insights measured (sized by request and by use, 24/7 and with the ADT_019 schedule).
-   `Perfil_trafico` classifies each API as office, extended or 24/7 from `apim_hourly_profile.csv`; the
+   `Traffic_profile` classifies each API as OFFICE, EXTENDED or 24x7 from `apim_hourly_profile.csv`; the
    windows and threshold are editable cells, so reclassifying needs no new Azure query.
 9. Optional: `aa_signals.py` checks the other side of the usage figures: hours with unschedulable pods
    per cluster (only clusters with the autoscaler emit the metric), OOMKilled containers per workload,
@@ -144,9 +150,14 @@ python aks-aca/src/aa_workbook.py
 10. `aa_workbook.py` writes `reports/<date>-aks-aca/aks_aca_comparison.xlsx`. Add a `README.md` next to
     it with the scope and gaps of the run (see `reports/2026-11-10-aks-aca/README.md` on the machine that
     ran it).
-11. Optional: `aa_deck.py` builds `aks_aca_deck.pptx`, the whole presentation (diagnosis, technical criteria,
-    strategic front, proposal and annex; 20 slides, native charts) from the workbook's calculated values and
-    `results/` (signals, and node and workload usage for the CPU vs memory slide). Open the workbook in Excel and save it first. Its figures are a draft to check.
+11. Optional: `aa_deck.py` builds `aks_aca_deck.pptx`, the technical presentation for architects (diagnosis,
+    technical criteria, strategic front, proposal and annex; 19 slides, native charts, text in Spanish) from the
+    workbook's calculated values and `results/` (signals, and node and workload usage for the CPU vs memory
+    slide). Open the workbook in Excel and save it first. Its figures are a draft to check.
+12. `aa_deck_exec.py` builds `aks_aca_corporate.pptx`, the corporate deck (slides 1 to 5, text in Spanish) for a
+    non-technical forum: context, the runtime estate, the ADT_019 criteria with the PROD figure, the theoretical
+    distribution per application and the cost optimization with and without discount. It reads only
+    `results/` (including `application_snapshot.csv`), so it needs no saved workbook.
 
 Smoke tests before a full run: `aa_metrics.py --clusters <one-cluster> --skip-apim --start <day>
 --end <day>` and `aa_container_insights.py --clusters <one-cluster> --start <day> --end <day>`, each
@@ -158,19 +169,19 @@ Container Insights; one stopped PROD cluster without metrics.
 
 ## Tracing a figure
 
-- `Fuentes`: each data set with its type (measured, derived, estimated, vendor data), source and
+- `Sources`: each data set with its type (measured, derived, estimated, vendor data), source and
   how to check it in the portal.
-- `Consultas`: the exact Resource Graph queries, ARM call patterns, Log Analytics queries, Cost
+- `Queries`: the exact Resource Graph queries, ARM call patterns, Log Analytics queries, Cost
   Management bodies and Retail Prices filters each script ran.
-- `Supuestos`: yellow cells are inputs; column E shows the measured reference for each one, when one
-  exists. Everything in `Modelo`, `Equilibrio` and `Mapa` is a formula over `Supuestos` and `Precios`.
+- `Assumptions`: yellow cells are inputs; column E shows the measured reference for each one, when one
+  exists. Everything in `Model`, `Break_even` and `Map` is a formula over `Assumptions` and `Prices`.
 
 ## Caveats
 
 - Node VMs are covered by reservations or savings plans: with `ActualCost` they cost close to 0 per
   hour (checked on 2026-11-10), so `aa_cost.py` uses `AmortizedCost`. Cost analysis screenshots must
   use the "Amortized cost" view too.
-- List prices exclude contract discounts; `discount` in `Supuestos` is the measured ratio for node
+- List prices exclude contract discounts; `discount` in `Assumptions` is the measured ratio for node
   VMs and feeds the "AKS efectivo" line. ACA has no measured discount unless the bank already runs
   Container Apps.
 - `Environment Management Hour` and `Environment Private Endpoint` are ACA meters effective

@@ -77,7 +77,7 @@ KubePodInventory
 | summarize Quarkus = max(Quarkus), Spring = max(Spring), Java = max(Java), Dotnet = max(Dotnet), Node = max(Node),
     Python = max(Python) by Namespace, Workload, ControllerKind
 | extend Stack = case(Quarkus == 1, 'Quarkus', Spring == 1, 'Spring Boot', Java == 1, 'Java', Dotnet == 1, '.NET',
-    Node == 1, 'Node.js', Python == 1, 'Python', 'Sin identificar')
+    Node == 1, 'Node.js', Python == 1, 'Python', 'Unidentified')
 | project Namespace, Workload, ControllerKind, Stack
 """
 
@@ -119,10 +119,10 @@ def stack_rows(ctx, client, cluster, start, end):
         if row["Role"] == "app":
             entry["replicas_avg"] = round(row["Replicas"], 2)
     stack_of = {(row["Namespace"], row["Workload"], row["ControllerKind"]): row["Stack"] for row in stacks}
-    return [{"cluster": cluster["name"], "environment": cluster["environment"], "namespace": namespace,
+    return [{"cluster": cluster["name"], "cluster_id": cluster["id"].lower(), "environment": cluster["environment"], "namespace": namespace,
              "workload": workload, "kind": kind,
              "system_namespace": "YES" if namespace in aa.SYSTEM_NAMESPACES or str(namespace).startswith("aks-istio") else "NO",
-             "stack": stack_of.get((namespace, workload, kind), "Sin identificar"), **figures}
+             "stack": stack_of.get((namespace, workload, kind), "Unidentified"), **figures}
             for (namespace, workload, kind), figures in sorted(by_workload.items())]
 
 
@@ -143,7 +143,7 @@ def autoscaler_rows(ctx, cluster, start, end, chunk_days):
             entry["unschedulable"] += 1
             entry["office"] += aa.is_office(moment)
             entry["max"] = max(entry["max"], value)
-    return [{"cluster": cluster["name"], "environment": cluster["environment"], "month": month,
+    return [{"cluster": cluster["name"], "cluster_id": cluster["id"].lower(), "environment": cluster["environment"], "month": month,
              "hours_with_data": entry["hours"], "hours_with_unschedulable": entry["unschedulable"],
              "office_hours_with_unschedulable": entry["office"], "unschedulable_pods_max": round(entry["max"], 2)}
             for month, entry in sorted(months.items())]
@@ -155,7 +155,7 @@ def oom_rows(ctx, client, cluster, start, end):
                        f"{aa.iso_z(start)}/{aa.iso_z(end)}")
     if rows is None:
         return None
-    return [{"cluster": cluster["name"], "environment": cluster["environment"], "month": row["Month"],
+    return [{"cluster": cluster["name"], "cluster_id": cluster["id"].lower(), "environment": cluster["environment"], "month": row["Month"],
              "namespace": row["Namespace"], "workload": row["Workload"], "kind": row["ControllerKind"],
              "system_namespace": "YES" if row["Namespace"] in aa.SYSTEM_NAMESPACES
                                  or str(row["Namespace"]).startswith("aks-istio") else "NO",

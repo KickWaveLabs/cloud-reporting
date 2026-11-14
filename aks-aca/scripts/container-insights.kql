@@ -45,7 +45,7 @@ KubePodInventory
 | summarize Quarkus = max(Quarkus), Spring = max(Spring), Java = max(Java), Dotnet = max(Dotnet), Node = max(Node),
     Python = max(Python) by Namespace, ControllerName
 | extend Stack = case(Quarkus == 1, 'Quarkus', Spring == 1, 'Spring Boot', Java == 1, 'Java', Dotnet == 1, '.NET',
-    Node == 1, 'Node.js', Python == 1, 'Python', 'Sin identificar')
+    Node == 1, 'Node.js', Python == 1, 'Python', 'Unidentified')
 | summarize Workloads = count() by Namespace, Stack
 | order by Namespace asc, Workloads desc
 
