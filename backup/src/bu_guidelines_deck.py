@@ -3,8 +3,10 @@
 
 Slides:
   1. Guidelines: the base PITR / LTR rule per service, and where it changes by the data a system holds
-  2. Price per TB-month in Central US by backup redundancy, net of the bank's discount, against the vendors
-  3. References: the regulation behind slide 1 (Microsoft and pricing sources are in docs/)
+  2. Price per TB-month in Central US for LRS and ZRS backups, net of the bank's discount, against the vendors
+  3. References: the regulation behind slide 1, the examples each norm gives and the minimum time it asks to
+     keep the data
+     (Microsoft and pricing sources are in docs/)
 
 Prices come from the public Azure Retail Prices API (no sign-in, no subscription data). Retention limits and
 regulatory articles are fixed in this file, checked against the official texts in November 2026. The regulation
@@ -41,7 +43,8 @@ VENDORS = [("D3", 56.01, 7.92), ("Opción 1", 49.90, 12.84)]
 # The bank's discount on Azure list prices, applied to every Azure price on slide 2 (vendors quote net prices).
 DISCOUNT = 0.30
 
-# (key, serviceName, productName, meterName) of every meter the deck prices.
+# (key, serviceName, productName, meterName) of every meter the deck prices. The deck shows LRS and ZRS only;
+# the geo meters stay because bu_guidelines_cost.py prices the redundancy each database has today.
 METERS = [
     ("vault_lrs", "Backup", "Backup", "Standard LRS Data Stored"),
     ("vault_zrs", "Backup", "Backup", "Standard ZRS Data Stored"),
@@ -102,20 +105,43 @@ WHITE = RGBColor(0xFF, 0xFF, 0xFF)
 FONT = "Arial"
 
 
+# (norm, what the deck uses, examples the norm itself gives, minimum period, official source, link). The examples are
+# taken from the official texts: art. 183 lists none; SBS 2660-2015 art. 49.1-49.3, 55 and 58; SBS 504-2021
+# art. 12.3 f) and h); BCRP 0011-2026 Anexo V sec. VI and the definitions in art. 2.
 REGULATION_REFERENCES = [
-    ("Ley 26702, Ley General del Sistema Financiero", "Art. 183: libros y documentos, 10 años",
-     "Texto del SPIJ con notas a mayo 2026", "SPIJ (Ministerio de Justicia)"),
-    ("Res. SBS 2660-2015, Gestión de Riesgos de LA/FT",
-     "Arts. 49 y 54: registro de operaciones y copia trimestral. Arts. 55 y 58: KYC, contrapartes e inusuales",
-     "Texto consolidado SBS, v5", "Portal de normas de la SBS"),
+    ("Ley 26702, Ley General del Sistema Financiero", "Art. 183: libros y documentos",
+     "• No da ejemplos: aplica a todos los libros y documentos\n"
+     "• Si hay juicio, los documentos del caso se guardan mientras dure\n"
+     "• Permite microfilm u otros medios análogos",
+     "10 años\n(más si hay juicio)", "SPIJ, texto con notas a mayo 2026",
+     "https://spij.minjus.gob.pe/spij-ext-web/#/detallenorma/H773064"),
+    ("Res. SBS 2660-2015, Gestión de Riesgos de LA/FT", "Arts. 49 y 54: registro de operaciones y copia trimestral",
+     "• Retiros de fondos, cobro de cheques, cheques de gerencia\n"
+     "• Desembolsos de préstamos y financiamiento por descuento\n"
+     "• Transferencias nacionales e internacionales\n"
+     "• Compra y venta de divisas en efectivo desde US$5 mil",
+     "Registro: 10 años\nCopia trimestral: 5 años (20 copias)", "Portal de normas SBS, texto consolidado v5",
+     "https://intranet2.sbs.gob.pe/dv_int_cn/1540/v5.0/Adjuntos/2660-2015.r.pdf"),
+    ("Res. SBS 2660-2015, Gestión de Riesgos de LA/FT", "Arts. 55 y 58: KYC, contrapartes e inusuales",
+     "• Vinculación del cliente y debida diligencia (KYC)\n"
+     "• Vinculación y operaciones con contrapartes y proveedores\n"
+     "• Operaciones inusuales y el análisis que las sustenta\n"
+     "• Políticas y procedimientos de prevención LA/FT",
+     "10 años", "Portal de normas SBS, texto consolidado v5",
+     "https://intranet2.sbs.gob.pe/dv_int_cn/1540/v5.0/Adjuntos/2660-2015.r.pdf"),
     ("Res. SBS 504-2021, Seguridad de la Información y Ciberseguridad",
-     "Art. 12, num. 3, lit. f) y h): copias de respaldo y pruebas. Arts. 23 y 25: nube y exterior",
-     "Texto consolidado SBS, v5", "Portal de normas de la SBS"),
-    ("Res. SBS 00814-2025, modifica la Res. SBS 877-2020 (Continuidad del Negocio)",
-     "Productos pasivos: POR igual a cero y TOR de hasta 3 horas", "Publicada el 04-03-2025", "Portal de normas de la SBS"),
-    ("Circular BCRP 0011-2026, Reglamento del Sistema LBTR",
-     "Art. 46.5: recuperación en 2 horas. Anexo V, sección VI: respaldo diario, prueba anual, 10 años",
-     "Vigente desde junio 2026", "Circulares vigentes del BCRP"),
+     "Art. 12, num. 3, lit. f) y h): copias de respaldo y pruebas",
+     "• Copias de información, software y lo necesario para restablecerlos\n"
+     "• Recuperación ante malware\n"
+     "• Incidentes internos o externos que afecten el ambiente productivo",
+     "No fija plazo", "Portal de normas SBS, texto consolidado v5",
+     "https://intranet2.sbs.gob.pe/dv_int_cn/2046/v5.0/Adjuntos/504-2021.R.pdf"),
+    ("Circular BCRP 0011-2026, Reglamento del Sistema LBTR", "Anexo V, sección VI: respaldo diario y prueba anual",
+     "• Información de la operación diaria del LBTR\n"
+     "• Órdenes de transferencia de fondos y cartas orden\n"
+     "• Aplicación Participante LBTR del banco",
+     "Respaldos: 10 años", "Circulares vigentes del BCRP (vigente desde junio 2026)",
+     "https://www.bcrp.gob.pe/docs/Transparencia/Normas-Legales/Circulares/2026/circular-0011-2026-bcrp.pdf"),
 ]
 
 
@@ -302,78 +328,83 @@ def note_box(slide, left, top, width, height, text, size=10, fill=LIGHT, color=G
 
 def slide_guidelines(deck):
     slide = base_slide(deck, "Lineamientos de backup y retención en Azure",
-                       "Fuente: Ley 26702; Res. SBS 2660-2015, 504-2021 y 00814-2025; Circular BCRP 0011-2026; "
+                       "Fuente: Ley 26702; Res. SBS 2660-2015 y 504-2021; Circular BCRP 0011-2026; "
                        "Microsoft Learn (revisado nov-2026). Plazos legales a validar por Cumplimiento.")
 
     # Left: the rule every production service follows.
-    left, width = Inches(0.35), Inches(4.75)
+    left, width = Inches(0.35), Inches(4.45)
     heading(slide, left, Inches(1.08), width, "Lineamiento base: todo PROD")
     rows = [
-        ["Azure Backup\n(VM y Files)", "Diario\n7 diarios", "4 semanales\n12 mensuales"],
-        ["Azure SQL Database", "PITR 7 días", "LTR S4 · M12"],
-        ["Azure SQL Managed\nInstance", "PITR 7 días", "LTR S4 · M12"],
-        ["PostgreSQL Flexible", "PITR 7 días", "Backup vault\nS4 · M12"],
-        ["MySQL Flexible", "PITR 7 días", "Sin LTR de Azure\n(en pausa)"],
-        ["Cosmos DB", "Continuo 7 días\n(sin costo)", "Backup vault\nS4 · M12"],
+        ["Azure Backup\n(VM y Files)", "1 diario,\nse guardan 7", "4 semanales\n12 mensuales"],
+        ["Azure SQL Database", "PITR 7 días", "4 semanales\n12 mensuales"],
+        ["Azure SQL Managed\nInstance", "PITR 7 días", "4 semanales\n12 mensuales"],
+        ["PostgreSQL Flexible", "PITR 7 días", "4 semanales\n12 mensuales\n(Backup vault)"],
+        ["MySQL Flexible", "PITR 7 días", "Sin largo plazo\n(Microsoft lo pausó)"],
+        ["Cosmos DB", "Continuo 7 días\n(sin costo)", "4 semanales\n12 mensuales\n(Backup vault)"],
     ]
-    table(slide, left, Inches(1.45), width, ["Servicio", "Corto plazo", "Largo plazo"], rows, [0.38, 0.29, 0.33],
-          row_height=0.6, size=9.5)
-    text_box(slide, left, Inches(5.72), width, Inches(0.32), [
-        [("S4 · M12", True, NAVY), (" = se conservan las últimas 4 copias semanales y 12 mensuales.",
-                                           False, GREY)]], size=9)
+    grid = table(slide, left, Inches(1.45), width, ["Servicio", "Corto plazo", "Largo plazo"], rows, [0.38, 0.29, 0.33],
+                 row_height=0.66, size=9.5)
+    grid.rows[0].height = Inches(0.42)
 
-    # Right: where the rule changes, by the data the system holds.
-    left, width = Inches(5.3), Inches(7.68)
+    # Right: where the rule changes, by the data the system holds. The last column is written as short bullets
+    # so the slide reads on its own, without the presenter.
+    left, width = Inches(5.0), Inches(7.98)
     heading(slide, left, Inches(1.08), width, "Cuándo varía: según el dato que guarda el sistema")
-    default, dr = {"fill": RGBColor(0xE4, 0xEA, 0xF4)}, {"fill": LIGHT, "color": GREY}
+    plain = {"fill": RGBColor(0xE4, 0xEA, 0xF4)}
+    action = {"left": True, "size": 8.5}
+    keep_data = ("• Si la aplicación guarda el dato 10 años: basta el lineamiento base\n"
+                 "• Si lo borra antes: agregar 1 backup anual que se guarde 10 años")
     scopes = [
-        [("Cualquier otro dato", default), ("SBS 504-2021, art. 12", default),
-         ("Estrategia de respaldo y pruebas de restauración", default), ("Lineamiento base", default)],
-        ["Libros y documentos contables", "Ley 26702, art. 183",
-         "Conservar el dato 10 años (más si hay juicio)", "Base si la aplicación no purga; si purga, + A10"],
+        [("Cualquier otro dato", plain), ("SBS 504-2021,\nart. 12", plain),
+         ("Estrategia de respaldo y pruebas de restauración", plain),
+         ("Lineamiento base", {**plain, **action})],
+        ["Libros y documentos contables", "Ley 26702,\nart. 183",
+         "Conservar el dato 10 años (más si hay juicio)", (keep_data, action)],
         ["Registro de operaciones\n(≥ US$10 mil; múltiples ≥ US$50 mil/mes)", "SBS 2660-2015,\narts. 49 y 54",
-         "Copia al cierre de cada trimestre por 5 años (20 copias); entrega en 48 h",
-         "+ copia trimestral a Archive inmutable (o LTR M60); A10 si purga"],
+         "Copia al cierre de cada trimestre, guardada 5 años; entrega en 48 h",
+         ("• Agregar 1 copia por trimestre, guardada 5 años (20 copias), en bóveda inmutable\n"
+          "• En SQL no hay copia trimestral: guardar 60 mensuales cubre los 5 años\n"
+          "• Si la aplicación borra el dato antes de 10 años: 1 backup anual por 10 años", action)],
         ["KYC, contrapartes y operaciones inusuales", "SBS 2660-2015,\narts. 55 y 58",
-         "Conservar el dato 10 años", "Base si la aplicación no purga; si purga, + A10"],
+         "Conservar el dato 10 años", (keep_data, action)],
         ["Sistemas del LBTR", "BCRP 0011-2026,\nAnexo V, sec. VI",
-         "Respaldo diario, prueba anual, respaldos por 10 años", "+ A10 y prueba de restauración anual"],
-        [("Productos pasivos (core)", dr), ("SBS 00814-2025", dr), ("RPO cero y RTO de hasta 3 h", dr),
-         ("Replicación y failover; no es backup", dr)],
+         "Respaldo diario, prueba anual y respaldos guardados 10 años",
+         ("• Agregar 1 backup anual que se guarde 10 años\n• Probar la restauración 1 vez al año y dejarla "
+          "documentada", action)],
     ]
-    table(slide, left, Inches(1.45), width, ["Ámbito (dato)", "Norma", "Qué exige", "Cómo se aplica en Azure"],
-          scopes, [0.27, 0.17, 0.3, 0.26], row_height=0.6, size=9)
+    grid = table(slide, left, Inches(1.45), width, ["Ámbito (dato)", "Norma", "Qué exige", "Cómo se aplica en Azure"],
+                 scopes, [0.2, 0.13, 0.24, 0.43], row_height=0.8, size=9)
+    grid.rows[0].height = Inches(0.42)
 
     note_box(slide, Inches(0.35), Inches(6.08), Inches(12.63), Inches(0.92), [
         [("Redundancia del backup: ", True, NAVY),
-         ("PROD sin réplica en otra región: geo-redundante, con copia en Central US (RA-GRS en SQL; GRS en bóvedas, "
-          "PostgreSQL y MySQL). PROD con failover group o geo-réplica: ZRS. No productivo: LRS.", False, GREY)],
+         ("PROD: ZRS (copias en 3 zonas de la región). No productivo: LRS. Archive solo existe en bóvedas LRS.",
+          False, GREY)],
         [("PITR", True, NAVY),
          (" recupera errores recientes: borrado, corrupción, ransomware.   ", False, GREY),
-         ("LTR", True, NAVY), (" cumple la conservación y los errores detectados tarde.", False, GREY)],
+         ("Largo plazo", True, NAVY), (" cumple la conservación y los errores que se detectan tarde.", False, GREY)],
         [("Recomendado en los ámbitos regulados: ", True, RUST),
          ("bóveda inmutable y prueba de restauración documentada.", False, GREY)]], size=9.5)
     slide.notes_slide.notes_text_frame.text = (
-        "S = semanales, M = mensuales, A = anuales (cantidad de puntos que se guardan). "
+        "Largo plazo: cantidad de copias que se guardan (4 semanales = las últimas 4 semanas; 12 mensuales = el "
+        "último año). En SQL es el LTR. "
         "La regla base aplica a todo PROD; un sistema solo cambia si guarda uno de los datos de la tabla de ámbitos. "
         "La Ley 26702 art. 183 y la Res. SBS 2660-2015 arts. 55 y 58 obligan a conservar el dato, no el backup: si la "
         "aplicación no borra esos registros antes de 10 años, el backup se queda en la regla base. "
         "Solo dos normas piden backups: la Res. SBS 2660-2015 art. 54 (copia al final de cada trimestre, agrupada por "
         "5 años: 20 copias) y la Circular BCRP 0011-2026 Anexo V sección VI (conservar los respaldos 10 años). "
-        "SQL LTR no tiene frecuencia trimestral: M60 la cubre guardando 60 copias; una copia trimestral a Archive "
-        "inmutable guarda solo las 20 que pide la norma. "
+        "SQL LTR no tiene frecuencia trimestral: 60 mensuales cubren los 5 años guardando 60 copias; una copia "
+        "trimestral a Archive inmutable guarda solo las 20 que pide la norma. "
         "Cumplimiento debe confirmar con qué frecuencia se guardan los respaldos de 10 años del LBTR (la circular no "
         "la fija) y qué aplicaciones guardan el registro de operaciones y el LBTR. "
         "Ninguna norma fija un plazo de PITR; PITR 7 días aplica a todo. "
-        "Redundancia: una base sin réplica en otra región solo se recupera de un desastre regional con su backup "
-        "geo-redundante (geo-restore), por eso geo: en SQL las opciones geo son RA-GRS y RA-GZRS (mismo precio); en "
-        "las bóvedas es GRS, y activar Cross Region Restore la cobra como RA-GRS y no se puede revertir. Con failover group o geo-réplica el DR ya está cubierto y ZRS basta "
-        "(en SQL, ZRS cuesta lo mismo que LRS y la mitad que RA-GRS). Las bóvedas ZRS no admiten Archive. "
-        "PostgreSQL solo permite elegir backup geo-redundante al crear el servidor. "
-        "Azure Backup cubre VMs y Azure Files (Recovery Services vault). El LTR de PostgreSQL y Cosmos DB va a un "
-        "Backup vault de Azure Backup, aparte de la base; su PITR nativo queda en el servicio. "
-        "MySQL Flexible: el LTR con Azure Backup está en pausa por Microsoft; si un ámbito lo exige, el export "
-        "(mysqldump) a Blob inmutable lo reemplaza. PostgreSQL LTR: semanal, mensual o anual, máximo 1 TiB, restaura "
+        "Redundancia: LRS guarda 3 copias en un datacenter; ZRS, 3 copias en zonas distintas de la misma región. "
+        "En SQL, ZRS cuesta lo mismo que LRS. Las bóvedas ZRS no admiten Archive: el largo plazo en una bóveda ZRS "
+        "queda en la capa estándar. "
+        "Azure Backup cubre VMs y Azure Files (Recovery Services vault). El largo plazo de PostgreSQL y Cosmos DB va a "
+        "un Backup vault de Azure Backup, aparte de la base; su PITR nativo queda en el servicio. "
+        "MySQL Flexible: el largo plazo con Azure Backup está en pausa por Microsoft; si un ámbito lo exige, el export "
+        "(mysqldump) a Blob inmutable lo reemplaza. PostgreSQL: semanal, mensual o anual, máximo 1 TiB, restaura "
         "como archivos. SQL Managed Instance no admite LTR inmutable. Archive: puntos mensuales y anuales con más de "
         "6 meses; rehidratar toma hasta 15 h, menos que las 48 h hábiles de la SBS.")
 
@@ -385,53 +416,50 @@ def slide_prices(deck, tb, retrieved, discount):
     vault_hours = f"~{GB_PER_TB * 1024 / 30 / 3600:.0f} h/TB"
 
     def priced(label, keys, rpo, rto, extra, best=False):
-        """keys = meter keys for LRS, ZRS, GRS, RA-GRS and RA-GZRS; None when the option doesn't exist, and
-        ("x2", key) when geo bills twice the local GB."""
+        """keys = meter keys for LRS and ZRS; None when the option doesn't exist."""
         options = {"color": GREEN, "bold": True} if best else {}
         cells = []
         for key in keys:
             if key is None:
                 cells.append(("–", {}))
-            elif isinstance(key, tuple):
-                cells.append((amount(prices[key[1]] * 2) + "*", options))
             else:
                 cells.append((amount(prices[key]), options))
         return [label, *cells, (rpo, {"size": 8}), (rto, small), (extra, small)]
 
     def vendor(name, value, tier, rto):
         return [(f"{name} · {tier}", {"color": RUST}),
-                (f"{amount(value)}  (redundancia según su servicio)", {"color": RUST, "bold": True, "span": 5}),
+                (f"{amount(value)}  (según su servicio)", {"color": RUST, "bold": True, "span": 2}),
                 ("Según su política", {"size": 8}), (rto, small), ("Confirmar TB protegido o almacenado", small)]
 
     sql_label = "SQL Database / Managed Instance"
     sql_equal = all(prices[f"sqldb_{kind}"] == prices[f"sqlmi_{kind}"]
-                    for kind in ("pitr_lrs", "pitr_zrs", "pitr_geo", "ltr_lrs", "ltr_zrs", "ltr_geo"))
+                    for kind in ("pitr_lrs", "pitr_zrs", "ltr_lrs", "ltr_zrs"))
     if not sql_equal:
         raise SystemExit("SQL Database and SQL Managed Instance backup prices differ; split their rows.")
     rows = [
         ["Corto plazo: recuperación operativa"],
-        priced("Azure Backup · VM (bóveda)", ("vault_lrs", "vault_zrs", "vault_grs", "vault_ragrs", None),
+        priced("Azure Backup · VM (bóveda)", ("vault_lrs", "vault_zrs"),
                "24 h (4 h Enhanced)", f"Snapshot: más rápido; bóveda: {vault_hours}",
                f"+ {usd(prices['vm_instance'])}/TB protegido"),
         priced("Azure Backup · Files (bóveda)",
-               ("files_vault_lrs", "files_vault_zrs", "files_vault_grs", "files_vault_ragrs", None),
+               ("files_vault_lrs", "files_vault_zrs"),
                "24 h (diario)", "Snapshot: archivos al instante", "+ instancia protegida"),
-        priced(f"{sql_label} · PITR", ("sqldb_pitr_lrs", "sqldb_pitr_zrs", None, "sqldb_pitr_geo", "sqldb_pitr_ragzrs"),
+        priced(f"{sql_label} · PITR", ("sqldb_pitr_lrs", "sqldb_pitr_zrs"),
                "5 a 10 min", "Normalmente < 12 h", "Gratis hasta el tamaño de la base"),
-        priced("PostgreSQL / MySQL · PITR", ("pg_pitr", "mysql_pitr_zrs", ("x2", "pg_pitr"), None, None),
-               "≤ 5 min", "Minutos a pocas horas", "Gratis hasta el storage; *geo cobra el doble de GB"),
-        priced("Cosmos DB · continuo 30 días", ("cosmos_30d", "cosmos_30d", None, None, None), "~100 s",
+        priced("PostgreSQL / MySQL · PITR", ("pg_pitr", "mysql_pitr_zrs"),
+               "≤ 5 min", "Minutos a pocas horas", "Gratis hasta el tamaño del storage"),
+        priced("Cosmos DB · continuo 30 días", ("cosmos_30d", "cosmos_30d"), "~100 s",
                "~30 a 90 min por TB", "Por región; la redundancia la fija la región"),
         priced("Cosmos DB · periódico (copias extra)",
-               ("cosmos_periodic_lrs", "cosmos_periodic_zrs", None, "cosmos_periodic_ragrs", None),
+               ("cosmos_periodic_lrs", "cosmos_periodic_zrs"),
                "Según intervalo", "Sin cifra publicada", "2 copias gratis; se cobran las extra"),
         *[vendor(name, active, "Active", f"Restaurar + traer: {transfer}") for name, active, _ in VENDORS],
         ["Largo plazo: retención"],
-        priced("Azure Backup · Archive (VM)", ("archive_lrs", None, "archive_grs", None, None), "1 mes",
+        priced("Azure Backup · Archive (VM)", ("archive_lrs", None), "1 mes",
                f"Rehidratar ≤ 15 h + {vault_hours}", "Puntos > 6 meses; mínimo 180 días", best=True),
-        priced(f"{sql_label} · LTR", ("sqldb_ltr_lrs", "sqldb_ltr_zrs", None, "sqldb_ltr_geo", "sqldb_ltr_ragzrs"),
+        priced(f"{sql_label} · LTR", ("sqldb_ltr_lrs", "sqldb_ltr_zrs"),
                "1 semana", "Normalmente < 12 h", "Solo backups completos"),
-        priced("PostgreSQL / Cosmos · Backup vault", ("vault_lrs", "vault_zrs", "vault_grs", "vault_ragrs", None),
+        priced("PostgreSQL / Cosmos · Backup vault", ("vault_lrs", "vault_zrs"),
                "1 sem. / 1 día", "Cosmos ~30 a 90 min/TB; PG: horas",
                f"+ PG {usd(prices['pg_instance'])} · Cosmos {usd(prices['cosmos_instance'])}/TB protegido"),
         *[vendor(name, archive, "Archive", f"Su Archive + {transfer}") for name, _, archive in VENDORS],
@@ -442,27 +470,27 @@ def slide_prices(deck, tb, retrieved, discount):
                        f"{discount:.0%} de descuento del banco; 1 TB = 1.024 GB. Proveedores: tarifas cotizadas.")
     text_box(slide, Inches(0.35), Inches(1.0), Inches(12.63), Inches(0.28), [[
         ("Unidad: US$ por TB almacenado al mes", True, NAVY),
-        (f", Central US, Azure con {discount:.0%} de descuento. – = el servicio no ofrece esa redundancia. En bóvedas, "
-         "RA-GRS es GRS con Cross Region Restore.", False, GREY)]], size=9)
+        (f", Central US, Azure con {discount:.0%} de descuento. – = el servicio no ofrece esa redundancia.",
+         False, GREY)]], size=9)
     grid = table(slide, Inches(0.35), Inches(1.3), Inches(12.63),
-                 ["Opción", "LRS", "ZRS", "GRS", "RA-GRS", "RA-GZRS", "RPO", "RTO aprox. (restaurar)",
-                  "Qué más se cobra"], rows,
-                 [0.22, 0.055, 0.055, 0.055, 0.06, 0.065, 0.09, 0.18, 0.22], row_height=0.28, size=8.5)
+                 ["Opción", "LRS", "ZRS", "RPO", "RTO aprox. (restaurar)", "Qué más se cobra"], rows,
+                 [0.25, 0.08, 0.08, 0.11, 0.2, 0.28], row_height=0.28, size=8.5)
     grid.rows[0].height = Inches(0.36)
     for r, values in enumerate(rows, start=1):
         if len(values) == 1:
             grid.rows[r].height = Inches(0.26)
 
-    vault_protected = prices["vault_grs"] + prices["vm_instance"]
+    vault_protected = prices["vault_zrs"] + prices["vm_instance"]
     actives = [active for _, active, _ in VENDORS]
     archives = [archive for _, _, archive in VENDORS]
     takeaways = [
-        ("Largo plazo", f"Archive GRS de Azure: {usd(prices['archive_grs'])} por TB, más barato que el Archive de los "
-                        f"proveedores ({' y '.join(amount(value) for value in archives)})."),
-        ("PITR vs LTR", f"En SQL, el PITR RA-GRS cuesta {prices['sqldb_pitr_geo'] / prices['sqldb_ltr_geo']:.0f} veces "
-                        f"el LTR RA-GRS por TB ({amount(prices['sqldb_pitr_geo'])} vs "
-                        f"{amount(prices['sqldb_ltr_geo'])}): PITR corto y LTR para retener."),
-        ("Corto plazo", f"Bóveda GRS + instancia VM = {usd(vault_protected)} por TB protegido, "
+        ("Largo plazo", f"Archive LRS de Azure: {usd(prices['archive_lrs'])} por TB, "
+                        f"{'más barato' if prices['archive_lrs'] < min(archives) else 'frente a'} que el Archive de "
+                        f"los proveedores ({' y '.join(amount(value) for value in archives)})."),
+        ("PITR vs LTR", f"En SQL, el PITR ZRS cuesta {prices['sqldb_pitr_zrs'] / prices['sqldb_ltr_zrs']:.0f} veces "
+                        f"el LTR ZRS por TB ({amount(prices['sqldb_pitr_zrs'])} vs "
+                        f"{amount(prices['sqldb_ltr_zrs'])}): PITR corto y LTR para retener."),
+        ("Corto plazo", f"Bóveda ZRS + instancia VM = {usd(vault_protected)} por TB protegido, "
                         f"{'más barato' if vault_protected < min(actives) else 'frente a'} que los proveedores "
                         f"({amount(min(actives))}–{amount(max(actives))}), que además suman la transferencia "
                         f"({transfer})."),
@@ -478,12 +506,9 @@ def slide_prices(deck, tb, retrieved, discount):
         "lo mismo en bóvedas y entre 14% y 23% menos en bases de datos. "
         "Cada precio por GB-mes se multiplica por 1.024. Las instancias protegidas se cobran por bloque de datos de "
         "origen: VM US$10 por 500 GB, PostgreSQL US$7,5 por 250 GB, Cosmos DB US$25 por 500 GB (precio de lista). "
-        "Redundancia: SQL Database y Managed Instance no tienen GRS simple, solo RA-GRS y RA-GZRS, al mismo precio. "
-        "PostgreSQL Flexible publica un solo medidor de backup (zonal en regiones con zonas) y el backup "
-        "geo-redundante cobra el doble de GB; MySQL Flexible igual. Cosmos DB continuo usa la redundancia de la "
-        "región; el modo periódico permite LRS, ZRS o RA-GRS para las copias extra. Las bóvedas de Azure Backup "
-        "ofrecen LRS, ZRS y GRS; con Cross Region Restore el GRS se cobra como RA-GRS y no se puede revertir. "
-        "Archive no admite bóvedas ZRS. "
+        "Redundancia: solo LRS y ZRS, las que usa el banco. PostgreSQL Flexible publica un solo medidor de backup "
+        "(zonal en regiones con zonas), por eso LRS y ZRS valen lo mismo. Cosmos DB continuo usa la redundancia "
+        "de la región. Archive no admite bóvedas ZRS. "
         "El PITR de SQL, PostgreSQL y MySQL solo cobra lo que excede el almacenamiento gratis. "
         "Azure Backup guarda incrementales: los TB almacenados son menos que los TB protegidos. "
         f"RTO de VM desde la bóveda: Microsoft considera óptimos 30 MB/s y da el ejemplo de 2 TB en hasta 20 h; a "
@@ -500,10 +525,18 @@ def slide_prices(deck, tb, retrieved, discount):
 
 
 def slide_references(deck):
-    slide = base_slide(deck, "Referencias: regulación", "Textos oficiales revisados en noviembre de 2026.")
-    rows = [list(reference) for reference in REGULATION_REFERENCES]
-    table(slide, Inches(0.35), Inches(1.2), Inches(12.63), ["Norma", "Qué se usa", "Versión revisada", "Fuente oficial"],
-          rows, [0.3, 0.38, 0.16, 0.16], row_height=0.7, size=10)
+    slide = base_slide(deck, "Referencias: regulación",
+                       "Textos oficiales revisados en noviembre de 2026. Clic en el número de la norma para abrir su texto.")
+    rows = [[norm.replace(", ", "\n", 1), used, (examples, {"left": True, "size": 9}), (period, {"bold": True, "color": NAVY}), source]
+            for norm, used, examples, period, source, _ in REGULATION_REFERENCES]
+    grid = table(slide, Inches(0.35), Inches(1.15), Inches(12.63),
+                 ["Norma", "Qué se usa", "Ejemplos que da la norma", "Plazo mínimo de conservación",
+                  "Fuente oficial"], rows, [0.2, 0.2, 0.34, 0.14, 0.12], row_height=1.0, size=9.5)
+    grid.rows[0].height = Inches(0.45)
+    # The norm's number (first line of the cell) opens its official text; the title stays plain below it.
+    for r, reference in enumerate(REGULATION_REFERENCES, start=1):
+        for run in grid.cell(r, 0).text_frame.paragraphs[0].runs:
+            run.hyperlink.address = reference[-1]
 
 
 def main():

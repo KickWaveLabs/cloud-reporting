@@ -11,8 +11,14 @@ links are public and were checked in November 2026.
 | Ley 26702, art. 183 | Books and documents kept 10 years; microfilm or "analogous media" allowed | SPIJ (no direct link): <https://spij.minjus.gob.pe/>, search «Ley 26702». Text with notes up to May 2026 |
 | Res. SBS 2660-2015 (consolidated v5) | Arts. 49 and 54: operations register, quarterly backup copy for 5 years, 48 business hours. Arts. 55 and 58: KYC, counterparties, unusual operations, 10 years | <https://intranet2.sbs.gob.pe/dv_int_cn/1540/v5.0/Adjuntos/2660-2015.r.pdf> |
 | Res. SBS 504-2021 (consolidated v5) | Art. 12, num. 3, lit. f) and h): backup strategy and tests. Arts. 23 and 25: cloud and processing abroad | <https://intranet2.sbs.gob.pe/dv_int_cn/2046/v5.0/Adjuntos/504-2021.R.pdf> |
-| Res. SBS 00814-2025 | Amends Res. SBS 877-2020: liabilities with RPO zero and RTO up to 3 hours | <https://intranet2.sbs.gob.pe/dv_int_cn/2483/v1.0/Adjuntos/814-2025.R.pdf> |
 | Circular BCRP 0011-2026 | Art. 46.5: 2-hour recovery. Annex V, section VI: daily backup, yearly restore test, 10 years | <https://www.bcrp.gob.pe/docs/Transparencia/Normas-Legales/Circulares/2026/circular-0011-2026-bcrp.pdf> |
+
+Local copies of the official texts, downloaded on 2026-11-16, are in [regulation/](regulation/):
+[Ley 26702](regulation/ley-26702-art-183.pdf) (cover and art. 183 only; the full SPIJ PDF is 59 MB),
+[Res. SBS 2660-2015](regulation/res-sbs-2660-2015.pdf), [Res. SBS 504-2021](regulation/res-sbs-504-2021.pdf)
+and [Circular BCRP 0011-2026](regulation/circular-bcrp-0011-2026.pdf). The examples on slide 3 come from
+these texts: art. 183 gives none; SBS 2660-2015 art. 49.1 to 49.3 (operations and thresholds), 55 and 58;
+SBS 504-2021 art. 12.3 f) and h); BCRP Anexo V sec. VI and the definitions in art. 2.
 
 ## Service limits (slide 1)
 
@@ -44,6 +50,11 @@ links are public and were checked in November 2026.
 
 ## Backup redundancy names (slides 1 and 2)
 
+The deck shows LRS and ZRS only, the options the bank uses; replication and geo-redundant backup are out of
+its scope (review feedback, 2026-11-16). Keep in mind that LRS and ZRS backups do not survive the loss of a
+whole region, and that Archive is not available on ZRS vaults. The geo options below stay for reference and
+for `bu_guidelines_cost.py`.
+
 | Service | Options | Source |
 |---|---|---|
 | SQL Database and Managed Instance, PITR and LTR | LRS, ZRS, RA-GRS, RA-GZRS. There is no plain GRS meter; RA-GRS and RA-GZRS cost the same (PITR 0.20, LTR 0.05 US$/GB-month list in East US 2) | Retail Prices API meters `RA-GRS Data Stored`, `RA-GZRS Data Stored`; <https://learn.microsoft.com/en-us/azure/azure-sql/database/automated-backups-overview> |
@@ -54,7 +65,7 @@ links are public and were checked in November 2026.
 
 ## Prices (slide 2)
 
-Every price comes from the Azure Retail Prices API; slide 2 shows Central US only, less
+Every price comes from the Azure Retail Prices API; slide 2 shows Central US only, LRS and ZRS, less
 the bank's 30% discount (`DISCOUNT` in the script, `--discount` to change it). On the October 2026 bill, SQL
 LTR came out about 38% below list, so 30% is on the conservative side. The exact meter names are in the
 speaker notes of slide 2.

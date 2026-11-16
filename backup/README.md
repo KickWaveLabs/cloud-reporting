@@ -61,8 +61,8 @@ saving, risk count and calibrated cost empty.
 ## Guidelines deck
 
 `bu_guidelines_deck.py` builds the three-slide guidelines deck: PITR and LTR rules per service for
-regular and regulated data, list price per TB-month in East US 2 and Central US against the vendors'
-quoted tariffs, and the references. It needs no Azure sign-in and reads no estate data: prices come
+regular and regulated data, price per TB-month in Central US (LRS and ZRS, net of the bank's discount)
+against the vendors' quoted tariffs, and the references with the minimum period each norm sets. It needs no Azure sign-in and reads no estate data: prices come
 from the public Azure Retail Prices API, and the rules and regulatory articles are fixed in the
 script.
 

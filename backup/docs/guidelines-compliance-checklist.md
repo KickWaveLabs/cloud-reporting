@@ -12,7 +12,8 @@ notes below it. Rebuild with `python backup/src/bu_guidelines_deck.py`.
 
 - [ ] **¿El plazo de 10 años se cumple conservando el dato en la aplicación, sin un backup de 10 años?**
   - Deck assumes: yes. The backup stays at the base rule unless the application purges records earlier.
-  - If not: set the "Libros y documentos contables" row to `+ A10` without the purge condition.
+  - If not: replace the two bullets of the "Libros y documentos contables" row with "• Agregar 1 backup anual que se
+    guarde 10 años" (`keep_data` is shared with the KYC row).
 - [ ] **¿Qué aplicaciones guardan libros y documentos contables, y alguna borra registros antes de 10 años?**
   - Deck assumes: unknown; the answer decides which systems get A10.
   - If listed: no script change. Keep the list with the deck and apply A10 only to those systems.
@@ -37,7 +38,8 @@ notes below it. Rebuild with `python backup/src/bu_guidelines_deck.py`.
 
 - [ ] **¿Los 10 años se cumplen conservando el dato en la aplicación, sin un backup de 10 años?**
   - Deck assumes: yes, same reading as art. 183.
-  - If not: set the "KYC, contrapartes y operaciones inusuales" row to `+ A10`.
+  - If not: replace the bullets of the "KYC, contrapartes y operaciones inusuales" row with "• Agregar 1 backup anual
+    que se guarde 10 años".
 - [ ] **¿Qué aplicaciones guardan esa información (onboarding, KYC, cumplimiento) y alguna la purga antes de 10
   años?**
   - Deck assumes: unknown.
@@ -63,17 +65,15 @@ notes below it. Rebuild with `python backup/src/bu_guidelines_deck.py`.
   son regulados?**
   - Deck assumes: the regulation sets no frequency. The yearly test is recommended only for regulated scopes.
   - If a frequency applies to all: add it to the "Cualquier otro dato" row.
-- [ ] **Arts. 23 y 25: ¿la autorización vigente para procesar datos en el exterior cubre la copia geo-redundante
-  en Central US?**
-  - Deck assumes: yes. The workloads already run in East US 2 and Central US.
-  - If not: remove "copia geo-redundante en Central US" from the recommendation in the note box at the bottom.
+- [ ] **¿El estándar de redundancia del backup es ZRS en PROD y LRS en no productivo?**
+  - Deck assumes: yes (note box at the bottom of slide 1). Geo-redundant backup is out of the deck's scope.
+  - If not: change the "Redundancia del backup" line in `slide_guidelines`.
 
 ## Res. SBS 00814-2025: continuidad
 
-- [ ] **¿Confirmamos que el RPO cero de los productos pasivos se cumple con replicación (DR) y queda fuera del
-  lineamiento de backup?**
-  - Deck assumes: yes ("Replicación y failover; no es backup").
-  - If not: the requirement cannot be met with backup. Raise it as a DR topic, not in this deck.
+- [x] **¿El RPO cero de los productos pasivos queda fuera del lineamiento de backup?**
+  - Decided in the review (2026-11-16): yes. It is replication, not retention; the row and the norm were
+    removed from the deck. Raise it as a DR topic if needed.
 
 ## Not in the deck yet
 
