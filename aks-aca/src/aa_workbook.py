@@ -1084,7 +1084,7 @@ def build_patterns(workbook, deploy, hpa, kclusters, capabilities, taken_on, per
             sheet.cell(row=row, column=3, value=f'=IFERROR(B{row}/SUM($B${first}:$B${first + len(REPLICA_BUCKETS) - 1}),"")'
                        ).number_format = "0%"
         sheet.append([])
-        header(sheet, ["HPA behaviour", "By ValTrend (maximum, a few days)", "%",
+        header(sheet, ["HPA behaviour", "By ValTrend (export trend, last 30 days)", "%",
                        f"By Container Insights (office average, {period})", "%"])
         first = sheet.max_row + 1
         end = first + len(BEHAVIOURS) - 1

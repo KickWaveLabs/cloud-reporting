@@ -200,6 +200,10 @@ above 0 means the export holds only the application container and Container Insi
 Open each CSV with *Data > From Text/CSV*, comma delimiter. Opening it with a double click splits the
 columns wrong in a Spanish Excel. Three workbooks cover the deck.
 
+Power Query stores the number of columns in the source step (`Csv.Document(..., [Delimiter=",", Columns=21, ...])`).
+When a script adds a column, the last ones are cut and a later step fails with "The column '...' of the table
+wasn't found". Remove `Columns=N,` from the source step (*Home > Advanced Editor*) so every column is read.
+
 ### 1. Cost and capacity
 
 Inputs: `aks_clusters.csv`, `aks_node_pools.csv`, `aks_usage_monthly.csv`, `cost_by_resource.csv`.
