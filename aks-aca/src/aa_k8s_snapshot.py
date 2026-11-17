@@ -61,6 +61,8 @@ Outputs (in --output-dir):
                            the last month, APIM traffic (TPS, hours with traffic), HPAs that do not scale, and the
                            runtime the ADT_019 tree gives it (AKS, ACA, ACA_WITH_REVIEW) with the reason
   snapshot_summary.json    input files, snapshot date, categories, rows without a match and counts per flag (PROD)
+and, in --history-dir (results/aa-history, never cleared), export_history.csv: one row per export day with the
+PROD clusters by category and the PROD microservices of APPLICATION clusters.
 """
 
 import argparse
@@ -79,6 +81,7 @@ azure = aa.azure
 
 DEFAULT_INPUTS = os.path.join(os.path.dirname(aa.TOPIC_DIR), ".local", "aks-aca-inputs")
 OVERRIDES_FILE = "cluster_overrides.csv"
+EXPORT_HISTORY_FILE = "export_history.csv"
 MB_TO_GIB = 1e6 / 1024 ** 3
 ACA_MAX_VCPU, ACA_MAX_GIB = 4, 8
 OVER_REQUEST_FACTOR = 3
@@ -667,6 +670,21 @@ def counts(rows, field):
     return dict(sorted(Counter(row[field] for row in rows).items()))
 
 
+def write_export_history(folder, delimiter, taken_on, cluster_table, deployments, application_keys):
+    """Add (or replace) the export day in export_history.csv: PROD clusters by category and their microservices."""
+    path = os.path.join(folder, EXPORT_HISTORY_FILE)
+    rows = [row for row in aa.read_csv(path) if row["snapshot_date"] != taken_on.isoformat()]
+    prod = [row for row in cluster_table if row["environment"] == "PROD"]
+    by_category = Counter(row["category"] for row in prod)
+    rows.append({"snapshot_date": taken_on.isoformat(),
+                 "prod_application_clusters": by_category.get(aa.APPLICATION, 0),
+                 "prod_microservices": len(prod_application(deployments, application_keys)),
+                 "prod_deployments_in_export": sum(row["environment"] == "PROD" for row in deployments),
+                 **{f"prod_{category.lower()}_clusters": by_category.get(category, 0)
+                    for category in (aa.INFRASTRUCTURE, aa.NO_APPLICATIONS, aa.NO_DATA)}})
+    azure.Output(folder, delimiter).csv(EXPORT_HISTORY_FILE, sorted(rows, key=lambda row: row["snapshot_date"]))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--inputs", default=DEFAULT_INPUTS, help="Folder with the reportHpa and reportDeployment exports")
@@ -678,6 +696,8 @@ def main():
     parser.add_argument("--metrics", default=aa.results_path("aa-metrics"), help="Folder with the aa_metrics.py output")
     parser.add_argument("--cost", default=aa.results_path("aa-cost"), help="Folder with the aa_cost.py output")
     parser.add_argument("--output-dir", default=aa.results_path("aa-k8s-snapshot"))
+    parser.add_argument("--history-dir", default=aa.results_path("aa-history"),
+                        help="Folder of the growing history; this run adds or replaces its export day")
     parser.add_argument("--delimiter", default=",", help="CSV delimiter of the outputs")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
@@ -714,6 +734,7 @@ def main():
     app_hpas, app_deployments = prod_application(hpas, application), prod_application(deployments, application)
     gaps = [row["ci_request_minus_export_vcpu"] for row in app_deployments if row["ci_request_minus_export_vcpu"] != ""]
 
+    write_export_history(args.history_dir, args.delimiter, taken_on, cluster_table, deployments, application)
     output = azure.Output(args.output_dir, args.delimiter)
     output.csv("hpa_snapshot.csv", with_cod_app(hpas, inventory))
     output.csv("deployment_snapshot.csv", with_cod_app(deployments, inventory))

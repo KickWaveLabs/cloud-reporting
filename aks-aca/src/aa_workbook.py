@@ -974,6 +974,86 @@ def header(sheet, values):
     style_header(sheet, sheet.max_row, len(values))
 
 
+HISTORY_TOP = 20
+
+
+def history_series(history, categories):
+    """PROD microservices per sample day without infrastructure clusters: (total per day, clusters per day,
+    microservices per app code and day, clusters per app code). Clusters deleted since keep their samples."""
+    running, clusters = defaultdict(int), defaultdict(int)
+    per_app, app_clusters = defaultdict(lambda: defaultdict(int)), defaultdict(set)
+    for row in history:
+        code = str(row.get("cod_app") or "").upper()
+        category = categories.get(str(row.get("cluster_id") or "").lower(), ("", ""))[0]
+        if row["environment"] != "PROD" or category == aa.INFRASTRUCTURE or code in aa.INFRASTRUCTURE_APPS:
+            continue
+        count = int(number(row["microservices"]) or 0)
+        running[row["date"]] += count
+        clusters[row["date"]] += 1
+        per_app[code or row["cluster"]][row["date"]] += count
+        app_clusters[code or row["cluster"]].add(row["cluster"])
+    return running, clusters, per_app, app_clusters
+
+
+def build_history(workbook, history, export_history, categories):
+    """Microservices per sample day (Container Insights) and per export day (platform export), PROD, without
+    infrastructure clusters, with a line chart and the applications that grew the most."""
+    running, clusters, per_app, app_clusters = history_series(history, categories)
+    exported = {row["snapshot_date"]: number(row["prod_microservices"]) for row in export_history}
+    days = sorted(set(running) | set(exported))
+    if not days:
+        return
+    sheet = workbook.create_sheet("Microservice_history")
+    title(sheet, "Microservices in PROD over time",
+          "Container Insights: microservices with a pod running on the 1st and the 15th of each month, 10:00-11:00 Lima "
+          "(aa_microservice_history.py, results/aa-history). Platform export: microservices configured on each export "
+          "day (aa_k8s_snapshot.py). Infrastructure clusters are left out; clusters deleted since count with the "
+          "samples taken while they existed. A microservice is a deployment outside platform namespaces and not a "
+          "known tool.", span=5)
+    sheet.append([])
+    header(sheet, ["Date", "Microservices running (Container Insights)", "Clusters with microservices",
+                   "Microservices configured (platform export)"])
+    first = sheet.max_row + 1
+    for day in days:
+        sheet.append([day, running.get(day), clusters.get(day), exported.get(day)])
+    last = sheet.max_row
+    chart = LineChart()
+    chart.title = "Microservices in PROD"
+    chart.y_axis.title = "Microservices"
+    chart.height, chart.width = 9, 20
+    chart.add_data(Reference(sheet, min_col=2, max_col=2, min_row=first - 1, max_row=last), titles_from_data=True)
+    chart.add_data(Reference(sheet, min_col=4, max_col=4, min_row=first - 1, max_row=last), titles_from_data=True)
+    chart.set_categories(Reference(sheet, min_col=1, min_row=first, max_row=last))
+    sheet.add_chart(chart, "F4")
+    growth = app_growth(per_app, sorted(running))
+    if growth:
+        section(sheet, f"Top {HISTORY_TOP} applications by growth in microservices ({growth[0]['first_date']} to "
+                       f"{growth[0]['last_date']})", span=8)
+        header(sheet, ["App code", "Clusters", "First sample", "Microservices then", "Microservices now", "Change",
+                       "Change %", "New since the first sample"])
+        for app in growth[:HISTORY_TOP]:
+            sheet.append([app["cod_app"], ";".join(sorted(app_clusters[app["cod_app"]])), app["since"], app["then"],
+                          app["now"], app["change"], app["change_share"], app["new"]])
+            sheet.cell(row=sheet.max_row, column=7).number_format = "0%"
+    set_widths(sheet, [14, 22, 18, 22, 16, 10, 10, 16])
+    sheet.freeze_panes = f"A{first}"
+
+
+def app_growth(per_app, days):
+    """Change in microservices per app code from its first sample to the last sample day, largest increase first."""
+    if not days:
+        return []
+    first_day, last_day = days[0], days[-1]
+    out = []
+    for code, counts in per_app.items():
+        since = min(counts)
+        then, now = counts[since], counts.get(last_day, 0)
+        out.append({"cod_app": code, "first_date": first_day, "last_date": last_day, "since": since, "then": then,
+                    "now": now, "change": now - then, "change_share": (now - then) / then if then else None,
+                    "new": "YES" if since > first_day else "NO"})
+    return sorted(out, key=lambda app: (-app["change"], app["cod_app"]))
+
+
 def build_last_scale(sheet, hpa, prod_hpa, period):
     """Time since the last scale event (rows) by cause of not scaling (columns), and the HPAs whose office maximum
     reached their maximum."""
@@ -2000,11 +2080,19 @@ def main():
     build_criteria(workbook, d_clusters, d_kclusters, d_deploy, d_hpa, d_traffic, workloads_last,
                    max((row["month"] for row in traffic if row["month"] < date.today().strftime("%Y-%m")), default=""),
                    period)
+    history = load(args.results, "aa-history", "microservice_history.csv")
+    export_history = load(args.results, "aa-history", "export_history.csv")
+    build_history(workbook, history, export_history, categories)
+    if history or export_history:
+        snapshot_sources.append((
+            "Microservices over time", "Measured", "Container Insights (KubePodInventory) and the platform export",
+            "Sample days: the 1st and the 15th of each month; one row per export day",
+            "microservice_history.csv, export_history.csv", "Microservice_history sheet"))
     build_summary(workbook, breakeven, measured_refs, r, d_kclusters, cluster_refs, period, months_list, from_snapshot)
     build_sources(workbook, snapshot_sources)
     build_queries(workbook, args.results)
 
-    order = ["Summary", "Clusters", "Patterns", "Technical_criteria", "Assumptions", "Model", "Break_even", "Map",
+    order = ["Summary", "Clusters", "Patterns", "Microservice_history", "Technical_criteria", "Assumptions", "Model", "Break_even", "Map",
              "ACA_by_cluster", "Traffic_profile", "Measured_AKS", "APIM_traffic", "Workloads", "Config_AKS",
              "Config_K8s", "Sources", "Prices", "BIA_candidates"]
     workbook._sheets.sort(key=lambda ws: order.index(ws.title) if ws.title in order

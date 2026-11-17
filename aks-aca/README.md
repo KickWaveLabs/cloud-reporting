@@ -92,6 +92,7 @@ python aks-aca/src/aa_cost.py
 python aks-aca/src/aa_prices.py
 python aks-aca/src/aa_k8s_snapshot.py --snapshot-date <export-day>   # optional, needs the exports below
 python aks-aca/src/aa_signals.py --apim-names apigp01,apigp03,apigp05   # optional
+python aks-aca/src/aa_microservice_history.py   # optional; at least once a month, keeps a growing history
 python aks-aca/src/aa_workbook.py
 python aks-aca/src/aa_deck.py        # after opening the workbook in Excel and saving it
 python aks-aca/src/aa_deck_exec.py
@@ -106,6 +107,7 @@ python aks-aca/src/aa_deck_exec.py
 | `aa_prices.py` | VM sizes in the inventory; eastus2, centralus | < 1 min | `queries_without_rows` in `prices_summary.json` |
 | `aa_k8s_snapshot.py` | Every row of the exports; the workbook counts PROD application clusters | < 10 s | `prod_clusters_by_category`, `cluster_names_shared_by_several_clusters`, `prod_application` in `snapshot_summary.json` |
 | `aa_signals.py` | PROD clusters; the APIM in `--apim-names` | not timed yet (smoke test: 3 clusters + 1 APIM, 1 month, 20 s) | `signals_errors.csv` |
+| `aa_microservice_history.py` | PROD clusters with the add-on; sample days not in the history yet | not timed yet | `history_errors.csv`, `history_summary.json` |
 | `aa_workbook.py` | Everything above | ~30 s | Open in Excel and save once |
 
 1. `aa_inventory.py` first: the other scripts read its CSVs.
@@ -147,14 +149,20 @@ python aks-aca/src/aa_deck_exec.py
    stack and memory per replica split into app and Istio sidecar (last 7 days), and APIM backend latency
    per API and month. It runs on its own after the inventory and writes to
    `results/aa-signals/`; the workbook does not read it yet.
-10. `aa_workbook.py` writes `reports/<date>-aks-aca/aks_aca_comparison.xlsx`. Add a `README.md` next to
+10. Optional: `aa_microservice_history.py` counts the microservices running in each PROD cluster on the 1st and
+    the 15th of each month (10:00-11:00 Lima) from Container Insights, as far back as the workspace keeps. It
+    writes to `results/aa-history/`, which no script clears: each run adds the missing days and keeps the rest,
+    so run it at least once a month. `aa_k8s_snapshot.py` adds one row per export day to the same folder. The
+    workbook's `Microservice_history` sheet and slide 4 of the technical deck show the trend and the applications
+    that grew the most.
+11. `aa_workbook.py` writes `reports/<date>-aks-aca/aks_aca_comparison.xlsx`. Add a `README.md` next to
     it with the scope and gaps of the run (see `reports/2026-11-10-aks-aca/README.md` on the machine that
     ran it).
-11. Optional: `aa_deck.py` builds `aks_aca_deck.pptx`, the technical presentation for architects (diagnosis,
-    technical criteria, strategic front, proposal and annex; 19 slides, native charts, text in Spanish) from the
+12. Optional: `aa_deck.py` builds `aks_aca_deck.pptx`, the technical presentation for architects (diagnosis,
+    technical criteria, strategic front, proposal and annex; 20 slides, native charts, text in Spanish) from the
     workbook's calculated values and `results/` (signals, and node and workload usage for the CPU vs memory
     slide). Open the workbook in Excel and save it first. Its figures are a draft to check.
-12. `aa_deck_exec.py` builds `aks_aca_corporate.pptx`, the corporate deck (slides 1 to 5, text in Spanish) for a
+13. `aa_deck_exec.py` builds `aks_aca_corporate.pptx`, the corporate deck (slides 1 to 5, text in Spanish) for a
     non-technical forum: context, the runtime estate, the ADT_019 criteria with the PROD figure, the theoretical
     distribution per application and the cost optimization with and without discount. It reads only
     `results/` (including `application_snapshot.csv`), so it needs no saved workbook.

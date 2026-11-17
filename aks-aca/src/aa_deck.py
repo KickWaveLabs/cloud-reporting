@@ -10,26 +10,27 @@ Slides:
   Diagnosis
    2. Summary: cost, clusters, CPU and memory use, cost of a minimum cluster
    3. Pattern 1: microservices by layer and capabilities repeated across domains
-   4. Pattern 2: clusters and monthly cost by number of microservices
-   5. Pattern 4: current replicas, HPA behaviour, time without scaling and inflated minimums
-   6. Capacity health: unschedulable pods, OOM kills, CPU vs memory
-   7. Why CPU is low and memory high: what uses node memory, requests vs use, memory per replica, hypotheses
-   8. Configuration drift and clusters under the 4-node minimum
+   4. Microservices over time and the applications that grew the most (results/aa-history)
+   5. Pattern 2: clusters and monthly cost by number of microservices
+   6. Pattern 4: current replicas, HPA behaviour, time without scaling and inflated minimums
+   7. Capacity health: unschedulable pods, OOM kills, CPU vs memory
+   8. Why CPU is low and memory high: what uses node memory, requests vs use, memory per replica, hypotheses
+   9. Configuration drift and clusters under the 4-node minimum
   Technical criteria
-   9. Criteria AKS vs Container Apps with the PROD figure
-  10. Cost under the ADT_019 rules
+  10. Criteria AKS vs Container Apps with the PROD figure
+  11. Cost under the ADT_019 rules
   Strategic front
-  11. Application, configuration and releases
-  12. Security
-  13. Resilience
-  14. Multicloud and key message
+  12. Application, configuration and releases
+  13. Security
+  14. Resilience
+  15. Multicloud and key message
   Proposal
-  15. Per-cluster comparison with measured replicas
-  16. Traffic profile per API
-  17. Quick wins and next steps
+  16. Per-cluster comparison with measured replicas
+  17. Traffic profile per API
+  18. Quick wins and next steps
   Annex
-  18. Business criticality (BIA), information only
-  19. Sources and method
+  19. Business criticality (BIA), information only
+  20. Sources and method
 
 Only APPLICATION clusters enter the PROD figures, as in the workbook; the CSVs read here (signals, node and
 workload usage) are filtered the same way with aa_workbook.cluster_categories.
@@ -50,13 +51,13 @@ from openpyxl import load_workbook
 from pptx import Presentation
 from pptx.chart.data import CategoryChartData
 from pptx.dml.color import RGBColor
-from pptx.enum.chart import XL_CHART_TYPE, XL_LABEL_POSITION, XL_LEGEND_POSITION
+from pptx.enum.chart import XL_CHART_TYPE, XL_LABEL_POSITION, XL_LEGEND_POSITION, XL_MARKER_STYLE
 from pptx.enum.shapes import MSO_SHAPE
 from pptx.enum.text import MSO_ANCHOR, PP_ALIGN
 from pptx.util import Emu, Inches, Pt
 
 import aa_common as aa
-from aa_workbook import cluster_categories
+from aa_workbook import app_growth, cluster_categories, history_series
 
 # Palette of the team's deck: royal blue header ending in a rust tip, navy cards, royal blue highlight boxes.
 NAVY = RGBColor(0x1E, 0x3A, 0x78)
@@ -705,7 +706,7 @@ def bar_chart(slide, left, top, width, height, categories, values, kind, colors,
     return chart
 
 
-def line_chart(slide, left, top, width, height, categories, series):
+def line_chart(slide, left, top, width, height, categories, series, number_format='"$"#,##0'):
     data = CategoryChartData()
     data.categories = categories
     for name, values, _ in series:
@@ -719,7 +720,7 @@ def line_chart(slide, left, top, width, height, categories, series):
     chart.legend.include_in_layout = False
     chart.value_axis.has_major_gridlines = True
     chart.value_axis.major_gridlines.format.line.color.rgb = LIGHT
-    chart.value_axis.tick_labels.number_format, chart.value_axis.tick_labels.number_format_is_linked = '"$"#,##0', False
+    chart.value_axis.tick_labels.number_format, chart.value_axis.tick_labels.number_format_is_linked = number_format, False
     chart.category_axis.format.line.color.rgb = SOFT
     for plot_series, (_, _, color) in zip(chart.plots[0].series, series):
         plot_series.format.line.color.rgb = color
@@ -869,6 +870,62 @@ def slide_pattern1(deck, p, source):
             "compartido", size=13)
     text_box(slide, Inches(7.2), Inches(1.7) + Inches(0.34 * len(rows)) + Inches(0.1), Inches(5.7), Inches(0.6),
              "Detectadas por el nombre del deployment; cada dominio debe confirmarlas.", size=9, italic=True)
+
+
+def short_date(day):
+    """'2026-10-15' -> '15-oct-2026'."""
+    try:
+        year, month, number_ = day.split("-")
+        return f"{int(number_)}-{MONTHS[int(month) - 1][:3]}-{year}"
+    except (ValueError, IndexError):
+        return day
+
+
+def slide_history(deck, results, source):
+    """Microservices in PROD over time and the applications that grew the most; skipped without history."""
+    folder = os.path.join(results, "aa-history")
+    history, exported = read_csv(os.path.join(folder, "microservice_history.csv")), read_csv(
+        os.path.join(folder, "export_history.csv"))
+    if not history and not exported:
+        return
+    clusters = read_csv(os.path.join(results, "aa-inventory", "aks_clusters.csv"))
+    categories, _ = cluster_categories(clusters, read_csv(os.path.join(results, "aa-k8s-snapshot",
+                                                                        "cluster_snapshot.csv")) or [])
+    running, _, per_app, app_clusters = history_series(history, categories)
+    days = sorted(running)
+    configured = {row["snapshot_date"]: to_float(row["prod_microservices"]) for row in exported}
+    if len(days) >= 2:
+        title = (f"Los microservicios en producción pasaron de {number(running[days[0]])} a "
+                 f"{number(running[days[-1]])} entre el {short_date(days[0])} y el {short_date(days[-1])}")
+    elif days:
+        title = f"Microservicios en producción: {number(running[days[0]])} al {short_date(days[0])}"
+    else:
+        last = max(configured)
+        title = f"Microservicios en producción: {number(configured[last])} configurados al {short_date(last)}"
+    slide = base_slide(deck, title, source)
+    axis = sorted(set(days) | set(configured))
+    series = [("Corriendo (Container Insights)", [running.get(day) for day in axis], ORANGE)]
+    if configured:
+        series.append(("Configurados (export de plataforma)", [configured.get(day) for day in axis], NAVY))
+    chart = line_chart(slide, Inches(0.4), Inches(1.3), Inches(7.3), Inches(5.4), [short_date(day) for day in axis],
+                       series, number_format="#,##0")
+    chart.value_axis.minimum_scale = 0  # from zero, so the change is not exaggerated
+    for plot_series, (_, _, color) in zip(chart.plots[0].series, series):
+        plot_series.marker.style, plot_series.marker.size = XL_MARKER_STYLE.CIRCLE, 8
+        plot_series.marker.format.fill.solid()
+        plot_series.marker.format.fill.fore_color.rgb = color
+    growth = app_growth(per_app, days)[:10]
+    if growth:
+        heading(slide, Inches(7.95), Inches(1.3), Inches(5), "Aplicaciones que más crecieron")
+        rows = [["Código de app", "Clusters", "Antes", "Ahora", "Cambio"]]
+        for app in growth:
+            rows.append([app["cod_app"] + (" (nueva)" if app["new"] == "YES" else ""),
+                         ", ".join(sorted(app_clusters[app["cod_app"]]))[:28], number(app["then"]), number(app["now"]),
+                         f"{app['change']:+d}"])
+        table(slide, Inches(7.95), Inches(1.75), Inches(4.95), rows, [0.22, 0.38, 0.13, 0.13, 0.14], highlight_column=4,
+              row_height=0.4, size=9)
+    note_box(slide, Inches(7.95), Inches(6.2), Inches(4.95), Inches(0.6),
+             "Muestras del 1 y el 15 de cada mes, 10:00 a 11:00. Sin clusters de infraestructura.", size=9)
 
 
 def slide_pattern2(deck, p, source):
@@ -1523,6 +1580,7 @@ def main():
     slide_cover(deck, taken_on, period)
     slide_summary(deck, summary, patterns, measured_summary, clusters, measured_source)
     slide_pattern1(deck, patterns, measured_source)
+    slide_history(deck, args.results, measured_source.replace(f"({period})", "(muestras quincenales)", 1))
     slide_pattern2(deck, patterns, measured_source)
     slide_pattern4(deck, patterns, measured_source, period)
     slide_capacity_health(deck, summary, signals, measured_source.replace("Container Insights", "Container Insights "

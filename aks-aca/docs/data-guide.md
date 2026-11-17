@@ -26,6 +26,7 @@ external backends. Pivot by `cod_app` to see one application across clusters, co
 | `aa_cost.py` | How much did each cluster and Container Apps environment cost in the month? | Cost Management query API, `AmortizedCost` | `aa-cost` |
 | `aa_prices.py` | What are the list prices of VMs and Container Apps? | Azure Retail Prices API | `aa-prices` |
 | `aa_signals.py` | Are clusters short of capacity or memory? How slow is each API's backend? | Azure Monitor platform metrics; Container Insights | `aa-signals` |
+| `aa_microservice_history.py` | How many microservices ran on each sample day, and which applications grew? | Container Insights | `aa-history` |
 | `aa_k8s_snapshot.py` | Which microservices exist, with which HPA and BIA, and how did they behave in the month? | No Azure call: the platform team's exports joined with Container Insights | `aa-k8s-snapshot` |
 
 ## The CSVs
@@ -173,6 +174,19 @@ hourly maximum and overstates scaling during rolling deployments.
 `pod_too_big_for_node` = the request is above half of a node's allocatable CPU or memory (node size from
 `aks_usage_monthly`, approximate), so each new replica needs its own node. `ci_request_minus_export_vcpu`
 above 0 means the export holds only the application container and Container Insights adds the Istio sidecar.
+
+### aa-history
+
+This folder is never cleared: each run adds rows and keeps the old ones, so it holds the history that Container
+Insights drops after its retention.
+
+| CSV | One row is | Main columns |
+|---|---|---|
+| `microservice_history.csv` | Sample day x cluster (`aa_microservice_history.py`) | `date` (1st or 15th of a month), `cluster_id`, `cod_app`, `environment`, `microservices` (with a pod running at 10:00-11:00 Lima), `namespaces` |
+| `export_history.csv` | Export day (`aa_k8s_snapshot.py`) | `snapshot_date`, `prod_application_clusters`, `prod_microservices`, clusters per category |
+
+The workbook's `Microservice_history` sheet sums PROD clusters that are not infrastructure (clusters deleted since
+keep their samples) and ranks the top 20 app codes by growth from their first sample to the last one.
 
 ### aa-signals
 
