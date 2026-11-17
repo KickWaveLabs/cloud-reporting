@@ -219,16 +219,21 @@ ASSUMPTIONS = [
     ("cpu_rep", "vCPU per replica", 0.5, "Model assumption. ACA allows 0.25 vCPU / 0.5 GiB to 4 vCPU / 8 GiB; ADT_019 only sets the maximum: more than 4 vCPU / 8 GB goes to AKS."),
     ("mem_rep", "Memory per replica (GiB)", 1.0, "In ACA memory is 2 GiB per vCPU."),
     ("min_rep_office", "Minimum replicas in office hours", 1, "ADT_019: 1 replica from 8 to 20 on working days; scales to zero outside office hours."),
-    ("req_month", "Requests per microservice per month", 1_000_000, "Reference: median monthly requests per API in APIM."),
+    ("req_month", "Requests per microservice per month", 5_000_000,
+     "Reference case agreed for the deck: 5 M per microservice. The median API in APIM receives about 1 M."),
     ("office_req_share", "Share of requests in office hours", 0.9, "Reference: office requests / total in APIM."),
     ("rps_rep", "Requests per second one replica serves", 50, "Assumption: validate with a load test of a typical microservice."),
     ("peak_factor", "Hourly peak / office average", 3, "Reference: hourly peak / average per office hour in APIM."),
-    ("office_active_share", "Share of office time with traffic (active rate)", 0.3,
-     "Reference: 5-minute intervals with requests / office intervals in APIM. The rest is billed at the idle rate."),
+    ("office_active_share", "Share of office time billed at the active rate", 1,
+     "1 = conservative and what the Azure pricing calculator shows. A warm replica is billed at the idle rate only "
+     "while it serves no requests, uses under 0.01 vCPU and receives under 1,000 bytes/s (Microsoft Learn, Container "
+     "Apps billing); a Java replica with agents and probes rarely gets there. 0.3 = share of 5-minute office "
+     "intervals with APIM requests, the optimistic case."),
     ("off_active_s", "Active seconds outside office hours per microservice per month", 36_000,
      "Reference: 5-minute intervals with traffic outside office hours × 300 s (APIM)."),
-    ("off_idle_s", "Idle seconds outside office hours per microservice per month (cooldown)", 12_000,
-     "Reference: wake-ups outside office hours × 300 s cooldown (APIM)."),
+    ("off_idle_s", "Cooldown seconds outside office hours per microservice per month", 12_000,
+     "Reference: wake-ups outside office hours × 300 s cooldown (APIM). Billed at the active rate: outside office "
+     "hours the minimum is 0 replicas, and a replica above the minimum is always billed as active."),
     ("env_count", "Container Apps environments per application", 1, "One environment per application."),
     ("env_mgmt_apply", "Charge 'Environment Management Hour' (1 = yes)", 1,
      "Meter effective since 2026-09; Microsoft Learn does not say which environments it applies to. In "
@@ -237,8 +242,9 @@ ASSUMPTIONS = [
     ("pe_apply", "Charge 'Environment Private Endpoint' (1 = yes)", 1,
      "ADT_019: private network. No charges in the bank's environments in September–October 2026. Set 0 if the "
      "environment uses VNet integration without a private endpoint."),
-    ("grant_apply", "Apply the monthly free grant (1 = yes)", 1,
-     "Per subscription and month; shared by every app in the subscription. Set 0 if the subscription already uses it."),
+    ("grant_apply", "Apply the monthly free grant (1 = yes)", 0,
+     "0 = left out, as in the deck. The grant is per subscription and month and shared by every app in it; set 1 to "
+     "see a subscription that runs a single application."),
     ("grant_vcpu_s", "Free grant: vCPU-seconds", 180_000, "Container Apps pricing (Consumption)."),
     ("grant_mem_s", "Free grant: GiB-seconds", 360_000, "Container Apps pricing (Consumption)."),
     ("grant_requests", "Free grant: requests", 2_000_000, "Container Apps pricing (Consumption)."),
@@ -395,7 +401,7 @@ def aca_formula(r, n, req, warm="ADT", rps_rep=None):
     if warm == "ADT":
         warm_cost = (f"{s['min_rep_office']}*{os_}*({s['office_active_share']}*{s['rate_active']}"
                      f"+(1-{s['office_active_share']})*{s['rate_idle']})")
-        off = f"{s['off_active_s']}*{s['rate_active']}+{s['off_idle_s']}*{s['rate_idle']}"
+        off = f"({s['off_active_s']}+{s['off_idle_s']})*{s['rate_active']}"
     else:  # warm 24x7: the minimum replica never scales to zero
         warm_cost = (f"{s['min_rep_office']}*{s['hours_month']}*3600*({s['office_active_share']}*{s['rate_active']}"
                      f"+(1-{s['office_active_share']})*{s['rate_idle']})")
@@ -480,8 +486,8 @@ def build_breakeven(workbook, r, model, map_info):
     rps = f"({req}*{s['office_req_share']}/{s['office_seconds']})"
     replicas = f"MAX({s['min_rep_office']},CEILING({rps}/{s['rps_rep']},1))"
     not_warm = (f"(({replicas}-{s['min_rep_office']})*{s['office_seconds']}*{s['rate_active']}"
-                f"+{s['off_active_s']}*{s['rate_active']}+{s['off_idle_s']}*{s['rate_idle']}+{req}/1000000*{s['p_requests']})")
-    base = f"({s['off_active_s']}*{s['rate_active']}+{s['off_idle_s']}*{s['rate_idle']}+{req}/1000000*{s['p_requests']})"
+                f"+({s['off_active_s']}+{s['off_idle_s']})*{s['rate_active']}+{req}/1000000*{s['p_requests']})")
+    base = f"(({s['off_active_s']}+{s['off_idle_s']})*{s['rate_active']}+{req}/1000000*{s['p_requests']})"
     budget = f"(({aks_ref}-{s['aca_env_month']}+{s['aca_grant']})/{n_ref})"
     rows = [
         ("Microservices at which ACA (ADT schedule) exceeds AKS list", first_n("B", "D"), "0"),
