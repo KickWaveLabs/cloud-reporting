@@ -225,6 +225,9 @@ def adt_counts(apps):
                               and int(row["microservices"]) > 15 for row in with_traffic),
         "over_size": sum(int(row["microservices_over_aca_size"]) > 0 for row in apps),
         "critical": sum(row["bia"] in ("MUY ALTA", "ALTA") for row in apps),
+        "very_high_cost_share": d.share_of(sum(to_float(row["cost_month_usd"]) or 0 for row in apps
+                                               if row["bia"] == "MUY ALTA"),
+                                           sum(to_float(row["cost_month_usd"]) or 0 for row in apps)),
     }
 
 
@@ -243,7 +246,9 @@ def slide_criteria(deck, apps, scaling, source):
              f"{d.percent(d.share_of(not_scaling, scaling['known']))} de los autoescalados no escala "
              f"({d.percent(d.share_of(scaling['never'], scaling['known']))} en su mínimo, "
              f"{d.percent(d.share_of(scaling['fixed'], scaling['known']))} con mínimo = máximo)"],
-            ["Criticidad del negocio", "BIA ALTA o MUY ALTA", f"{d.number(counts['critical'])} aplicaciones"]]
+            ["Criticidad del negocio", "BIA ALTA o MUY ALTA",
+             f"{d.number(counts['critical'])} aplicaciones; las MUY ALTA concentran "
+             f"{d.percent(counts['very_high_cost_share'])} del costo AKS"]]
     slide = d.base_slide(deck, f"{COUNT_WORDS.get(len(rows) - 1, len(rows) - 1)} criterios ordenan el parque; "
                                f"cada uno con su cifra de producción", source)
     d.table(slide, Inches(0.6), Inches(1.4), Inches(12.1), rows, [0.24, 0.36, 0.40], row_height=0.6, size=12)

@@ -230,6 +230,21 @@ Power Query notes:
 - **Category join.** Only `cluster_snapshot` has `category`. To keep `APPLICATION` clusters in any other
   CSV: *Home > Merge Queries*, the CSV's `cluster_id` with `cluster_snapshot[cluster_id]`, left outer;
   expand only `category`. The row count must not change.
+- **Category lookup (no merge).** Same result with one step and no extra query: in the CSV's query open
+  *Home > Advanced Editor* and add these steps before `in`, replacing `#"Tipo cambiado"` with the name of
+  the last step. `cluster_snapshot` must be a query of the same workbook (connection only is enough).
+
+  ```text
+      Lookup = Table.Distinct(Table.SelectColumns(Table.SelectRows(cluster_snapshot,
+          each [cluster_id] <> null and [cluster_id] <> ""), {"cluster_id", "category"}), {"cluster_id"}),
+      Categories = Record.FromList(Lookup[category], List.Transform(Lookup[cluster_id], Text.Lower)),
+      WithCategory = Table.AddColumn(#"Tipo cambiado", "category",
+          each Record.FieldOrDefault(Categories, Text.Lower([cluster_id]), "NOT_IN_SNAPSHOT"), type text)
+  in
+      WithCategory
+  ```
+
+  `NOT_IN_SNAPSHOT` marks a cluster the export does not have.
 - Pivot calculated fields work on sums: fine for a ratio of two sums (`office_requests / requests`), wrong
   for a per-row value such as a peak (add those as a Power Query column). Function names follow the Excel
   language (`SI`, not `IF`); use `;` if `,` fails.
@@ -274,20 +289,22 @@ only the rows; a slicer on `environment` connected to every pivot (*Report conne
 | Inflated minimums | Same filter plus `behaviour_ci` = NEVER_SCALES; rows `min_above_need` or `min_above_need_beyond_ha` |
 | How far HPAs reach | Power Query column `office_max_vs_hpa_max` = `ci_replicas_max_office / hpa_max`; pivot rows grouped *Start* 0, *End* 0.99, *By* 0.25; `>0.99` = reached its maximum. An upper bound: Container Insights counts distinct pods per hour, so rollouts and restarts add the replaced pods. `office_max_reached_hpa_max` (YES/NO) is the same test; `trend_reached_max` is the export's lower bound. Exact figure: `scripts/grafana.promql`, section 5 |
 | Min, max and average replicas | Same filter; values `hpa_min`, `hpa_max`, `ci_replicas_avg_office`, `ci_replicas_max_office` summarised by average, max and min |
-| Fits Container Apps by size | `deployment_snapshot`, standard filter; rows `fits_aca_by_request` (request per replica <= 4 vCPU and <= 8 GiB; `NO` also when the request is empty). For the `NO` rows, max of `cpu_request_vcpu` and `mem_request_gib` shows why |
-| Clusters short of capacity | `aks_autoscaler_monthly`, filter PROD, `category` = APPLICATION and one `month`; `hours_with_unschedulable` in the filter area without 0; count of `cluster` and sum of the hours |
+| Fits Container Apps by size | `deployment_snapshot`, standard filter; rows `fits_aca_by_request` (request per replica <= 4 vCPU and <= 8 GiB; empty when the export has no request). For the `NO` rows, max of `cpu_request_vcpu` and `mem_request_gib` shows why |
+| Clusters short of capacity | `aks_autoscaler_monthly` with the category lookup, filter PROD, `category` = APPLICATION and one `month`; `hours_with_unschedulable` in the filter area without 0; count of `cluster` and sum of the hours. Share of the time: calculated field `unschedulable_share = hours_with_unschedulable / hours_with_data` (the deck figure). `unschedulable_pods_max` is a peak: summarise it by **max**, never sum |
 | OOM kills | `aks_oomkilled_monthly`, standard filter (`microservice` = YES drops platform namespaces and agents such as `orca-sensor`, `otel-*`, `thanos-*`, `logstash`); rows `cluster` or `workload`; sum `oom_kills` |
 | Microservices over time | `microservice_history`, filter PROD and leave out the infrastructure app codes (`COAA`, `VSDP`, `HTFC`, `INCT`, `O11Y`, `ELKP`, `APIG`, `GFED`); rows `date`; sum `microservices`; line chart. With `cod_app` in rows and `date` in columns it shows which applications grew |
 
 ### 3. APIM traffic (`apim_traffic_summary.xlsx`)
 
-Inputs: `apim_api_monthly.csv`, `apim_hourly_profile.csv`, `apim_latency_monthly.csv`.
+Inputs: `apim_api_monthly.csv`, `apim_hourly_profile.csv`, `apim_latency_monthly.csv`, and
+`application_snapshot.csv` for the per-application figures.
 
 | Figure | Pivot or formula |
 |---|---|
 | Requests per API, office and off-hours | `apim_api_monthly`, filter `month` = last full month; rows `api_id`; sum `requests`, plus calculated fields `office_pct = SI(requests=0, 0, office_requests/requests)` and `offhours_pct` the same with `offhours_requests`, formatted as %. Office = weekday 8:00–19:59 Lima |
 | Off-hours share of the estate | The grand total row of `offhours_pct` in the same pivot |
 | Peak TPS per API | Power Query column `peak_tps = [peak_5min_requests] / 300` (the busiest 5 minutes of the month, as requests per second). Pivot: same `month` filter; rows `api_id`; **max** of `peak_tps`, sorted descending. *Value filters > Greater than* 100 keeps the APIs above the ADT_019 threshold; an empty result is a finding too. The 5-minute average dilutes shorter bursts |
+| Load per application (ADT_019 100 TPS rule) | `application_snapshot` (PROD application clusters only, no filter needed). Power Query: types with the `en-US` locale for `busiest_hour_tps`, `peak_tps_upper_bound`, `weekday_hours_with_traffic`, `microservices`; columns `over_100_tps = if [busiest_hour_tps] = null then "NO_TRAFFIC" else if [busiest_hour_tps] > 100 then "YES" else "NO"` and `constant_and_large = if [weekday_hours_with_traffic] <> null and [weekday_hours_with_traffic] > 10 and [microservices] > 15 then "YES" else "NO"`. Pivot 1: rows `over_100_tps`; count of `cod_app` (YES + NO = applications with traffic). Pivot 2: rows `constant_and_large`; count. Pivot 3: rows `cod_app`; max of `busiest_hour_tps` and `peak_tps_upper_bound`, sorted descending. `busiest_hour_tps` adds the application's APIs hour by hour (average weekday or weekend profile) and takes the busiest hour; `peak_tps_upper_bound` adds each API's own 5-minute peak, which happen at different times, so it overstates the load |
 | Backend latency | `apim_latency_monthly`, last full month; distribution of `backend_duration_avg_ms` (for example < 100 ms, 100–500 ms, > 500 ms) |
 | Traffic class per API (optional) | Already built in the `Traffic_profile` sheet of `aks_aca_comparison.xlsx`; technical deck only until an architect validates the classes. Office vs off-hours above is the ADT_019 model (warm weekdays 8–20, scale to zero otherwise). To rebuild it: `apim_hourly_profile`: helper `week = avg_requests_per_hour x (5 on weekday, 2 on weekend)` and helper window (office: weekday 8–19; extended: any day 6–21; rest). Pivot `api_id` x window, sum `week`. Office >= 90% → OFICINA; office + extended >= 90% → EXTENDIDO; else 24/7 |
 
