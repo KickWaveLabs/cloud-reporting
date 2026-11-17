@@ -310,6 +310,95 @@ Inputs: `apim_api_monthly.csv`, `apim_hourly_profile.csv`, `apim_latency_monthly
 
 The class is per API. Mapping APIs to clusters needs the API → deployment mapping, which is still pending.
 
+**Every TPS in one pivot per application.** `apim_api_monthly` already has `cod_app`. Two figures are
+per application, not per API, so they enter the per-API rows through a lookup and are summarised by **max**
+(each API row of an application carries the same value; a sum would multiply it by the number of APIs):
+
+- Load `application_snapshot.csv` as a connection-only query, with `busiest_hour_tps` typed as a decimal
+  with the `en-US` locale.
+- In the `apim_api_monthly` query (*Home > Advanced Editor*), add before `in`, replacing `#"Tipo cambiado"`
+  with the last step:
+
+  ```text
+      Busiest = Table.Distinct(Table.SelectColumns(application_snapshot, {"cod_app", "busiest_hour_tps"}), {"cod_app"}),
+      BusiestByApp = Record.FromList(Busiest[busiest_hour_tps], Busiest[cod_app]),
+      WithBusiest = Table.AddColumn(#"Tipo cambiado", "busiest_hour_tps",
+          each if [cod_app] = null or [cod_app] = "" then null
+               else Record.FieldOrDefault(BusiestByApp, [cod_app], null), type number)
+  in
+      WithBusiest
+  ```
+
+| Value in the per-application pivot | Summary | Meaning |
+|---|---|---|
+| `office_tps` = `office_requests / 950400` (calculated field; 22 working days × 12 h × 3600 s in October 2026) | Sum | Average TPS over office hours |
+| `offhours_tps` = `offhours_requests / 1728000` ((744 − 264) h × 3600 s) | Sum | Average TPS outside office hours |
+| `busiest_hour_tps` (lookup above) | **Max** | Typical busiest hour of the application; the ADT_019 100 TPS rule |
+| `peak_tps` | **Max** | Busiest 5 minutes of the application's busiest API |
+
+Always `office_tps` <= `busiest_hour_tps` <= the 5-minute peak of the whole application. An application in
+APIM whose clusters are not APPLICATION has no `busiest_hour_tps`.
+
+### 4. Container Apps price per microservice (Azure pricing calculator)
+
+The workbook's `Break_even` sheet shows "ACA cost per microservice per month (ADT schedule)". To back that
+figure with Microsoft's own calculator:
+
+1. Open the [Azure pricing calculator](https://azure.microsoft.com/pricing/calculator/) and add
+   **Container Apps**.
+2. Region **East US 2** (153 of the 158 PROD clusters and every PROD Container Apps environment; Central US
+   has the same Container Apps prices). Plan **Consumption**.
+3. The calculator does not ask for hours. It derives the active time as
+   `requests × execution time per request / concurrent requests`, as if the replica only ran while serving
+   requests. To reproduce the ADT_019 warm replica (on for the whole office schedule), enter values that give
+   the office seconds of the month (22 working days × 12 h × 3600 = 950,400 s in October 2026):
+
+   | Field | Value |
+   |---|---|
+   | Requests per month | 5,000,000 |
+   | Execution time per request | 190 ms (950,400 s / 5 M requests) |
+   | Concurrent requests per container app | 1 |
+   | vCPU / memory | 0.5 / 1 GiB |
+
+   The 190 ms is not the real latency; it only turns the warm replica into the calculator's terms.
+4. The calculator subtracts the monthly free grant of the subscription (180,000 vCPU-s, 360,000 GiB-s,
+   2 M requests). On 2026-11-17 it gave **10.06 USD**. Add the grant back to get the deck figure:
+   180,000 × 0.000024 + 360,000 × 0.000003 + 2 × 0.40 = 6.20, so 10.06 + 6.20 = **16.26 USD**.
+5. Save the estimate (*Export* or a shared link) next to the deck as the evidence.
+
+The deck leaves the grant out: it is one per subscription and month, shared by every app in it, so it does not
+belong to a single microservice. `grant_apply` = 1 in `Assumptions` applies it once to an application's total.
+
+The same figure by hand, with the list prices of the
+[Container Apps pricing page](https://azure.microsoft.com/pricing/details/container-apps/) (East US 2, also
+in `results/aa-prices/prices.csv`):
+
+| Item | Formula | USD per month |
+|---|---|---|
+| Office hours, warm replica (October 2026) | 950,400 s × (0.5 vCPU × 0.000024 + 1 GiB × 0.000003) | 14.26 |
+| Requests | 5 × 0.40 per million | 2.00 |
+| **Total, as in the calculator without the grant** | | **16.26** |
+| Outside office hours (wake-ups and cooldown, measured in APIM; workbook only) | 48,000 s × 0.000015 | 0.72 |
+
+- The workbook uses 21.75 working days (261 a year / 12), so its office hours give 939,600 s and 14.09 USD;
+  with the off-hours line its total is about 16.81 USD. The 1% gap with October is the calendar.
+- 5 M requests in a month are about 4.7 TPS on average in office hours (90% of them, measured share) and about
+  14 TPS in the busiest hour: one replica is enough, so the cost is the warm replica, not the traffic.
+- Every second is at the active rate. Azure bills a warm replica at the idle rate only while it serves no
+  requests, uses under 0.01 vCPU and receives under 1,000 bytes/s
+  ([Container Apps billing](https://learn.microsoft.com/azure/container-apps/billing#consumption-plan)),
+  which a Java replica with agents and probes rarely meets.
+- Outside office hours the minimum is 0 replicas, so a running replica is above the minimum and always billed
+  as active.
+- Pure serverless, for reference (no warm replica): 5 M requests × the measured latency
+  (`backend_duration_avg_ms` in `apim_latency_monthly`, for example 100 ms) / 10 concurrent requests (the
+  default HTTP scale rule) = 50,000 s, about 0.75 + 2.00 = 2.75 USD. Nearly all the ADT_019 cost is keeping the
+  replica warm in office hours.
+- A microservice that needs more than one replica in office hours adds 14.26 per extra replica. The workbook
+  computes replicas from the requests and `rps_rep` (requests per second one replica serves).
+- The `Assumptions` sheet keeps every input editable (`req_month`, `office_active_share`, `grant_apply`,
+  `cpu_rep`, `mem_rep`).
+
 ## Metrics not collected today
 
 Ready to add if a question needs them. Each one is a change to the script and a rerun.
