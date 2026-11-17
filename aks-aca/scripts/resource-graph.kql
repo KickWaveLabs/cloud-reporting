@@ -1,8 +1,8 @@
 // =====================================================================================================
-// Resource Graph queries for AKS (Azure Resource Graph Explorer, or `az graph query -q`)
+// Resource Graph queries for AKS, Container Apps and App Service (Resource Graph Explorer, or `az graph query -q`)
 // =====================================================================================================
 // One query covers every subscription the account can read. Read-only.
-// PROD filter: cluster names end in p + digits (aksveu2xxxxp01). The scripts use the environment tag
+// PROD filter: names end in p + digits (aksveu2xxxxp01, acaeeu2xxxxp01). The scripts use the environment tag
 // first; tags are left out here because they can hold owner names.
 // =====================================================================================================
 
@@ -64,3 +64,87 @@ resources
     keda = tobool(properties.workloadAutoScalerProfile.keda.enabled),
     containerInsights = tobool(properties.addonProfiles.omsagent.enabled)
 | order by mesh desc, cluster asc
+
+
+// -----------------------------------------------------------------------------------------------------
+// CONTAINER APPS
+// -----------------------------------------------------------------------------------------------------
+// Every Container App and job lives in one environment. PROD is taken from the environment name
+// (acaeeu2xxxxp01); app names do not carry the suffix, so apps are filtered through their environment.
+
+// PROD environments: type, profiles, network, and how many apps and jobs each one holds.
+// type = WORKLOAD_PROFILES (v2, the default) or CONSUMPTION_ONLY (v1, legacy).
+resources
+| where type =~ 'microsoft.app/managedenvironments' and name matches regex @'p\d+$'
+| extend envId = tolower(id)
+| join kind=leftouter (
+    resources
+    | where type in~ ('microsoft.app/containerapps', 'microsoft.app/jobs')
+    | extend envId = tolower(tostring(coalesce(properties.environmentId, properties.managedEnvironmentId)))
+    | summarize apps = countif(type =~ 'microsoft.app/containerapps'), jobs = countif(type =~ 'microsoft.app/jobs') by envId
+  ) on envId
+| mv-expand profile = iff(array_length(properties.workloadProfiles) > 0, properties.workloadProfiles, dynamic([null]))
+| summarize profiles = make_list(strcat(tostring(profile.name), ':', tostring(profile.workloadProfileType))),
+    apps = take_any(coalesce(apps, 0)), jobs = take_any(coalesce(jobs, 0)),
+    envType = take_any(iff(array_length(properties.workloadProfiles) > 0, 'WORKLOAD_PROFILES', 'CONSUMPTION_ONLY')),
+    internal = take_any(tostring(properties.vnetConfiguration.internal)),
+    zoneRedundant = take_any(tostring(properties.zoneRedundant)),
+    peerEncryption = take_any(tostring(properties.peerTrafficConfiguration.encryption.enabled)),
+    publicNetworkAccess = take_any(tostring(properties.publicNetworkAccess))
+    by environment = name, resourceGroup, location
+| order by apps desc, environment asc
+
+// PROD Container Apps and jobs: profile, replicas, size of the first container, state.
+resources
+| where type in~ ('microsoft.app/containerapps', 'microsoft.app/jobs')
+| extend envId = tolower(tostring(coalesce(properties.environmentId, properties.managedEnvironmentId)))
+| join kind=inner (
+    resources
+    | where type =~ 'microsoft.app/managedenvironments' and name matches regex @'p\d+$'
+    | project envId = tolower(id), environment = name
+  ) on envId
+| extend container = properties.template.containers[0]
+| project app = name, appType = iff(type =~ 'microsoft.app/jobs', 'JOB', 'APP'), environment, resourceGroup,
+    profile = tostring(properties.workloadProfileName),
+    minReplicas = toint(properties.template.scale.minReplicas), maxReplicas = toint(properties.template.scale.maxReplicas),
+    containers = array_length(properties.template.containers),
+    cpu = todouble(container.resources.cpu), memory = tostring(container.resources.memory),
+    ingressExternal = tostring(properties.configuration.ingress.external),
+    runningStatus = tostring(properties.runningStatus)
+| order by environment asc, app asc
+
+
+// -----------------------------------------------------------------------------------------------------
+// APP SERVICE AND FUNCTIONS
+// -----------------------------------------------------------------------------------------------------
+// PROD from the name suffix. On 2026-11-17 it returned 381 plans and 438 sites; the scripts, which read the
+// environment tag first, found 383 PROD plans and the same 438 sites.
+
+// PROD plans: SKU, workers, OS and sites. Dynamic, ElasticPremium and FlexConsumption only host functions.
+resources
+| where type =~ 'microsoft.web/serverfarms' and name matches regex @'p\d+$'
+| project plan = name, resourceGroup, location, sku = tostring(sku.name), tier = tostring(sku.tier),
+    workers = toint(sku.capacity), os = iff(tobool(properties.reserved), 'LINUX', 'WINDOWS'),
+    sites = toint(properties.numberOfSites), zoneRedundant = tobool(properties.zoneRedundant)
+| order by tier asc, plan asc
+
+// PROD plans by tier: plans, workers and sites. Plans with 0 sites cost money and run nothing.
+resources
+| where type =~ 'microsoft.web/serverfarms' and name matches regex @'p\d+$'
+| summarize plans = count(), workers = sum(toint(sku.capacity)), sites = sum(toint(properties.numberOfSites)),
+    emptyPlans = countif(toint(properties.numberOfSites) == 0) by tier = tostring(sku.tier)
+| order by plans desc
+
+// PROD web apps and function apps with their plan SKU.
+resources
+| where type =~ 'microsoft.web/sites' and name matches regex @'p\d+$'
+| extend planId = tolower(tostring(properties.serverFarmId))
+| join kind=leftouter (
+    resources
+    | where type =~ 'microsoft.web/serverfarms'
+    | project planId = tolower(id), plan = name, planSku = tostring(sku.name), planTier = tostring(sku.tier)
+  ) on planId
+| extend siteType = iff(kind contains 'functionapp', 'FUNCTION', 'WEB'), container = iff(kind contains 'container', 'YES', 'NO')
+| project site = name, siteType, container, state = tostring(properties.state),
+    plan, planSku, planTier, resourceGroup
+| order by siteType asc, site asc
