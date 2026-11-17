@@ -116,30 +116,102 @@ quantile_over_time(0.95, (sum by (cluster) (rate(container_cpu_usage_seconds_tot
 # 5. INSTANCES AND AUTOSCALING (HPA)
 # -----------------------------------------------------------------------------------------------------
 
-# HPA limits and current replicas, one row per HPA.
+# Why this source: kube-state-metrics reports the replica count the HPA itself keeps. Container Insights
+# (hpa_snapshot ci_replicas_*) counts distinct pods seen per hour, so every rollout or restart adds the
+# replaced pods and its maximum can exceed hpa_max. These queries give the exact figure.
+#
+# Window: [30d:5m] ends at the query time. To match the Container Insights period (for example October),
+# set Explore's time range to end at that month's last day 23:59, use the "Instant" query type and
+# change 30d to the month's days (31d). Limits (min, max) are read at that same instant, as hpa_snapshot
+# reads them on the export day.
+#
+# Per-HPA rows join hpa_snapshot by cluster + namespace + hpa (label horizontalpodautoscaler).
+# Counts are for every HPA the data source sees; add `by (cluster)` to count per cluster, and filter
+# namespace=~"..." to drop platform namespaces.
+
+# --- 5a. Configuration, one row per HPA ---------------------------------------------------------------
+
 kube_horizontalpodautoscaler_spec_min_replicas
 kube_horizontalpodautoscaler_spec_max_replicas
 kube_horizontalpodautoscaler_status_current_replicas
 
-# Highest replica count each HPA reached in office hours over 30 days.
+# Deployment each HPA scales (label scaletargetref_name), to join with deployment_snapshot.
+kube_horizontalpodautoscaler_info
+
+# --- 5b. How far each HPA scales, one row per HPA (office hours) -------------------------------------
+
+# Average replicas in office hours. Exact counterpart of ci_replicas_avg_office.
+avg_over_time((kube_horizontalpodautoscaler_status_current_replicas
+  and on() (hour(vector(time() - 18000)) >= 8 < 20) and on() (day_of_week(vector(time() - 18000)) >= 1 <= 5))[30d:5m])
+
+# Highest replica count reached in office hours. Exact counterpart of ci_replicas_max_office.
 max_over_time((kube_horizontalpodautoscaler_status_current_replicas
   and on() (hour(vector(time() - 18000)) >= 8 < 20) and on() (day_of_week(vector(time() - 18000)) >= 1 <= 5))[30d:5m])
 
-# Same, as a share of the configured maximum (1 = reached its maximum).
+# Same, as a share of the configured maximum (1 = reached its maximum; never above 1 here).
+# Exact counterpart of office_max_vs_hpa_max; group it 0-0.25-0.5-0.75-0.99 in the pivot.
 max_over_time((kube_horizontalpodautoscaler_status_current_replicas
   and on() (hour(vector(time() - 18000)) >= 8 < 20) and on() (day_of_week(vector(time() - 18000)) >= 1 <= 5))[30d:5m])
 / on(cluster, namespace, horizontalpodautoscaler)
 kube_horizontalpodautoscaler_spec_max_replicas
 
-# Share of time each HPA sat at its minimum over 30 days (1 = never scaled).
+# Share of time at its minimum over 30 days, all hours (1 = never left it).
 avg_over_time((kube_horizontalpodautoscaler_status_current_replicas
   == bool on(cluster, namespace, horizontalpodautoscaler) kube_horizontalpodautoscaler_spec_min_replicas)[30d:5m])
 
-# Share of time each HPA sat at its maximum (close to 1 = the maximum is too low).
+# Share of time at its maximum, all hours (close to 1 = the maximum is too low).
 avg_over_time((kube_horizontalpodautoscaler_status_current_replicas
   == bool on(cluster, namespace, horizontalpodautoscaler) kube_horizontalpodautoscaler_spec_max_replicas)[30d:5m])
 
-# Deployments scaled to 0 (zombie candidates).
+# --- 5c. Behaviour counts, same rules as behaviour_ci -------------------------------------------------
+# FIXED = min equals max. NEVER_SCALES = office average <= 110% of min. AT_MAX = office average >= 90% of
+# max. SCALES = total - the other three. Each count is one number for the slide.
+
+# Total HPAs.
+count(kube_horizontalpodautoscaler_spec_max_replicas)
+
+# FIXED: min = max, cannot scale.
+count(kube_horizontalpodautoscaler_spec_min_replicas
+  >= on(cluster, namespace, horizontalpodautoscaler) kube_horizontalpodautoscaler_spec_max_replicas)
+
+# NEVER_SCALES: can scale, but the office average stays at its minimum.
+count(
+  avg_over_time((kube_horizontalpodautoscaler_status_current_replicas
+    and on() (hour(vector(time() - 18000)) >= 8 < 20) and on() (day_of_week(vector(time() - 18000)) >= 1 <= 5))[30d:5m])
+  <= on(cluster, namespace, horizontalpodautoscaler) (1.1 * kube_horizontalpodautoscaler_spec_min_replicas)
+  and on(cluster, namespace, horizontalpodautoscaler)
+  (kube_horizontalpodautoscaler_spec_min_replicas
+    < on(cluster, namespace, horizontalpodautoscaler) kube_horizontalpodautoscaler_spec_max_replicas)
+)
+
+# AT_MAX: the office average stays near its maximum (and above 110% of its minimum, so no overlap).
+count(
+  avg_over_time((kube_horizontalpodautoscaler_status_current_replicas
+    and on() (hour(vector(time() - 18000)) >= 8 < 20) and on() (day_of_week(vector(time() - 18000)) >= 1 <= 5))[30d:5m])
+  >= on(cluster, namespace, horizontalpodautoscaler) (0.9 * kube_horizontalpodautoscaler_spec_max_replicas)
+  >  on(cluster, namespace, horizontalpodautoscaler) (1.1 * kube_horizontalpodautoscaler_spec_min_replicas)
+)
+
+# HPAs that reached their maximum at least once in office hours (exact counterpart of
+# office_max_reached_hpa_max; FIXED excluded).
+count(
+  max_over_time((kube_horizontalpodautoscaler_status_current_replicas
+    and on() (hour(vector(time() - 18000)) >= 8 < 20) and on() (day_of_week(vector(time() - 18000)) >= 1 <= 5))[30d:5m])
+  >= on(cluster, namespace, horizontalpodautoscaler) kube_horizontalpodautoscaler_spec_max_replicas
+  and on(cluster, namespace, horizontalpodautoscaler)
+  (kube_horizontalpodautoscaler_spec_min_replicas
+    < on(cluster, namespace, horizontalpodautoscaler) kube_horizontalpodautoscaler_spec_max_replicas)
+)
+
+# --- 5d. Zombies ----------------------------------------------------------------------------------------
+
+# HPAs at 0 replicas now (the deployment was scaled to 0 by hand; the HPA does not go to 0 on its own).
+kube_horizontalpodautoscaler_status_current_replicas == 0
+
+# HPAs at 0 during the whole window: confirmed zombies, not a one-day stop.
+max_over_time(kube_horizontalpodautoscaler_status_current_replicas[30d:5m]) == 0
+
+# Deployments scaled to 0, with or without HPA.
 kube_deployment_spec_replicas == 0
 
 

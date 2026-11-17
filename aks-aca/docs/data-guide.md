@@ -193,7 +193,7 @@ keep their samples) and ranks the top 20 app codes by growth from their first sa
 | CSV | One row is | Main columns |
 |---|---|---|
 | `aks_autoscaler_monthly.csv` | Cluster x month | `hours_with_data` (0 = no autoscaler, the metric is not emitted), `hours_with_unschedulable`, `office_hours_with_unschedulable`, `unschedulable_pods_max` (highest hourly average) |
-| `aks_oomkilled_monthly.csv` | Cluster x namespace x workload x month | `oom_kills`, `pods` affected, `system_namespace` |
+| `aks_oomkilled_monthly.csv` | Cluster x namespace x workload x month | `oom_kills`, `pods` affected, `system_namespace`, `microservice` (`YES` = an application workload, same rule as `deployment_snapshot`) |
 | `aks_stack_memory.csv` | Cluster x namespace x workload (last `--stack-days`, office hours) | `stack` (Quarkus, Spring Boot, Java, .NET, Node.js, Python, Unidentified), `replicas_avg`, `app_mem_gib_per_replica`, `sidecar_mem_gib_per_replica` (Istio; empty when the pod has no sidecar) |
 | `apim_latency_monthly.csv` | APIM x API x month | `backend_duration_avg_ms`, `backend_duration_max_ms` (APIM to the backend and back), `duration_avg_ms`, `duration_max_ms` (whole gateway request) |
 
@@ -251,7 +251,7 @@ Inputs: the four `aa-k8s-snapshot` CSVs, plus the cost per cluster from workbook
 | BIA (annex) | `cluster_snapshot` with the cost column; rows `bia`, columns `in_export` |
 | Fits Container Apps by size | `deployment_snapshot`; rows `fits_aca_by_request` |
 | Clusters short of capacity | `aks_autoscaler_monthly`, filter PROD; count clusters with `hours_with_unschedulable` > 0; sum the hours |
-| OOM kills | `aks_oomkilled_monthly`, filter PROD, `system_namespace` = NO and outside platform namespaces (`orcasecurity` included: its sensor is a security agent, not an app); rows `cluster` or `workload`; sum `oom_kills` |
+| OOM kills | `aks_oomkilled_monthly`, filter PROD and `microservice` = YES (drops platform namespaces and agents such as `orca-sensor`, `otel-*`, `thanos-*`, `logstash`); rows `cluster` or `workload`; sum `oom_kills` |
 
 ### 3. APIM traffic
 

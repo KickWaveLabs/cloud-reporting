@@ -44,7 +44,7 @@ PLATFORM_NAMESPACE_PREFIXES = ("aks-istio", "istio-", "calico", "tigera", "gatek
 TOOL_WORKLOAD_PREFIXES = ("pod-restart-cronjob", "agic-ingress", "otel-", "opentelemetry", "shgw", "chaos",
                           "arc-", "actions-runner", "github-runner", "tfc-agent", "sonarqube", "demo-sonarqube",
                           "connectivity-toolbox", "grafana", "alloy", "elasticsearch", "kibana", "logstash", "memcached",
-                          "envoy-rw", "apollo-router")
+                          "envoy-rw", "apollo-router", "orca-", "thanos-", "irontap")
 # Applications whose clusters only run infrastructure tools: excluded from every application figure.
 INFRASTRUCTURE_APPS = {
     "COAA": "GitHub Actions runners", "VSDP": "GitHub Actions runners", "HTFC": "Terraform Cloud agents",

@@ -122,6 +122,7 @@ def stack_rows(ctx, client, cluster, start, end):
     return [{"cluster": cluster["name"], "cluster_id": cluster["id"].lower(), "environment": cluster["environment"], "namespace": namespace,
              "workload": workload, "kind": kind,
              "system_namespace": "YES" if namespace in aa.SYSTEM_NAMESPACES or str(namespace).startswith("aks-istio") else "NO",
+             "microservice": "YES" if aa.is_microservice(namespace, workload) else "NO",
              "stack": stack_of.get((namespace, workload, kind), "Unidentified"), **figures}
             for (namespace, workload, kind), figures in sorted(by_workload.items())]
 
@@ -159,6 +160,7 @@ def oom_rows(ctx, client, cluster, start, end):
              "namespace": row["Namespace"], "workload": row["Workload"], "kind": row["ControllerKind"],
              "system_namespace": "YES" if row["Namespace"] in aa.SYSTEM_NAMESPACES
                                  or str(row["Namespace"]).startswith("aks-istio") else "NO",
+             "microservice": "YES" if aa.is_microservice(row["Namespace"], row["Workload"]) else "NO",
              "oom_kills": row["OomKills"], "pods": row["Pods"]} for row in rows]
 
 
