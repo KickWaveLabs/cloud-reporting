@@ -9,9 +9,9 @@ uses a simplified ADT_019 model (see aca_estimate); the workbook's ACA_by_cluste
 cluster. No Azure call is made; nothing leaves the machine.
 
 Slides:
-  1. Context: workloads and the runtime for each
-  2. The runtime estate today: AKS, Container Apps, App Service and Functions by environment, and the PROD
-     AKS clusters with applications (the rest are named as excluded)
+  1. Context: monoliths and microservices, and the runtime for each
+  2. The PROD runtime estate: AKS, Container Apps, App Service and Functions, and the AKS clusters by category
+     (only the clusters with applications enter the analysis)
   3. Criteria to sort the estate (ADT_019), each with the PROD figure
   4. Theoretical distribution after applying the criteria
   5. Cost optimization: monthly and annual, with and without discount
@@ -90,21 +90,24 @@ def read_estate(results):
     mem_used = sum(to_float(row["mem_used_office_avg_gib"]) or 0 for row in usage if row["mode"] != "ALLOCATABLE")
     cpu_total = sum(to_float(row["cpu_allocatable_avg"]) or 0 for row in usage if row["mode"] == "ALLOCATABLE")
     mem_total = sum(to_float(row["mem_allocatable_avg_gib"]) or 0 for row in usage if row["mode"] == "ALLOCATABLE")
-    inventory = {
-        "aks": results_csv(results, "aa-inventory", "aks_clusters.csv"),
-        "aca": results_csv(results, "aa-inventory", "aca_apps.csv"),
-        "web": [row for row in results_csv(results, "aa-inventory", "app_services.csv") if row.get("type") == "WEB"],
-        "functions": [row for row in results_csv(results, "aa-inventory", "app_services.csv")
-                      if row.get("type") == "FUNCTION"],
+    sites = [row for row in results_csv(results, "aa-inventory", "app_services.csv") if row["environment"] == "PROD"]
+    prod = {
+        "aks": sum(row["environment"] == "PROD" for row in results_csv(results, "aa-inventory", "aks_clusters.csv")),
+        "aca": sum(row["environment"] == "PROD" for row in results_csv(results, "aa-inventory", "aca_apps.csv")),
+        "aca_environments": sum(row["environment"] == "PROD"
+                                for row in results_csv(results, "aa-inventory", "aca_environments.csv")),
+        "web": sum(row.get("type") == "WEB" for row in sites),
+        "functions": sum(row.get("type") == "FUNCTION" for row in sites),
+        "plans": sum(row["environment"] == "PROD"
+                     for row in results_csv(results, "aa-inventory", "app_service_plans.csv")),
     }
-    by_environment = {runtime: Counter(row["environment"] for row in rows) for runtime, rows in inventory.items()}
     prod_cost = defaultdict(float)
     for row in cost_rows:
         if row["month"] == month and row["environment"] == "PROD":
             prod_cost[row["owner_type"]] += to_float(row["cost_usd"]) or 0
     return {"month": month, "by_category": by_category, "total_clusters": len(clusters),
             "cpu_used": cpu_used, "cpu_total": cpu_total, "mem_used": mem_used, "mem_total": mem_total,
-            "by_environment": by_environment, "prod_cost": prod_cost}
+            "prod": prod, "prod_cost": prod_cost}
 
 
 def read_scaling(results):
@@ -131,60 +134,72 @@ def read_applications(results):
 # ---------------------------------------------------------------------------
 
 
+def runtime_card(slide, left, top, width, height, title, runtime, lines, accent):
+    d.rounded(slide, left, top, width, height, d.CARD)
+    d.text_box(slide, left + Inches(0.25), top + Inches(0.15), width - Inches(0.5), Inches(0.45), title, size=18,
+               bold=True, color=accent)
+    d.text_box(slide, left + Inches(0.25), top + Inches(0.6), width - Inches(0.5), Inches(0.9), lines, size=12,
+               color=d.WHITE)
+    d.text_box(slide, left + Inches(0.25), top + height - Inches(0.55), width - Inches(0.5), Inches(0.4), runtime,
+               size=13, bold=True, color=d.WHITE)
+
+
 def slide_context(deck, source):
-    slide = d.base_slide(deck, "Cada tipo de aplicación tiene su runtime: hoy casi todo corre en AKS", source)
-    rows = [["Tipo de aplicación", "Runtime", "Cuándo", "Cómo se paga"],
-            ["Microservicios", "AKS (Kubernetes)", "Mucha carga constante, más de 15 microservicios o plataforma "
-             "compartida", "Nodos encendidos 24/7, se usen o no"],
-            ["Microservicios", "Azure Container Apps", "Carga variable o concentrada en horario de oficina",
-             "Por segundo de uso; escala a cero fuera de horario"],
-            ["Monolito", "App Service", "Una sola aplicación desplegable, uso interno", "Plan fijo por instancia"],
-            ["Lógica por eventos", "Azure Functions", "Responde a eventos de servicios de Azure", "Por ejecución"]]
-    d.table(slide, Inches(0.6), Inches(1.45), Inches(12.1), rows, [0.17, 0.19, 0.38, 0.26], row_height=0.62, size=12)
-    d.callout(slide, Inches(0.6), Inches(4.85), Inches(12.1), Inches(0.95),
-              "El lineamiento de arquitectura (ADT_019) define qué runtime corresponde según carga, uso y tamaño.",
-              size=16)
-    d.note_box(slide, Inches(0.6), Inches(6.0), Inches(12.1), Inches(0.7),
-               "El mismo lineamiento pide re-evaluar la plataforma cuando el uso real cambia: eso es lo que mide esta "
-               "propuesta.", size=11)
+    slide = d.base_slide(deck, "Monolitos y microservicios necesitan runtimes distintos", source)
+    runtime_card(slide, Inches(0.6), Inches(1.4), Inches(3.7), Inches(2.6), "Monolito",
+                 "Runtime: App Service",
+                 ["• Una sola aplicación que se despliega completa.", "• Escala toda junta."], d.SKY)
+    runtime_card(slide, Inches(4.55), Inches(1.4), Inches(8.15), Inches(2.6), "Microservicios",
+                 "Runtime: AKS o Container Apps, según la carga",
+                 ["• Muchos servicios pequeños que se despliegan y escalan por separado.",
+                  "• Carga alta y constante → AKS (Kubernetes): nodos encendidos las 24 horas.",
+                  "• Carga baja, variable o en horario de oficina → Container Apps: paga por uso y apaga "
+                  "fuera de horario."], d.ORANGE)
+    runtime_card(slide, Inches(0.6), Inches(4.2), Inches(3.7), Inches(1.5), "Eventos de Azure",
+                 "Runtime: Azure Functions", ["• Código que responde a un evento."], d.GREEN)
+    d.callout(slide, Inches(4.55), Inches(4.2), Inches(8.15), Inches(1.5),
+              "Hoy casi todo corre en AKS, el runtime pensado para carga alta y constante.", size=18, fill=d.RUST)
 
 
 def slide_estate(deck, estate, apps, source):
     month = month_label(estate["month"])
     category = estate["by_category"]
-    counts = estate["by_environment"]
+    prod = estate["prod"]
     app = category.get(aa.APPLICATION, {"clusters": 0, "cost": 0.0, "microservices": 0})
-    aks_total = sum(counts["aks"].values())
-    slide = d.base_slide(deck, f"El parque: {aks_total} clusters AKS ({counts['aks']['PROD']} en PROD), "
-                               f"{sum(counts['aca'].values())} Container Apps y {sum(counts['web'].values())} App Services",
-                         source)
-    rows = [["Runtime", "PROD", "CERT", "DESA", "Total", f"Costo PROD {month}"]]
-    for key, label, owner in (("aks", "AKS (clusters)", "AKS"), ("aca", "Container Apps (apps)", "ACA"),
-                              ("web", "App Service (web apps)", None), ("functions", "Azure Functions", None)):
-        environments = counts[key]
-        cost = d.money(estate["prod_cost"][owner]) if owner else "No medido"
-        rows.append([label] + [d.number(environments[env]) for env in ("PROD", "CERT", "DESA")]
-                    + [d.number(sum(environments.values())), cost])
-    d.table(slide, Inches(0.6), Inches(1.45), Inches(7.9), rows, [0.32, 0.11, 0.11, 0.11, 0.12, 0.23],
-            highlight_column=1, row_height=0.5, size=12)
-    figures = [(d.number(app["clusters"]), "clusters AKS PROD con aplicaciones"),
-               (d.number(app["microservices"]), f"microservicios en {d.number(len(apps))} aplicaciones"),
-               (d.money(app["cost"]), f"al mes ({d.money(app['cost'] * 12)} al año)")]
-    for index, (value, label) in enumerate(figures):
-        d.kpi(slide, Inches(8.85), Inches(1.45 + index * 0.98), Inches(3.85), Inches(0.88), value, label,
-              value_size=22, label_size=10)
-    rows = [["Clusters AKS PROD fuera del análisis", "Clusters", f"Costo {month}"]]
-    for code, label in ((aa.NO_APPLICATIONS, "Creados sin aplicaciones"),
+    slide = d.base_slide(deck, f"Producción: {prod['aks']} clusters AKS concentran los microservicios", source)
+    cards = [("AKS", prod["aks"], "clusters",
+              [f"{d.number(app['microservices'])} microservicios", f"{d.number(len(apps))} aplicaciones",
+               f"{d.money(estate['prod_cost']['AKS'])} al mes"], d.ORANGE),
+             ("Container Apps", prod["aca"], "apps",
+              [f"{d.number(prod['aca_environments'])} entornos", f"{d.money(estate['prod_cost']['ACA'])} al mes"], d.GREEN),
+             ("App Service", prod["web"], "web apps", [f"{d.number(prod['plans'])} planes (con Functions)",
+                                                      "Costo no medido"], d.SKY),
+             ("Azure Functions", prod["functions"], "function apps", ["Costo no medido"], d.SKY)]
+    for index, (name, count, unit, lines, accent) in enumerate(cards):
+        left = Inches(0.6 + index * 3.07)
+        d.rounded(slide, left, Inches(1.35), Inches(2.9), Inches(2.45), d.CARD)
+        d.text_box(slide, left, Inches(1.45), Inches(2.9), Inches(0.4), name, size=14, bold=True, color=d.WHITE,
+                   align=d.PP_ALIGN.CENTER)
+        d.text_box(slide, left, Inches(1.85), Inches(2.9), Inches(0.75), d.number(count), size=36, bold=True,
+                   color=accent, align=d.PP_ALIGN.CENTER)
+        d.text_box(slide, left, Inches(2.55), Inches(2.9), Inches(0.3), unit, size=11, color=d.SOFT,
+                   align=d.PP_ALIGN.CENTER)
+        d.text_box(slide, left + Inches(0.15), Inches(2.9), Inches(2.6), Inches(0.85), lines, size=11, bold=True,
+                   color=d.WHITE, align=d.PP_ALIGN.CENTER)
+    rows = [["Clusters AKS en producción", "Clusters", f"Costo {month}"]]
+    for code, label in ((aa.APPLICATION, "Con aplicaciones (base del análisis)"),
+                        (aa.NO_APPLICATIONS, "Creados sin aplicaciones"),
                         (aa.INFRASTRUCTURE, "Infraestructura (CI/CD, observabilidad, gateways)"),
                         (aa.NO_DATA, "Sin datos")):
         entry = category.get(code)
         if entry and entry["clusters"]:
             rows.append([label, d.number(entry["clusters"]), d.money(entry["cost"])])
-    d.table(slide, Inches(0.6), Inches(4.5), Inches(7.9), rows, [0.6, 0.15, 0.25], row_height=0.36, size=11)
-    d.note_box(slide, Inches(8.85), Inches(4.5), Inches(3.85), Inches(1.45),
-               f"En horario de oficina, los clusters con aplicaciones usan "
-               f"{d.percent(d.share_of(estate['cpu_used'], estate['cpu_total']))} de su CPU y "
-               f"{d.percent(d.share_of(estate['mem_used'], estate['mem_total']))} de su RAM.", size=11)
+    d.table(slide, Inches(0.6), Inches(4.1), Inches(7.9), rows, [0.6, 0.15, 0.25], highlight_column=None,
+            row_height=0.4, size=12)
+    d.note_box(slide, Inches(8.85), Inches(4.1), Inches(3.85), Inches(2.0),
+               [f"Los clusters con aplicaciones usan {d.percent(d.share_of(estate['cpu_used'], estate['cpu_total']))} "
+                f"de su CPU y {d.percent(d.share_of(estate['mem_used'], estate['mem_total']))} de su RAM en horario "
+                f"de oficina.", "", "Microservicios = deployments de aplicación en AKS."], size=11)
 
 
 def adt_counts(apps):
@@ -367,7 +382,7 @@ def main():
 
     deck = Presentation()
     deck.slide_width, deck.slide_height = Inches(13.333), Inches(7.5)
-    slide_context(deck, "Fuente: lineamiento ADT_019 (runtime de ejecución).")
+    slide_context(deck, "Fuente: lineamientos de arquitectura del banco.")
     slide_estate(deck, estate, apps, measured)
     slide_criteria(deck, apps, scaling, criteria)
     slide_distribution(deck, apps, estate, criteria)
