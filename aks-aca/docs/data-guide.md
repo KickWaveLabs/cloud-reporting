@@ -211,16 +211,30 @@ keep their samples) and ranks the top 20 app codes by growth from their first sa
 
 ## Building your own workbooks
 
+Three workbooks cover the deck: `cost_and_capacity_summary.xlsx` (everything with money),
+`ms_and_hpa_summary.xlsx` (microservices, HPA and cluster health) and `apim_traffic_summary.xlsx`.
+
 Open each CSV with *Data > From Text/CSV*, comma delimiter. Opening it with a double click splits the
-columns wrong in a Spanish Excel. Three workbooks cover the deck.
+columns wrong in a Spanish Excel. Use Power Query only to add columns; every figure below is a pivot.
 
-Power Query stores the number of columns in the source step (`Csv.Document(..., [Delimiter=",", Columns=21, ...])`).
-When a script adds a column, the last ones are cut and a later step fails with "The column '...' of the table
-wasn't found". Remove `Columns=N,` from the source step (*Home > Advanced Editor*) so every column is read.
+Power Query notes:
 
-### 1. Cost and capacity
+- The source step stores the number of columns (`Csv.Document(..., [Delimiter=",", Columns=21, ...])`).
+  When a script adds a column, the last ones are cut and a later step fails with "The column '...' of the
+  table wasn't found". Remove `Columns=N,` from the source step (*Home > Advanced Editor*).
+- The CSVs write decimals with a dot. In a Spanish Excel, convert numbers with the `en-US` locale, for
+  example `Number.From([x], "en-US")`, or `3.0` becomes 30.
+- **Category join.** Only `cluster_snapshot` has `category`. To keep `APPLICATION` clusters in any other
+  CSV: *Home > Merge Queries*, the CSV's `cluster_id` with `cluster_snapshot[cluster_id]`, left outer;
+  expand only `category`. The row count must not change.
+- Pivot calculated fields work on sums: fine for a ratio of two sums (`office_requests / requests`), wrong
+  for a per-row value such as a peak (add those as a Power Query column). Function names follow the Excel
+  language (`SI`, not `IF`); use `;` if `,` fails.
 
-Inputs: `aks_clusters.csv`, `aks_node_pools.csv`, `aks_usage_monthly.csv`, `cost_by_resource.csv`.
+### 1. Cost and capacity (`cost_and_capacity_summary.xlsx`)
+
+Inputs: `aks_clusters.csv`, `aks_node_pools.csv`, `aks_usage_monthly.csv`, `cost_by_resource.csv`,
+`cluster_snapshot.csv`.
 
 | Figure | Pivot or formula |
 |---|---|
@@ -232,37 +246,46 @@ Inputs: `aks_clusters.csv`, `aks_node_pools.csv`, `aks_usage_monthly.csv`, `cost
 | Clusters under the 4-node minimum | `aks_node_pools`: helper column `IF(autoscaling="true", min_count, count)`; pivot by `cluster`, sum it, count < 4 |
 | CPU and memory use in office hours | `aks_usage_monthly`, filter PROD; sum of `cpu_used_office_avg` / sum of `cpu_allocatable_avg` (same for memory, p95 and max) |
 | Use per cluster | Same pivot with `cluster` in rows |
-
-### 2. Microservices and HPA
-
-Inputs: the four `aa-k8s-snapshot` CSVs, plus the cost per cluster from workbook 1.
-
-| Figure | Pivot or formula |
-|---|---|
-| Clusters by category | `cluster_snapshot`, filter PROD; rows `category`; count. Every figure below keeps only `APPLICATION` clusters (join by `cluster_id`) |
-| Microservices per layer (pattern 1) | `deployment_snapshot`, filter PROD and `microservice` = YES; rows `layer`; count |
-| Repeated capabilities | `capability_domains` as is |
 | Clusters per microservices bucket (pattern 2) | `cluster_snapshot`, filter PROD, `category` = APPLICATION; helper bucket column on `microservices`; add the cost with `XLOOKUP(cluster_id, owner_id, cost)` |
 | Clusters without applications | `cluster_snapshot`, filter PROD, `category` = NO_APPLICATIONS; add the cost the same way |
-| Replicas now (pattern 4) | `hpa_snapshot`, filter PROD and `microservice` = YES; helper bucket column on `replicas_now` |
-| Time without scaling | Same filter; rows `last_scale_bucket`, columns `no_scale_cause`; count |
-| HPA behaviour | Same filter; rows `behaviour_ci`; count as % of total |
-| Inflated minimums | Same filter plus `behaviour_ci` = NEVER_SCALES; rows `min_above_need` or `min_above_need_beyond_ha` |
 | BIA (annex) | `cluster_snapshot` with the cost column; rows `bia`, columns `in_export` |
-| Fits Container Apps by size | `deployment_snapshot`; rows `fits_aca_by_request` |
-| Clusters short of capacity | `aks_autoscaler_monthly`, filter PROD; count clusters with `hours_with_unschedulable` > 0; sum the hours |
-| OOM kills | `aks_oomkilled_monthly`, filter PROD and `microservice` = YES (drops platform namespaces and agents such as `orca-sensor`, `otel-*`, `thanos-*`, `logstash`); rows `cluster` or `workload`; sum `oom_kills` |
 
-### 3. APIM traffic
+### 2. Microservices and HPA (`ms_and_hpa_summary.xlsx`)
 
-Inputs: `apim_api_monthly.csv`, `apim_hourly_profile.csv`, `apim_apis.csv`.
+Inputs: the `aa-k8s-snapshot` CSVs, `aks_autoscaler_monthly.csv`, `aks_oomkilled_monthly.csv` and
+`microservice_history.csv`. Add `category` to `deployment_snapshot`, `hpa_snapshot`,
+`aks_autoscaler_monthly` and `aks_oomkilled_monthly` with the category join.
+
+Standard filter: `environment` = PROD, `category` = APPLICATION and, where the CSV has it,
+`microservice` = YES. Build one pivot with it, then copy and paste it for the next figure and change
+only the rows; a slicer on `environment` connected to every pivot (*Report connections*) changes them all.
 
 | Figure | Pivot or formula |
 |---|---|
-| Requests per API and month | `apim_api_monthly`; rows `api_id`, columns `month`; sum `requests` |
-| APIs above 100 tps | Same CSV, last full month, count `peak_5min_requests` > 30,000 |
+| Clusters by category | `cluster_snapshot`, filter PROD; rows `category`; count |
+| Microservices per layer (pattern 1) | `deployment_snapshot`, standard filter; rows `layer`; count |
+| Repeated capabilities | `capability_domains` as is (already filtered). A capability is a keyword in the deployment name, so the counts are a floor |
+| Replicas now (pattern 4) | `hpa_snapshot`, standard filter; rows `replicas_now` grouped by hand (select the labels > right click > *Group*): 0 (possible zombie), 1, 2–3, 4–5, 6–10, 11–20, 21–50, more than 50; count of `hpa` and the same count as % of grand total. One HPA is one deployment |
+| Time without scaling | Same filter; rows `last_scale_bucket`, columns `no_scale_cause`; count |
+| HPA behaviour | Same filter; rows `behaviour_ci`; count as % of total. Headline "does not scale" = `NEVER_SCALES` + `FIXED`, shown split |
+| Inflated minimums | Same filter plus `behaviour_ci` = NEVER_SCALES; rows `min_above_need` or `min_above_need_beyond_ha` |
+| How far HPAs reach | Power Query column `office_max_vs_hpa_max` = `ci_replicas_max_office / hpa_max`; pivot rows grouped *Start* 0, *End* 0.99, *By* 0.25; `>0.99` = reached its maximum. An upper bound: Container Insights counts distinct pods per hour, so rollouts and restarts add the replaced pods. `office_max_reached_hpa_max` (YES/NO) is the same test; `trend_reached_max` is the export's lower bound. Exact figure: `scripts/grafana.promql`, section 5 |
+| Min, max and average replicas | Same filter; values `hpa_min`, `hpa_max`, `ci_replicas_avg_office`, `ci_replicas_max_office` summarised by average, max and min |
+| Fits Container Apps by size | `deployment_snapshot`, standard filter; rows `fits_aca_by_request` (request per replica <= 4 vCPU and <= 8 GiB; `NO` also when the request is empty). For the `NO` rows, max of `cpu_request_vcpu` and `mem_request_gib` shows why |
+| Clusters short of capacity | `aks_autoscaler_monthly`, filter PROD, `category` = APPLICATION and one `month`; `hours_with_unschedulable` in the filter area without 0; count of `cluster` and sum of the hours |
+| OOM kills | `aks_oomkilled_monthly`, standard filter (`microservice` = YES drops platform namespaces and agents such as `orca-sensor`, `otel-*`, `thanos-*`, `logstash`); rows `cluster` or `workload`; sum `oom_kills` |
+| Microservices over time | `microservice_history`, filter PROD and leave out the infrastructure app codes (`COAA`, `VSDP`, `HTFC`, `INCT`, `O11Y`, `ELKP`, `APIG`, `GFED`); rows `date`; sum `microservices`; line chart. With `cod_app` in rows and `date` in columns it shows which applications grew |
+
+### 3. APIM traffic (`apim_traffic_summary.xlsx`)
+
+Inputs: `apim_api_monthly.csv`, `apim_hourly_profile.csv`, `apim_latency_monthly.csv`.
+
+| Figure | Pivot or formula |
+|---|---|
+| Requests per API, office and off-hours | `apim_api_monthly`, filter `month` = last full month; rows `api_id`; sum `requests`, plus calculated fields `office_pct = SI(requests=0, 0, office_requests/requests)` and `offhours_pct` the same with `offhours_requests`, formatted as %. Office = weekday 8:00–19:59 Lima |
+| Off-hours share of the estate | The grand total row of `offhours_pct` in the same pivot |
+| Peak TPS per API | Power Query column `peak_tps = [peak_5min_requests] / 300` (the busiest 5 minutes of the month, as requests per second). Pivot: same `month` filter; rows `api_id`; **max** of `peak_tps`, sorted descending. *Value filters > Greater than* 100 keeps the APIs above the ADT_019 threshold; an empty result is a finding too. The 5-minute average dilutes shorter bursts |
 | Backend latency | `apim_latency_monthly`, last full month; distribution of `backend_duration_avg_ms` (for example < 100 ms, 100–500 ms, > 500 ms) |
-| Off-hours share | Sum of `offhours_requests` / sum of `requests` |
 | Traffic class per API | `apim_hourly_profile`: helper `week = avg_requests_per_hour x (5 on weekday, 2 on weekend)` and helper window (office: weekday 8–19; extended: any day 6–21; rest). Pivot `api_id` x window, sum `week`. Office >= 90% → OFICINA; office + extended >= 90% → EXTENDIDO; else 24/7 |
 
 The class is per API. Mapping APIs to clusters needs the API → deployment mapping, which is still pending.
