@@ -184,7 +184,7 @@ def slide_estate(deck, estate, apps, source):
               [f"{d.number(app['microservices'])} microservicios", f"{d.number(len(apps))} aplicaciones",
                f"{d.money(estate['prod_cost']['AKS'])} al mes"], d.ORANGE),
              ("Container Apps", prod["aca"], "apps",
-              [f"{d.number(prod['aca_environments'])} entornos", f"{d.money(estate['prod_cost']['ACA'])} al mes"], d.GREEN),
+              [f"{d.number(prod['aca_environments'])} environments", f"{d.money(estate['prod_cost']['ACA'])} al mes"], d.GREEN),
              ("App Service", prod["web"], "web apps", [f"{d.number(prod['plans']['APP_SERVICE'])} planes",
                                                       web_cost("APP_SERVICE")], d.SKY),
              ("Azure Functions", prod["functions"], "function apps",

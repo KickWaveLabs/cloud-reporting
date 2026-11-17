@@ -434,8 +434,9 @@ def deployment_rows(rows, history, inventory, hpas, clusters_with_ci, nodes):
         record["used_over_request"] = yes(bool(used) and request_vcpu is not None and used > request_vcpu)
         record["limit_10x_request"] = yes(bool(cpu_request) and cpu_limit is not None
                                           and cpu_limit >= HIGH_LIMIT_FACTOR * cpu_request)
-        record["fits_aca_by_request"] = yes(request_vcpu is not None and request_vcpu <= ACA_MAX_VCPU and
-                                            request_gib is not None and request_gib <= ACA_MAX_GIB)
+        # Empty when the export has no request: unknown size is not "too big for Container Apps".
+        record["fits_aca_by_request"] = "" if request_vcpu is None or request_gib is None else yes(
+            request_vcpu <= ACA_MAX_VCPU and request_gib <= ACA_MAX_GIB)
         record["pod_too_big_for_node"] = yes(node_vcpu != "" and (
             (request_vcpu or 0) > NODE_SHARE_TOO_BIG * node_vcpu or (request_gib or 0) > NODE_SHARE_TOO_BIG * node_gib))
         out.append(record)
