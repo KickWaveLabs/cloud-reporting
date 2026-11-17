@@ -286,7 +286,7 @@ Inputs: `apim_api_monthly.csv`, `apim_hourly_profile.csv`, `apim_latency_monthly
 | Off-hours share of the estate | The grand total row of `offhours_pct` in the same pivot |
 | Peak TPS per API | Power Query column `peak_tps = [peak_5min_requests] / 300` (the busiest 5 minutes of the month, as requests per second). Pivot: same `month` filter; rows `api_id`; **max** of `peak_tps`, sorted descending. *Value filters > Greater than* 100 keeps the APIs above the ADT_019 threshold; an empty result is a finding too. The 5-minute average dilutes shorter bursts |
 | Backend latency | `apim_latency_monthly`, last full month; distribution of `backend_duration_avg_ms` (for example < 100 ms, 100–500 ms, > 500 ms) |
-| Traffic class per API | `apim_hourly_profile`: helper `week = avg_requests_per_hour x (5 on weekday, 2 on weekend)` and helper window (office: weekday 8–19; extended: any day 6–21; rest). Pivot `api_id` x window, sum `week`. Office >= 90% → OFICINA; office + extended >= 90% → EXTENDIDO; else 24/7 |
+| Traffic class per API (optional) | Already built in the `Traffic_profile` sheet of `aks_aca_comparison.xlsx`; technical deck only until an architect validates the classes. Office vs off-hours above is the ADT_019 model (warm weekdays 8–20, scale to zero otherwise). To rebuild it: `apim_hourly_profile`: helper `week = avg_requests_per_hour x (5 on weekday, 2 on weekend)` and helper window (office: weekday 8–19; extended: any day 6–21; rest). Pivot `api_id` x window, sum `week`. Office >= 90% → OFICINA; office + extended >= 90% → EXTENDIDO; else 24/7 |
 
 The class is per API. Mapping APIs to clusters needs the API → deployment mapping, which is still pending.
 
