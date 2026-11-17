@@ -19,8 +19,9 @@ Outputs (in --output-dir):
   aca_apps.csv           one row per app: environment, profile, min/max replicas, CPU/memory, scale rules
   apim_services.csv      API Management services: SKU, capacity, region, custom domains (to tell BS from Core)
   apim_apis.csv          APIs of the selected APIM services: id, path, backend host and its app code
-  app_service_plans.csv  App Service plans: SKU, tier, workers, OS, number of sites
-  app_services.csv       web and function apps: type, container or code, state, plan and its SKU
+  app_service_plans.csv  App Service plans: SKU, tier, workers, OS, number of sites, runtime (APP_SERVICE
+                         or FUNCTIONS: the deck card and cost owner type the plan counts under)
+  app_services.csv       web and function apps: type, container or code, state, plan, its SKU and id
   inventory_errors.csv
   inventory_summary.json counts by environment, and every query run
 """
@@ -32,6 +33,8 @@ import aa_common as aa
 
 azure = aa.azure
 APIM_API = "2022-08-01"
+# App Service plan tiers that only host function apps: Consumption, Premium (Elastic) and Flex Consumption.
+FUNCTION_TIERS = ("Dynamic", "ElasticPremium", "FlexConsumption")
 
 QUERIES = {
     "aks": (
@@ -333,9 +336,24 @@ def build_app_service(ctx, plans, sites):
         site.update({"type": "FUNCTION" if "functionapp" in kind else "WEB",
                      "container": "YES" if "container" in kind else "NO", "kind": row.get("kind", ""),
                      "state": row.get("state", ""), "plan": plan.get("name", row.get("planId", "").split("/")[-1]),
-                     "plan_sku": plan.get("sku", ""), "id": row["id"]})
+                     "plan_sku": plan.get("sku", ""), "plan_id": row.get("planId", ""), "id": row["id"]})
         site_rows.append(site)
+    site_types = {}
+    for site in site_rows:
+        site_types.setdefault(site["plan_id"], set()).add(site["type"])
+    for plan in plan_rows:
+        plan["runtime"] = plan_runtime(plan, site_types.get(plan["id"].lower(), set()))
     return plan_rows, site_rows
+
+
+def plan_runtime(plan, site_types):
+    """FUNCTIONS for a Functions-only SKU or a plan whose sites are all function apps; else APP_SERVICE.
+
+    A plan shared by web and function apps counts as APP_SERVICE, so its cost is never split.
+    """
+    if plan.get("tier", "") in FUNCTION_TIERS or site_types == {"FUNCTION"}:
+        return "FUNCTIONS"
+    return "APP_SERVICE"
 
 
 def build_apim(ctx, services, args):

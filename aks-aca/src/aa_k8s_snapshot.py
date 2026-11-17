@@ -596,13 +596,10 @@ def adt_runtime(app):
         return "AKS", f"Traffic more than {ADT_MAX_ACTIVE_HOURS} h a day and more than {ADT_MAX_MICROSERVICES} microservices"
     if app["microservices_over_aca_size"]:
         return "AKS", f"{app['microservices_over_aca_size']} microservices request more than 4 vCPU / 8 GiB"
+    # StatefulSets and batch jobs are not criteria for now (no PROD application has them); the columns stay.
     reasons = []
-    if app["statefulsets"]:
-        reasons.append("StatefulSets")
-    if app["batch_jobs"]:
-        reasons.append("Batch jobs: consult a technology architect")
     if app["bia"] in CRITICAL_BIA:
-        reasons.append("Critical (BIA ALTA or MUY ALTA): consult architecture governance")
+        reasons.append("Critical (BIA ALTA or MUY ALTA)")
     if app["busiest_hour_tps"] == "":
         reasons.append("No APIM traffic mapped to the application")
     return ("ACA_WITH_REVIEW", "; ".join(reasons)) if reasons else ("ACA", "Within every ADT_019 threshold")

@@ -40,8 +40,8 @@ external backends. Pivot by `cod_app` to see one application across clusters, co
 | `aca_environments.csv`, `aca_apps.csv` | A Container Apps environment or app | plan, workload profiles, min and max replicas, CPU and memory per replica |
 | `apim_services.csv` | An APIM instance | `sku`, `capacity`, `custom_domains` (tells BS from Core) |
 | `apim_apis.csv` | An API | `api_id`, `path`, `backend_host`, `backend_cod_app` (app code of the AKS ingress behind it) |
-| `app_service_plans.csv` | An App Service plan | `sku`, `tier`, `workers`, `os`, `sites` |
-| `app_services.csv` | A web app or function app | `type` (`WEB`/`FUNCTION`), `container` (`YES` = Docker image), `state`, `plan`, `plan_sku` |
+| `app_service_plans.csv` | An App Service plan | `sku`, `tier`, `workers`, `os`, `sites`, `runtime` (`FUNCTIONS` for a Consumption, Premium or Flex Consumption plan, or one whose sites are all function apps; else `APP_SERVICE`) |
+| `app_services.csv` | A web app or function app | `type` (`WEB`/`FUNCTION`), `container` (`YES` = Docker image), `state`, `plan`, `plan_sku`, `plan_id` |
 
 The configured node minimum of a cluster is the sum over its pools of `min_count` when `autoscaling`
 is true, else `count`.
@@ -83,7 +83,10 @@ is true, else `count`.
 
 - `owner` is the cluster (or Container Apps environment) the resource belongs to. That covers the
   cluster resource and everything in its node resource group: VMs, disks, load balancers, IPs.
-- `owner_type` is `AKS` or `ACA`.
+  For App Service it is the plan, which also takes the cost of its sites and slots.
+- `owner_type` is `AKS`, `ACA`, `APP_SERVICE` or `FUNCTIONS` (the plan's `runtime`). App Service and
+  Functions cover PROD only unless `--app-service-environments` says otherwise; a plan shared by web
+  and function apps counts as `APP_SERVICE`.
 - `cost_usd` is amortized cost: reservations and savings plans are spread over the month, so node VMs
   do not show as 0.
 - `meter_category` splits the cost. For AKS PROD in October 2026: Virtual Machines 76%, Storage 7%,
@@ -138,7 +141,7 @@ Only APPLICATION clusters enter the analysis. `cluster_overrides.csv` in the inp
 | `adt_runtime` | Rule |
 |---|---|
 | `AKS` | Busiest hour above 100 TPS; or traffic more than 10 weekday hours and more than 15 microservices; or a microservice requests more than 4 vCPU / 8 GiB |
-| `ACA_WITH_REVIEW` | Within the thresholds but with StatefulSets, batch jobs, BIA ALTA or MUY ALTA (consult architecture governance), or no APIM traffic mapped |
+| `ACA_WITH_REVIEW` | Within the thresholds but with BIA ALTA or MUY ALTA, or no APIM traffic mapped. StatefulSets and batch jobs are listed in their columns but are not a criterion for now |
 | `ACA` | Within every threshold |
 
 - Traffic: each API maps to an app code through the AKS ingress host of its backend. `busiest_hour_tps` adds

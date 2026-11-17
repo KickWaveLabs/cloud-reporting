@@ -22,6 +22,7 @@ the workbook and the CSVs before presenting.
 
 import argparse
 import glob
+import json
 import math
 import os
 from collections import Counter, defaultdict
@@ -38,6 +39,7 @@ MONTHS_ES = ("enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "ag
              "noviembre", "diciembre")
 RUNTIME_LABELS = {"AKS": "Se queda en AKS", "ACA": "Candidata a Container Apps",
                   "ACA_WITH_REVIEW": "Container Apps, con revisión"}
+COUNT_WORDS = {3: "Tres", 4: "Cuatro", 5: "Cinco", 6: "Seis", 7: "Siete"}
 RUNTIME_COLORS = {"AKS": d.NAVY, "ACA": d.GREEN, "ACA_WITH_REVIEW": d.ORANGE}
 
 
@@ -91,6 +93,8 @@ def read_estate(results):
     cpu_total = sum(to_float(row["cpu_allocatable_avg"]) or 0 for row in usage if row["mode"] == "ALLOCATABLE")
     mem_total = sum(to_float(row["mem_allocatable_avg_gib"]) or 0 for row in usage if row["mode"] == "ALLOCATABLE")
     sites = [row for row in results_csv(results, "aa-inventory", "app_services.csv") if row["environment"] == "PROD"]
+    plans = [row for row in results_csv(results, "aa-inventory", "app_service_plans.csv")
+             if row["environment"] == "PROD"]
     prod = {
         "aks": sum(row["environment"] == "PROD" for row in results_csv(results, "aa-inventory", "aks_clusters.csv")),
         "aca": sum(row["environment"] == "PROD" for row in results_csv(results, "aa-inventory", "aca_apps.csv")),
@@ -98,16 +102,22 @@ def read_estate(results):
                                 for row in results_csv(results, "aa-inventory", "aca_environments.csv")),
         "web": sum(row.get("type") == "WEB" for row in sites),
         "functions": sum(row.get("type") == "FUNCTION" for row in sites),
-        "plans": sum(row["environment"] == "PROD"
-                     for row in results_csv(results, "aa-inventory", "app_service_plans.csv")),
+        "plans": Counter(row.get("runtime") or "APP_SERVICE" for row in plans),
     }
     prod_cost = defaultdict(float)
     for row in cost_rows:
         if row["month"] == month and row["environment"] == "PROD":
             prod_cost[row["owner_type"]] += to_float(row["cost_usd"]) or 0
+    summary_path = os.path.join(results, "aa-cost", "cost_summary.json")
+    summary = {}
+    if os.path.exists(summary_path):
+        with open(summary_path, encoding="utf-8") as handle:
+            summary = json.load(handle)
+    web_scope = summary.get("app_service_environments", [])
+    web_measured = web_scope == "ALL" or "PROD" in web_scope
     return {"month": month, "by_category": by_category, "total_clusters": len(clusters),
             "cpu_used": cpu_used, "cpu_total": cpu_total, "mem_used": mem_used, "mem_total": mem_total,
-            "prod": prod, "prod_cost": prod_cost}
+            "prod": prod, "prod_cost": prod_cost, "web_measured": web_measured}
 
 
 def read_scaling(results):
@@ -166,15 +176,19 @@ def slide_estate(deck, estate, apps, source):
     category = estate["by_category"]
     prod = estate["prod"]
     app = category.get(aa.APPLICATION, {"clusters": 0, "cost": 0.0, "microservices": 0})
+
+    def web_cost(owner_type):
+        return f"{d.money(estate['prod_cost'][owner_type])} al mes" if estate["web_measured"] else "Costo no medido"
     slide = d.base_slide(deck, f"Producción: {prod['aks']} clusters AKS concentran los microservicios", source)
     cards = [("AKS", prod["aks"], "clusters",
               [f"{d.number(app['microservices'])} microservicios", f"{d.number(len(apps))} aplicaciones",
                f"{d.money(estate['prod_cost']['AKS'])} al mes"], d.ORANGE),
              ("Container Apps", prod["aca"], "apps",
               [f"{d.number(prod['aca_environments'])} entornos", f"{d.money(estate['prod_cost']['ACA'])} al mes"], d.GREEN),
-             ("App Service", prod["web"], "web apps", [f"{d.number(prod['plans'])} planes (con Functions)",
-                                                      "Costo no medido"], d.SKY),
-             ("Azure Functions", prod["functions"], "function apps", ["Costo no medido"], d.SKY)]
+             ("App Service", prod["web"], "web apps", [f"{d.number(prod['plans']['APP_SERVICE'])} planes",
+                                                      web_cost("APP_SERVICE")], d.SKY),
+             ("Azure Functions", prod["functions"], "function apps",
+              [f"{d.number(prod['plans']['FUNCTIONS'])} planes", web_cost("FUNCTIONS")], d.SKY)]
     for index, (name, count, unit, lines, accent) in enumerate(cards):
         left = Inches(0.6 + index * 3.07)
         d.rounded(slide, left, Inches(1.35), Inches(2.9), Inches(2.45), d.CARD)
@@ -210,7 +224,6 @@ def adt_counts(apps):
         "constant_large": sum((to_float(row["weekday_hours_with_traffic"]) or 0) > 10
                               and int(row["microservices"]) > 15 for row in with_traffic),
         "over_size": sum(int(row["microservices_over_aca_size"]) > 0 for row in apps),
-        "batch_state": sum(int(row["batch_jobs"]) > 0 or int(row["statefulsets"]) > 0 for row in apps),
         "critical": sum(row["bia"] in ("MUY ALTA", "ALTA") for row in apps),
     }
 
@@ -219,7 +232,6 @@ def slide_criteria(deck, apps, scaling, source):
     counts = adt_counts(apps)
     total = len(apps)
     not_scaling = scaling["never"] + scaling["fixed"]
-    slide = d.base_slide(deck, "Seis criterios ordenan el parque; cada uno con su cifra de producción", source)
     rows = [["Criterio", "Va a AKS si…", "Producción hoy"],
             ["Carga (TPS en la hora pico)", "Más de 100 TPS",
              f"{d.number(counts['over_tps'])} de {d.number(counts['with_traffic'])} aplicaciones con tráfico medido"],
@@ -231,10 +243,9 @@ def slide_criteria(deck, apps, scaling, source):
              f"{d.percent(d.share_of(not_scaling, scaling['known']))} de los autoescalados no escala "
              f"({d.percent(d.share_of(scaling['never'], scaling['known']))} en su mínimo, "
              f"{d.percent(d.share_of(scaling['fixed'], scaling['known']))} con mínimo = máximo)"],
-            ["Procesos batch o con estado", "Batch largo o StatefulSets: revisar con arquitectura",
-             f"{d.number(counts['batch_state'])} aplicaciones"],
-            ["Criticidad del negocio", "BIA ALTA o MUY ALTA: revisar con gobierno de arquitectura",
-             f"{d.number(counts['critical'])} aplicaciones"]]
+            ["Criticidad del negocio", "BIA ALTA o MUY ALTA", f"{d.number(counts['critical'])} aplicaciones"]]
+    slide = d.base_slide(deck, f"{COUNT_WORDS.get(len(rows) - 1, len(rows) - 1)} criterios ordenan el parque; "
+                               f"cada uno con su cifra de producción", source)
     d.table(slide, Inches(0.6), Inches(1.4), Inches(12.1), rows, [0.24, 0.36, 0.40], row_height=0.6, size=12)
     if scaling["dated"]:
         d.note_box(slide, Inches(0.6), Inches(5.75), Inches(12.1), Inches(0.75),
@@ -268,8 +279,7 @@ def slide_distribution(deck, apps, estate, source):
                f"{d.number(monoliths)} aplicaciones tienen un solo microservicio: si son monolitos, el lineamiento las "
                f"llevaría a App Service. Se confirma con cada equipo.", size=11)
     d.note_box(slide, Inches(7.0), Inches(4.8), Inches(5.8), Inches(1.0),
-               "\"Con revisión\": batch, estado, criticidad alta o tráfico sin medir. Cada caso se valida con "
-               "arquitectura antes de migrar.", size=11)
+               "\"Con revisión\": criticidad alta (BIA ALTA o MUY ALTA) o tráfico sin medir.", size=11)
 
 
 def office_seconds(month):

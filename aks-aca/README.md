@@ -43,7 +43,7 @@ Guides:
 | Clusters, node pools, add-ons, ACA apps, App Service plans and sites, APIM APIs | Resource Graph; ARM GET `{apim}/apis` | `aa_inventory.py` | Measured |
 | Node CPU and memory, requests per API | Azure Monitor platform metrics (GET) | `aa_metrics.py` | Measured |
 | Workloads, replicas, CPU/memory per replica | Container Insights (Log Analytics, GET) | `aa_container_insights.py` | Measured |
-| Actual cost of clusters and ACA environments | Cost Management query API, `AmortizedCost` | `aa_cost.py` | Measured |
+| Actual cost of clusters, ACA environments and PROD App Service / Functions plans | Cost Management query API, `AmortizedCost` | `aa_cost.py` | Measured |
 | List prices | Azure Retail Prices API (public, no sign-in) | `aa_prices.py` | Vendor data |
 | Unschedulable pods, OOMKilled containers, APIM backend latency | Azure Monitor platform metrics; Container Insights (GET) | `aa_signals.py` | Measured |
 
@@ -103,7 +103,7 @@ python aks-aca/src/aa_deck_exec.py
 | `aa_inventory.py` | Every visible subscription | 20 s | `inventory_errors.csv`; APIM `custom_domains` in `apim_services.csv` |
 | `aa_metrics.py` | PROD clusters; the APIM in `--apim-names` | ~60 min (AKS 15, APIM 45) | `metrics_errors.csv` |
 | `aa_container_insights.py` | PROD clusters with the add-on | ~80 min | `ci_errors.csv`, `ci_coverage.csv` |
-| `aa_cost.py` | Every environment, `AmortizedCost` | ~10 min | `cost_errors.csv` |
+| `aa_cost.py` | Every environment for AKS and ACA; PROD for App Service and Functions; `AmortizedCost` | ~10 min, plus one query per PROD subscription with App Service | `cost_errors.csv`; `app_service_subscriptions_queried` in `cost_summary.json` |
 | `aa_prices.py` | VM sizes in the inventory; eastus2, centralus | < 1 min | `queries_without_rows` in `prices_summary.json` |
 | `aa_k8s_snapshot.py` | Every row of the exports; the workbook counts PROD application clusters | < 10 s | `prod_clusters_by_category`, `cluster_names_shared_by_several_clusters`, `prod_application` in `snapshot_summary.json` |
 | `aa_signals.py` | PROD clusters; the APIM in `--apim-names` | not timed yet (smoke test: 3 clusters + 1 APIM, 1 month, 20 s) | `signals_errors.csv` |
@@ -123,8 +123,10 @@ python aks-aca/src/aa_deck_exec.py
    workspace retention; `ci_coverage.csv` shows empty months.
 6. `aa_cost.py` without dates takes the last full month. Keep the same period as the metrics: the
    measured node discount only uses months that both sources cover end to end.
-   It caches each subscription in `results/aa-cost/_cache/<type>_<from>_<to>/`; rerun it to
-   resume after throttling (429), delete the folder to fetch again.
+   It caches each subscription in `results/aa-cost/_cache/<type>_<from>_<to>/` (AKS and ACA) and
+   `web_<type>_<from>_<to>/` (App Service); rerun it to resume after throttling (429), delete the folder
+   to fetch again. App Service needs an inventory from 2026-11-17 or later (`runtime` and `plan_id`
+   columns); pass `--app-service-environments NONE` to skip it.
 7. `aa_prices.py` needs no sign-in.
 8. `aa_k8s_snapshot.py` needs no sign-in either. It reads the platform team's `reportHpa*` and
    `reportDeployment*` exports (CSV with `;` or XLSX) from `.local/aks-aca-inputs/` (`--inputs` for another
