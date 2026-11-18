@@ -47,7 +47,8 @@ what the CPU needs) and LOAD_BELOW_TARGET (the load never reaches the HPA target
 Traffic per application: each APIM API maps to an app code through the AKS ingress host of its backend
 (aa_common.backend_cod_app). peak_tps_upper_bound adds each API's 5-minute peak, so it is an upper bound;
 busiest_hour_tps adds the APIs hour by hour (average weekday or weekend profile of the month) and is what the
-100 TPS rule uses. An hour has traffic when it carries at least 10% of the busiest hour.
+100 TPS rule uses. busiest_hour says which hour it is (day type and Lima hour); busiest_office_hour_tps and
+busiest_offhours_hour_tps split it between the ADT_019 office window (weekdays 8:00-19:59) and the rest. An hour has traffic when it carries at least 10% of the busiest hour.
 
 Units as exported: CPU in millicores; memory in MB (10^6 bytes, so 2Gi shows as 2147.483648).
 
@@ -569,10 +570,19 @@ def app_traffic(apis, monthly, profile):
     for code, entry in traffic.items():
         weekday = [hourly.get((code, "weekday", hour), 0.0) for hour in range(24)]
         busiest = max(weekday + [hourly.get((code, "weekend", hour), 0.0) for hour in range(24)])
+        office = {("weekday", hour): weekday[hour] for hour in range(aa.OFFICE_START_HOUR, aa.OFFICE_END_HOUR)}
+        offhours = {(day_type, hour): hourly.get((code, day_type, hour), 0.0)
+                    for day_type in ("weekday", "weekend") for hour in range(24)
+                    if (day_type, hour) not in office}
+        top = max({**office, **offhours}.items(), key=lambda item: item[1])[0]
         out[code] = {"month": last, "apis_with_traffic": entry["apis"], "requests_month": int(entry["requests"]),
                      "office_share": round(entry["office"] / entry["requests"], 3) if entry["requests"] else "",
                      "peak_tps_upper_bound": round(entry["peak_5min"] / 300, 1),
                      "busiest_hour_tps": round(busiest / 3600, 1),
+                     "busiest_hour": f"{top[0]} {top[1]:02d}:00" if busiest else "",
+                     "busiest_hour_in_office": ("YES" if top in office else "NO") if busiest else "",
+                     "busiest_office_hour_tps": round(max(office.values()) / 3600, 1),
+                     "busiest_offhours_hour_tps": round(max(offhours.values()) / 3600, 1),
                      "weekday_hours_with_traffic": sum(value >= ACTIVE_HOUR_SHARE * busiest for value in weekday)
                      if busiest else 0}
     return out
@@ -630,6 +640,7 @@ def application_rows(cluster_table, hpas, traffic, cost_by_cluster):
                "possible_monolith": yes(sum(row["microservices"] for row in rows) == 1),
                **{field: traffic.get(code, {}).get(field, "") for field in (
                    "apis_with_traffic", "requests_month", "office_share", "peak_tps_upper_bound", "busiest_hour_tps",
+                   "busiest_hour", "busiest_hour_in_office", "busiest_office_hour_tps", "busiest_offhours_hour_tps",
                    "weekday_hours_with_traffic")}}
         app["adt_runtime"], app["adt_reason"] = adt_runtime(app)
         out.append(app)
