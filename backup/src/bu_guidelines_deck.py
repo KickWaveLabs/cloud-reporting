@@ -6,14 +6,16 @@ Slides:
      short- and long-term rule, and where it changes by the data a system holds
   2. How the rule applies in Azure: PITR and LTR in plain words, the rule per Azure service and the Azure setup
      for each regulated scope
-  3. Price per TB-month in Central US for LRS and ZRS backups, net of the bank's discount, against the vendors
-  4. References: the regulation behind slide 1, the examples each norm gives and the minimum time it asks to
+  3. Worked example: what one regulated production database would pay for backup under the base rule and under
+     each regulated scope, per month and cumulative over 1, 5 and 10 years
+  4. Price per TB-month in Central US for LRS and ZRS backups, net of the bank's discount, against the vendors
+  5. References: the regulation behind slide 1, the examples each norm gives and the minimum time it asks to
      keep the data
      (Microsoft and pricing sources are in docs/)
 
 Prices come from the public Azure Retail Prices API (no sign-in, no subscription data). Retention limits and
 regulatory articles are fixed in this file, checked against the official texts in November 2026. The regulation
-is listed on slide 4; every Microsoft and pricing source is in docs/guidelines-references.md. Vendor tariffs are
+is listed on slide 5; every Microsoft and pricing source is in docs/guidelines-references.md. Vendor tariffs are
 the ones quoted in the backup guidelines review (unit to be confirmed).
 
 Usage:
@@ -25,8 +27,10 @@ Output: backup/reports/<date>-lineamientos/lineamientos_backup.pptx (or --output
 """
 
 import argparse
+import math
 import os
 import sys
+import time
 from datetime import date
 
 import requests
@@ -43,7 +47,7 @@ GB_PER_TB = 1024
 
 # Vendor tariffs in US$ per TB-month, as quoted. The unit (protected or stored TB) is still to be confirmed.
 VENDORS = [("D3", 56.01, 7.92), ("Opción 1", 49.90, 12.84)]
-# The bank's discount on Azure list prices, applied to every Azure price on slide 3 (vendors quote net prices).
+# The bank's discount on Azure list prices, applied to every Azure price on slides 3 and 4 (vendors quote net prices).
 DISCOUNT = 0.30
 
 # (key, serviceName, productName, meterName) of every meter the deck prices. The deck shows LRS and ZRS only;
@@ -84,6 +88,8 @@ METERS = [
      "Backup Storage LRS Data Stored"),
     ("mysql_pitr_zrs", "Azure Database for MySQL", "Azure Database for MySQL Flexible Server Backup Storage",
      "Backup Storage ZRS Data Stored"),
+    ("hs_pitr_zrs", "SQL Database", "SQL Database SingleDB Hyperscale - Storage", "Backup - ZRS Data Stored"),
+    ("hs_ltr_zrs", "SQL Database", "SQL Database SingleDB Hyperscale - LTR Backup Storage", "Backup ZRS Data Stored"),
     ("cosmos_30d", "Azure Cosmos DB", "Azure Cosmos DB - PITR", "Cont 30D Bckp Continuous Backup"),
     ("cosmos_restore", "Azure Cosmos DB", "Azure Cosmos DB - PITR", "Cont 30D Bckp Data Restore"),
     ("cosmos_periodic_lrs", "Azure Cosmos DB", "Azure Cosmos DB Snapshot", "Periodic Backup - LRS Data Stored"),
@@ -92,6 +98,28 @@ METERS = [
 ]
 # Protected instance fees are charged per block of source data (Azure Backup pricing page).
 INSTANCE_BLOCK_GB = {"vm_instance": 500, "pg_instance": 250, "cosmos_instance": 500}
+
+# Worked example on slide 3: one real production database that holds regulated data. Picked by its application
+# description (interbank transfers are an example the SBS 2660-2015 art. 49 gives for the operations register).
+# Used size: Azure Monitor metric "storage", 2026-11-15. Billable PITR: the database's "Backup - RA-GRS Data Stored"
+# GB-month on the October 2026 bill (the volume does not depend on the redundancy). On that bill each LTR copy weighs
+# about the whole database (Hyperscale copies are snapshots), so the example prices one copy at the used size.
+EXAMPLE = {
+    "app": "TTIB · Transferencias Interbancarias",
+    "engine": "Azure SQL Database Hyperscale",
+    "region": "eastus2", "region_label": "East US 2",
+    "used_gb": 2435, "pitr_billable_gb": 5166,
+    "pitr_key": "hs_pitr_zrs", "ltr_key": "hs_ltr_zrs",
+}
+# (label, rule, weekly copies kept, monthly copies kept, yearly copies kept). The base rule is what the database
+# already keeps when the example starts.
+EXAMPLE_SCENARIOS = [
+    ("Lineamiento base\n(cualquier otro dato)", "4 semanales + 12 mensuales", 4, 12, 0),
+    ("Libros, KYC (si la app borra) y LBTR", "Base + 1 anual por 10 años", 4, 12, 10),
+    ("Registro de operaciones", "4 semanales + 60 mensuales (5 años)", 4, 60, 0),
+    ("Registro de operaciones,\nsi la app borra antes de 10 años", "60 mensuales + 1 anual por 10 años", 4, 60, 10),
+]
+EXAMPLE_YEARS = (1, 5, 10)
 
 # Palette of the team's deck: royal blue header ending in a rust tip, navy cards.
 NAVY = RGBColor(0x1E, 0x3A, 0x78)
@@ -153,21 +181,25 @@ REGULATION_REFERENCES = [
 # ---------------------------------------------------------------------------
 
 
-def price_filter(region, service, product, meter):
-    return (f"serviceName eq '{service}' and productName eq '{product}' and meterName eq '{meter}' "
-            f"and armRegionName eq '{region}' and priceType eq 'Consumption'")
-
-
-def fetch_price(region, service, product, meter):
-    """Retail price of one meter in one region, or None when the API has no row for it."""
-    url, params, items = PRICES_API, {"$filter": price_filter(region, service, product, meter)}, []
+def get_items(price_filter):
+    """Every price row that matches an OData filter, following the pages."""
+    url, params, items = PRICES_API, {"$filter": price_filter}, []
     while url:
-        response = requests.get(url, params=params, timeout=60)
+        for attempt in range(6):  # the public API throttles bursts with 429
+            response = requests.get(url, params=params, timeout=60)
+            if response.status_code != 429:
+                break
+            time.sleep(min(float(response.headers.get("Retry-After", 2 ** attempt * 5)), 60))
         response.raise_for_status()
         body = response.json()
         items += body.get("Items", [])
         url, params = body.get("NextPageLink"), None
-    prices = {item["retailPrice"] for item in items if not item.get("tierMinimumUnits")}
+    return items
+
+
+def meter_price(items, region, meter):
+    """Retail price of one meter among the rows of its product, or None when there is no row for it."""
+    prices = {item["retailPrice"] for item in items if item["meterName"] == meter and not item.get("tierMinimumUnits")}
     if len(prices) > 1:
         raise SystemExit(f"{meter} in {region} has several prices {sorted(prices)}; check the meter definition.")
     return prices.pop() if prices else None
@@ -183,11 +215,16 @@ def per_tb(prices):
 
 
 def load_prices():
-    prices, missing = {}, []
+    """One request per product and region (not per meter), so the public API does not throttle the run."""
+    prices, missing, products = {}, [], {}
     for region, _ in REGIONS:
         prices[region] = {}
         for key, service, product, meter in METERS:
-            value = fetch_price(region, service, product, meter)
+            if (region, service, product) not in products:
+                products[region, service, product] = get_items(
+                    f"serviceName eq '{service}' and productName eq '{product}' and armRegionName eq '{region}' "
+                    "and priceType eq 'Consumption'")
+            value = meter_price(products[region, service, product], region, meter)
             if value is None:
                 missing.append(f"{meter} ({region})")
             prices[region][key] = value
@@ -624,6 +661,122 @@ def slide_prices(deck, tb, retrieved, discount):
         f"priceType Consumption): {meters}.")
 
 
+WEEKS_PER_MONTH = 365.25 / 12 / 7
+
+
+def kept(policy, now, taken):
+    """True when the weekly LTR backup taken in week `taken` is still kept in week `now` under (W, M, Y): the
+    monthly copy is the month's first weekly backup and the yearly copy the year's first."""
+    weekly, monthly, yearly = policy
+    age = now - taken
+    first_of = lambda span: math.floor(taken / span) != math.floor((taken - 1) / span)
+    return (age < weekly or (monthly and first_of(WEEKS_PER_MONTH) and age < monthly * WEEKS_PER_MONTH)
+            or (yearly and first_of(WEEKS_PER_MONTH * 12) and age < yearly * 12 * WEEKS_PER_MONTH))
+
+
+def ltr_copies_per_month(policy, months, base=(4, 12, 0)):
+    """Average number of full LTR copies kept in each month. The database starts on the base rule: copies taken
+    before week 0 exist only if the base rule kept them, and from week 0 on the new rule decides."""
+    weeks = int(months * WEEKS_PER_MONTH)
+    history = range(-int(max(policy[1], 12 * policy[2], base[1]) * WEEKS_PER_MONTH) - 1, 0)
+    existing = [week for week in history if kept(base, 0, week)]
+    per_month = [[] for _ in range(months)]
+    for now in range(weeks):
+        count = sum(kept(policy, now, week) for week in existing + list(range(now + 1)))
+        per_month[min(months - 1, math.floor(now / WEEKS_PER_MONTH))].append(count)
+    return [sum(values) / len(values) for values in per_month]
+
+
+def example_costs(prices_gb):
+    """Monthly cost in years 1, 5 and 10 and the cumulative cost over 1, 5 and 10 years, per scenario."""
+    months = 12 * max(EXAMPLE_YEARS)
+    pitr = EXAMPLE["pitr_billable_gb"] * prices_gb[EXAMPLE["pitr_key"]]
+    results = []
+    for label, rule, weekly, monthly, yearly in EXAMPLE_SCENARIOS:
+        copies = ltr_copies_per_month((weekly, monthly, yearly), months)
+        cost = [count * EXAMPLE["used_gb"] * prices_gb[EXAMPLE["ltr_key"]] + pitr for count in copies]
+        results.append({"label": label, "rule": rule, "copies": round(copies[-1]),
+                        "monthly": [cost[12 * year - 1] for year in EXAMPLE_YEARS],
+                        "cumulative": [sum(cost[:12 * year]) for year in EXAMPLE_YEARS]})
+    return pitr, results
+
+
+def slide_example(deck, prices_gb, discount):
+    region = EXAMPLE["region"]
+    pitr, results = example_costs(prices_gb[region])
+    base, register = results[0], results[2]
+    tb = EXAMPLE["used_gb"] / GB_PER_TB
+    slide = base_slide(deck, "Ejemplo: costo del backup de una base regulada",
+                       f"Fuente: Azure Retail Prices API ({EXAMPLE['region_label']}, región de la base), precio de lista "
+                       f"menos {discount:.0%}; tamaño y volumen de PITR medidos en la base (nov-2026). Ámbito a validar "
+                       "con el dueño de la aplicación y Cumplimiento.")
+    note_box(slide, Inches(0.35), Inches(1.08), Inches(12.63), Inches(0.78), [
+        [("Base de ejemplo: ", True, NAVY),
+         (f"{EXAMPLE['app']} ({EXAMPLE['engine']}, {EXAMPLE['region_label']}), {amount(tb)} TB usados. "
+          "Las transferencias son un ejemplo que la SBS 2660-2015 da para el registro de operaciones.", False, GREY)],
+        [("Supuestos: ", True, NAVY),
+         (f"tamaño constante, redundancia ZRS, {discount:.0%} de descuento; cada copia de largo plazo pesa lo que la "
+          f"base. El corto plazo (PITR 7 días) cuesta {usd(pitr, 0)} al mes en todos los escenarios.", False, GREY)]],
+        size=9.5)
+
+    def money(value):
+        return usd(value, 0)
+
+    highlight = {"fill": RGBColor(0xF6, 0xE9, 0xE4)}
+    rows = []
+    for index, result in enumerate(results):
+        style = highlight if index == 2 else {}
+        rows.append([(result["label"], style), (result["rule"], {**style, "size": 8.5}),
+                     (str(result["copies"]), style),
+                     *[(money(value), style) for value in result["monthly"]],
+                     *[(money(value), {**style, "bold": True, "color": NAVY}) for value in result["cumulative"]]])
+    years = [f"año {year}" for year in EXAMPLE_YEARS]
+    header = ["Ámbito", "Qué se guarda", "Copias completas\n(año 10)",
+              *[f"Al mes,\n{label}" for label in years], *[f"Acumulado\n{year} año{'s' if year > 1 else ''}"
+                                                            for year in EXAMPLE_YEARS]]
+    grid = table(slide, Inches(0.35), Inches(2.0), Inches(12.63), header, rows,
+                 [0.19, 0.19, 0.09, 0.085, 0.085, 0.085, 0.09, 0.09, 0.095], row_height=0.6, size=9.5)
+    grid.rows[0].height = Inches(0.5)
+    text_box(slide, Inches(0.35), Inches(4.92), Inches(12.63), Inches(0.28), [[
+        ("Fila resaltada: ", True, RUST),
+        ("el ámbito que aplicaría a esta base. Acumulado = suma de lo que se paga mes a mes desde hoy, partiendo de "
+         "las copias que la base ya tiene con el lineamiento base.", False, GREY)]], size=8.5)
+
+    extra_10 = register["cumulative"][-1] - base["cumulative"][-1]
+    ratio = register["monthly"][-1] / base["monthly"][-1]
+    takeaways = [
+        ("Qué muestra", "El corto plazo cuesta lo mismo en todos los ámbitos. La diferencia es el largo plazo y "
+                        "crece cada año, a medida que se acumulan copias, hasta que vencen las más antiguas."),
+        ("¿Conviene?", f"El registro de operaciones cuesta {ratio:.0f} veces el base al mes ({money(extra_10)} más en "
+                       f"10 años): SQL no tiene copia trimestral y guarda {register['copies']} copias completas para "
+                       "cumplir 20. La copia anual por 10 años suma poco."),
+        ("Mejor estrategia", "Aplicar cada ámbito solo a la base que guarda ese dato. Para el registro: exportar cada "
+                             "trimestre solo sus tablas a almacenamiento inmutable y dejar la base en el lineamiento "
+                             "base."),
+    ]
+    for index, (title, text) in enumerate(takeaways):
+        left = Inches(0.35 + index * 4.25)
+        rounded(slide, left, Inches(5.3), Inches(4.13), Inches(1.6), CARD)
+        text_box(slide, left + Inches(0.12), Inches(5.3), Inches(3.89), Inches(1.6),
+                 [[(title, True, ORANGE)], [(text, False, WHITE)]], size=9.5, anchor=MSO_ANCHOR.MIDDLE)
+    slide.notes_slide.notes_text_frame.text = (
+        f"Base elegida por la descripción de su aplicación: {EXAMPLE['app']}. La SBS 2660-2015 art. 49 pone las "
+        "transferencias nacionales e internacionales como ejemplo del registro de operaciones; falta confirmar con el "
+        "dueño qué tablas guardan ese registro. "
+        f"Tamaño usado: {EXAMPLE['used_gb']:,} GB (métrica storage de Azure Monitor, 15-nov-2026); creció cerca de 1 TB "
+        "en el último año, así que con crecimiento el costo sube en la misma proporción. "
+        f"PITR 7 días: {EXAMPLE['pitr_billable_gb']:,} GB-mes facturables en octubre de 2026 (lo que excede el tamaño "
+        "de la base, gratis en Hyperscale). "
+        f"Precios de Hyperscale en {EXAMPLE['region_label']}, ZRS, lista menos {discount:.0%}: PITR "
+        f"{usd(prices_gb[region][EXAMPLE['pitr_key']], 3)} y LTR {usd(prices_gb[region][EXAMPLE['ltr_key']], 4)} por "
+        "GB-mes. En octubre la factura real de esta base salió 30% bajo lista en LTR y 43% en PITR. "
+        "Copias: se simula semana a semana; la copia mensual es la primera semanal del mes y la anual la primera del "
+        "año, y una copia que cumple dos reglas se guarda una sola vez. La base parte con las copias del lineamiento "
+        "base. Hoy la base guarda 4 semanales, 12 mensuales y 5 anuales en RA-GRS (geo), que cuesta el doble que ZRS. "
+        "La exportación trimestral del registro cumple la norma (pide copia del registro, no de la base) y pesa una "
+        "fracción de la base; necesita trabajo de la aplicación y validación de Cumplimiento.")
+
+
 def slide_references(deck):
     slide = base_slide(deck, "Referencias: regulación",
                        "Textos oficiales revisados en noviembre de 2026. Clic en el número de la norma para abrir su texto.")
@@ -660,6 +813,8 @@ def main():
     slide_guidelines(deck)
     slide_azure(deck)
     net = {region: {key: value * (1 - args.discount) for key, value in values.items()} for region, values in tb.items()}
+    net_gb = {region: {key: value / GB_PER_TB for key, value in values.items()} for region, values in net.items()}
+    slide_example(deck, net_gb, args.discount)
     slide_prices(deck, net, f"{today:%d-%m-%Y}", args.discount)
     slide_references(deck)
     os.makedirs(os.path.dirname(os.path.abspath(output)), exist_ok=True)

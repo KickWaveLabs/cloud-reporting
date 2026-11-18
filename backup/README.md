@@ -60,12 +60,13 @@ saving, risk count and calibrated cost empty.
 
 ## Guidelines deck
 
-`bu_guidelines_deck.py` builds the four-slide guidelines deck: the platform-neutral rule (cloud or on-premise,
+`bu_guidelines_deck.py` builds the five-slide guidelines deck: the platform-neutral rule (cloud or on-premise,
 any database, servers and file shares) for regular and regulated data, how it maps to each Azure service with
 PITR and LTR explained, price per TB-month in Central US (LRS and ZRS, net of the bank's discount)
-against the vendors' quoted tariffs, and the references with the minimum period each norm sets. It needs no Azure sign-in and reads no estate data: prices come
-from the public Azure Retail Prices API, and the rules and regulatory articles are fixed in the
-script.
+against the vendors' quoted tariffs, a worked example with one regulated database (cost per month and over 1, 5
+and 10 years under each scope), and the references with the minimum period each norm sets. It needs no Azure sign-in and reads no estate data: prices come
+from the public Azure Retail Prices API, and the rules, regulatory articles and the example database's
+measured size are fixed in the script.
 
 ```bash
 python backup/src/bu_guidelines_deck.py   # backup/reports/<date>-lineamientos/lineamientos_backup.pptx

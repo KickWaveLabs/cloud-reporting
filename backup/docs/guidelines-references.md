@@ -1,10 +1,10 @@
 # Backup guidelines: sources behind every figure
 
 Personal reference for the guidelines deck (`src/bu_guidelines_deck.py`). The deck shows only the
-regulation (slide 4). Use this file when someone asks where a limit, an RTO or a price comes from. All
+regulation (slide 5). Use this file when someone asks where a limit, an RTO or a price comes from. All
 links are public and were checked in November 2026.
 
-## Regulation (also on slide 4)
+## Regulation (also on slide 5)
 
 | Norm | What the deck uses | Link |
 |---|---|---|
@@ -16,7 +16,7 @@ links are public and were checked in November 2026.
 Local copies of the official texts, downloaded on 2026-11-16, are in [regulation/](regulation/):
 [Ley 26702](regulation/ley-26702-art-183.pdf) (cover and art. 183 only; the full SPIJ PDF is 59 MB),
 [Res. SBS 2660-2015](regulation/res-sbs-2660-2015.pdf), [Res. SBS 504-2021](regulation/res-sbs-504-2021.pdf)
-and [Circular BCRP 0011-2026](regulation/circular-bcrp-0011-2026.pdf). The examples on slide 4 come from
+and [Circular BCRP 0011-2026](regulation/circular-bcrp-0011-2026.pdf). The examples on slide 5 come from
 these texts: art. 183 gives none; SBS 2660-2015 art. 49.1 to 49.3 (operations and thresholds), 55 and 58;
 SBS 504-2021 art. 12.3 f) and h); BCRP Anexo V sec. VI and the definitions in art. 2.
 
@@ -35,7 +35,7 @@ SBS 504-2021 art. 12.3 f) and h); BCRP Anexo V sec. VI and the definitions in ar
 | Cosmos DB: continuous 7, 30 or 35 days; 7 days free; changes backed up within 100 s | <https://learn.microsoft.com/en-us/azure/cosmos-db/continuous-backup-restore-introduction> |
 | Cosmos DB: LTR in a Backup vault up to 10 years, billed from July 1, 2026 | <https://learn.microsoft.com/en-us/azure/backup/backup-azure-cosmos-db-overview> |
 
-## RTO and RPO (slides 2 and 3)
+## RTO and RPO (slides 2 and 4)
 
 | Figure on the slide | Official figure | Source |
 |---|---|---|
@@ -48,7 +48,7 @@ SBS 504-2021 art. 12.3 f) and h); BCRP Anexo V sec. VI and the definitions in ar
 | Archive: rehydrate up to 15 h | Standard priority "might take up to 15 hours"; High under 1 hour for objects under 10 GB | <https://learn.microsoft.com/en-us/azure/storage/blobs/archive-rehydrate-overview> |
 | Vendors: ~2.3 h per TB at 1 Gbps | Calculation, not a vendor figure: 1,024 GB x 8 bits / 1 Gbps = 8,192 s. The bank's real link speed changes it | — |
 
-## Backup redundancy names (slides 2 and 3)
+## Backup redundancy names (slides 2 and 4)
 
 The deck shows LRS and ZRS only, the options the bank uses; replication and geo-redundant backup are out of
 its scope (review feedback, 2026-11-16). Keep in mind that LRS and ZRS backups do not survive the loss of a
@@ -63,12 +63,29 @@ for `bu_guidelines_cost.py`.
 | Cosmos DB | Continuous: the region's redundancy, not selectable. Periodic extra copies: LRS, ZRS or RA-GRS | Retail Prices API meters `Periodic Backup - LRS/ZRS/RA-GRS Data Stored`; continuous backup page above |
 | Archive (Azure Backup) | LRS and GRS; not supported on ZRS vaults | Archive tier page above |
 
-## Prices (slide 3)
+## Worked example (slide 3)
 
-Every price comes from the Azure Retail Prices API; slide 3 shows Central US only, LRS and ZRS, less
+One real production database, picked by its application description: TTIB, Transferencias Interbancarias
+(Azure SQL Database Hyperscale, East US 2). SBS 2660-2015 art. 49 names transfers as an example of the
+operations register; which tables hold it is still to be confirmed with the application owner.
+
+| Input | Value | Source |
+|---|---|---|
+| Used size | 2,435 GB (grew about 1 TB in the last year; the example keeps it constant) | Azure Monitor metric `storage`, 2026-11-15 |
+| PITR 7 days, billable | 5,166 GB-month (what exceeds the free allowance of one database size) | October 2026 bill, meter `Backup - RA-GRS Data Stored` |
+| Size of one LTR copy | About the whole database: the bill shows 32,954 LTR GB-month for ~16 copies taken while the database grew from 1.5 to 2.5 TB | October 2026 bill, `microsoft.sql/longtermretentionservers` |
+| Prices | Hyperscale `Backup - ZRS Data Stored` (PITR) and `Backup ZRS Data Stored` (LTR), East US 2, list less 30%. The real October bill came out 30% below list on LTR and 43% on PITR | Retail Prices API; <https://learn.microsoft.com/en-us/azure/azure-sql/database/hyperscale-automated-backups-overview#backup-storage-costs> |
+
+Copies are simulated week by week: the monthly copy is the month's first weekly backup, the yearly copy the
+year's first, and a backup that meets two rules is kept once. The database starts with the copies the base
+rule already keeps. Change `EXAMPLE` and `EXAMPLE_SCENARIOS` in the script to use another database.
+
+## Prices (slide 4)
+
+Every price comes from the Azure Retail Prices API; slide 4 shows Central US only, LRS and ZRS, less
 the bank's 30% discount (`DISCOUNT` in the script, `--discount` to change it). On the October 2026 bill, SQL
 LTR came out about 38% below list, so 30% is on the conservative side. The exact meter names are in the
-speaker notes of slide 3.
+speaker notes of slide 4.
 
 | Page | Link |
 |---|---|
