@@ -224,6 +224,8 @@ def adt_counts(apps):
         "constant_large": sum((to_float(row["weekday_hours_with_traffic"]) or 0) > 10
                               and int(row["microservices"]) > 15 for row in with_traffic),
         "over_size": sum(int(row["microservices_over_aca_size"]) > 0 for row in apps),
+        "always_on": sum((to_float(row.get("offhours_active_share")) or 0) > 0.5 for row in with_traffic),
+        "peak_off_office": sum(row.get("busiest_hour_in_office") == "NO" for row in with_traffic),
         "critical": sum(row["bia"] in ("MUY ALTA", "ALTA") for row in apps),
         "very_high_cost_share": d.share_of(sum(to_float(row["cost_month_usd"]) or 0 for row in apps
                                                if row["bia"] == "MUY ALTA"),
@@ -240,6 +242,9 @@ def slide_criteria(deck, apps, scaling, source):
              f"{d.number(counts['over_tps'])} de {d.number(counts['with_traffic'])} aplicaciones con tráfico medido"],
             ["Uso constante y tamaño", "Más de 10 h de tráfico al día y más de 15 microservicios",
              f"{d.number(counts['constant_large'])} de {d.number(total)} aplicaciones"],
+            ["Horario de uso", "Tráfico en más de la mitad de las noches y fines de semana: no puede apagarse",
+             f"{d.number(counts['always_on'])} de {d.number(counts['with_traffic'])} aplicaciones con tráfico medido; "
+             f"{d.number(counts['peak_off_office'])} con su hora pico fuera de oficina"],
             ["Tamaño por instancia", "Más de 4 vCPU / 8 GB de RAM",
              f"{d.number(counts['over_size'])} aplicaciones con algún microservicio más grande"],
             ["¿Escala con la demanda?", "Escalar a cero es la ventaja de Container Apps",

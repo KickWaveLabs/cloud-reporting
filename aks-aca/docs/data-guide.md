@@ -108,7 +108,7 @@ Insights (the period). Every row carries `cluster_id` and `cod_app`; clusters ar
 | `deployment_snapshot.csv` | A deployment | `microservice` (`YES` = an application deployment), `platform_component`, `layer`, `bia`, `capabilities`, `cpu_request_vcpu`, `mem_request_gib`, `has_hpa`, `ci_replicas_avg_office`, `ci_cpu_used_per_replica`, `ci_request_minus_export_vcpu`, `node_vcpu`, `node_mem_gib`, `pod_too_big_for_node`, `fits_aca_by_request` (request within 4 vCPU / 8 GiB; empty when the export has no request) |
 | `hpa_snapshot.csv` | An HPA | `microservice`, `hpa_min`, `hpa_max`, `replicas_now` (export day), `last_scale_time`, `days_since_last_scale`, `last_scale_bucket`, `ci_replicas_avg_office`, `ci_replicas_max_office`, `office_max_reached_hpa_max`, `behaviour_ci`, `no_scale_cause`, `replicas_needed_by_cpu`, `min_above_need` |
 | `capability_domains.csv` | A capability keyword | `namespaces_prod` (domains), `deployments_prod`, both in APPLICATION clusters |
-| `application_snapshot.csv` | A PROD application (app code of APPLICATION clusters) | `clusters`, `cost_month_usd`, `bia`, `microservices`, `hpas_not_scaling_share`, `apis_with_traffic`, `requests_month`, `office_share`, `peak_tps_upper_bound`, `busiest_hour_tps`, `busiest_hour` (day type and Lima hour), `busiest_hour_in_office`, `busiest_office_hour_tps`, `busiest_offhours_hour_tps`, `weekday_hours_with_traffic`, `batch_jobs`, `statefulsets`, `microservices_over_aca_size`, `possible_monolith`, `adt_runtime`, `adt_reason` |
+| `application_snapshot.csv` | A PROD application (app code of APPLICATION clusters) | `clusters`, `cost_month_usd`, `bia`, `microservices`, `hpas_not_scaling_share`, `apis_with_traffic`, `requests_month`, `office_share`, `peak_tps_upper_bound`, `busiest_hour_tps`, `busiest_hour` (day type and Lima hour), `busiest_hour_in_office`, `busiest_office_hour_tps`, `busiest_offhours_hour_tps`, `weekday_hours_with_traffic`, `offhours_active_share`, `batch_jobs`, `statefulsets`, `microservices_over_aca_size`, `possible_monolith`, `adt_runtime`, `adt_reason` |
 
 #### Definitions
 
@@ -140,7 +140,7 @@ Only APPLICATION clusters enter the analysis. `cluster_overrides.csv` in the inp
 
 | `adt_runtime` | Rule |
 |---|---|
-| `AKS` | Busiest hour above 100 TPS; or traffic more than 10 weekday hours and more than 15 microservices; or a microservice requests more than 4 vCPU / 8 GiB |
+| `AKS` | Busiest hour above 100 TPS; or traffic more than 10 weekday hours and more than 15 microservices; or traffic in more than 50% of the off-hours time (`offhours_active_share`: cannot scale to zero, and ADT_019 never keeps Container Apps warm 24/7); or a microservice requests more than 4 vCPU / 8 GiB |
 | `ACA_WITH_REVIEW` | Within the thresholds but with BIA ALTA or MUY ALTA, or no APIM traffic mapped. StatefulSets and batch jobs are listed in their columns but are not a criterion for now |
 | `ACA` | Within every threshold |
 
@@ -152,6 +152,9 @@ Only APPLICATION clusters enter the analysis. `cluster_overrides.csv` in the inp
   window (weekdays 8:00-19:59): the office-hours model of Container Apps would meet its peak with the replica
   off or cold. `busiest_office_hour_tps` and `busiest_offhours_hour_tps` are the busiest hour inside and outside
   that window; `busiest_hour_tps` is the larger of the two.
+- `offhours_active_share` = off-hours 5-minute intervals with traffic / every off-hours interval of the month,
+  for the application's busiest API (a floor: two APIs active in the same interval count once). It measures
+  coverage, not load: 0.1 TPS spread over the night keeps a replica warm just as much as 10 TPS.
 - `possible_monolith` = a single microservice. The tree sends internal monoliths to App Service, but a single
   deployment is not proof of a monolith: confirm with the application team.
 - The tree's questions on Azure-event functions and multi-application platforms are not tested: every cluster

@@ -48,7 +48,9 @@ Traffic per application: each APIM API maps to an app code through the AKS ingre
 (aa_common.backend_cod_app). peak_tps_upper_bound adds each API's 5-minute peak, so it is an upper bound;
 busiest_hour_tps adds the APIs hour by hour (average weekday or weekend profile of the month) and is what the
 100 TPS rule uses. busiest_hour says which hour it is (day type and Lima hour); busiest_office_hour_tps and
-busiest_offhours_hour_tps split it between the ADT_019 office window (weekdays 8:00-19:59) and the rest. An hour has traffic when it carries at least 10% of the busiest hour.
+busiest_offhours_hour_tps split it between the ADT_019 office window (weekdays 8:00-19:59) and the rest.
+offhours_active_share is the share of off-hours 5-minute intervals with traffic (busiest API of the app); above
+50% the app cannot scale to zero, so it goes to AKS (ADT_019: never warm 24/7). An hour has traffic when it carries at least 10% of the busiest hour.
 
 Units as exported: CPU in millicores; memory in MB (10^6 bytes, so 2Gi shows as 2147.483648).
 
@@ -73,6 +75,7 @@ import io
 import math
 import os
 import statistics
+from calendar import monthrange
 from collections import Counter, defaultdict
 from datetime import date, datetime
 
@@ -119,6 +122,9 @@ SCALE_BUCKETS = ((30, "UNDER_1_MONTH"), (90, "1_TO_3_MONTHS"), (365, "3_TO_12_MO
 OVER_1_YEAR = "OVER_1_YEAR"
 # ADT_019 thresholds for AKS, and the share of the busiest hour above which an hour counts as "with traffic".
 ADT_MAX_TPS, ADT_MAX_ACTIVE_HOURS = 100, 10
+# Share of off-hours 5-minute intervals with traffic above which an application cannot scale to zero: on
+# Container Apps it would stay warm around the clock, which ADT_019 rules out (never warm 24/7).
+OFFHOURS_ACTIVE_MAX = 0.5
 ACTIVE_HOUR_SHARE = 0.1
 CRITICAL_BIA = ("MUY ALTA", "ALTA")
 
@@ -551,7 +557,7 @@ def app_traffic(apis, monthly, profile):
     codes = {(row["apim"], row["api_id"]): row.get("backend_cod_app") or aa.backend_cod_app(row.get("backend_host"))
              for row in apis}
     last = max((row["month"] for row in monthly), default="")
-    traffic = defaultdict(lambda: {"apis": 0, "requests": 0.0, "office": 0.0, "peak_5min": 0.0})
+    traffic = defaultdict(lambda: {"apis": 0, "requests": 0.0, "office": 0.0, "peak_5min": 0.0, "offhours_active": 0.0})
     for row in monthly:
         code = codes.get((row["apim"], row["api_id"]))
         if row["month"] != last or not code:
@@ -561,6 +567,13 @@ def app_traffic(apis, monthly, profile):
         entry["requests"] += to_float(row.get("requests")) or 0
         entry["office"] += to_float(row.get("office_requests")) or 0
         entry["peak_5min"] = entry["peak_5min"] + (to_float(row.get("peak_5min_requests")) or 0)
+        # Off-hours intervals of the month: every 5-minute interval minus the office ones. The app's share is the
+        # busiest API's, a floor: two APIs active in the same interval are still one interval.
+        offhours_buckets = monthrange(int(last[:4]), int(last[5:7]))[1] * 288 - \
+            (to_float(row.get("office_hours_in_window")) or 0) * 12
+        if offhours_buckets > 0:
+            entry["offhours_active"] = max(entry["offhours_active"],
+                                           (to_float(row.get("offhours_active_buckets")) or 0) / offhours_buckets)
     hourly = defaultdict(float)
     for row in profile:
         code = codes.get((row["apim"], row["api_id"]))
@@ -584,7 +597,8 @@ def app_traffic(apis, monthly, profile):
                      "busiest_office_hour_tps": round(max(office.values()) / 3600, 1),
                      "busiest_offhours_hour_tps": round(max(offhours.values()) / 3600, 1),
                      "weekday_hours_with_traffic": sum(value >= ACTIVE_HOUR_SHARE * busiest for value in weekday)
-                     if busiest else 0}
+                     if busiest else 0,
+                     "offhours_active_share": round(entry["offhours_active"], 3)}
     return out
 
 
@@ -605,6 +619,9 @@ def adt_runtime(app):
     if (app["weekday_hours_with_traffic"] != "" and app["weekday_hours_with_traffic"] > ADT_MAX_ACTIVE_HOURS
             and app["microservices"] > ADT_MAX_MICROSERVICES):
         return "AKS", f"Traffic more than {ADT_MAX_ACTIVE_HOURS} h a day and more than {ADT_MAX_MICROSERVICES} microservices"
+    if app["offhours_active_share"] != "" and app["offhours_active_share"] > OFFHOURS_ACTIVE_MAX:
+        return "AKS", (f"Traffic in {app['offhours_active_share']:.0%} of the off-hours time: cannot scale to zero "
+                       "(never warm 24/7)")
     if app["microservices_over_aca_size"]:
         return "AKS", f"{app['microservices_over_aca_size']} microservices request more than 4 vCPU / 8 GiB"
     # StatefulSets and batch jobs are not criteria for now (no PROD application has them); the columns stay.
@@ -641,7 +658,7 @@ def application_rows(cluster_table, hpas, traffic, cost_by_cluster):
                **{field: traffic.get(code, {}).get(field, "") for field in (
                    "apis_with_traffic", "requests_month", "office_share", "peak_tps_upper_bound", "busiest_hour_tps",
                    "busiest_hour", "busiest_hour_in_office", "busiest_office_hour_tps", "busiest_offhours_hour_tps",
-                   "weekday_hours_with_traffic")}}
+                   "weekday_hours_with_traffic", "offhours_active_share")}}
         app["adt_runtime"], app["adt_reason"] = adt_runtime(app)
         out.append(app)
     return out
