@@ -591,11 +591,11 @@ def app_traffic(apis, monthly, profile):
         out[code] = {"month": last, "apis_with_traffic": entry["apis"], "requests_month": int(entry["requests"]),
                      "office_share": round(entry["office"] / entry["requests"], 3) if entry["requests"] else "",
                      "peak_tps_upper_bound": round(entry["peak_5min"] / 300, 1),
-                     "busiest_hour_tps": round(busiest / 3600, 1),
+                     "busiest_hour_tps": round(busiest / 3600, 3),
                      "busiest_hour": f"{top[0]} {top[1]:02d}:00" if busiest else "",
                      "busiest_hour_in_office": ("YES" if top in office else "NO") if busiest else "",
-                     "busiest_office_hour_tps": round(max(office.values()) / 3600, 1),
-                     "busiest_offhours_hour_tps": round(max(offhours.values()) / 3600, 1),
+                     "busiest_office_hour_tps": round(max(office.values()) / 3600, 3),
+                     "busiest_offhours_hour_tps": round(max(offhours.values()) / 3600, 3),
                      "weekday_hours_with_traffic": sum(value >= ACTIVE_HOUR_SHARE * busiest for value in weekday)
                      if busiest else 0,
                      "offhours_active_share": round(entry["offhours_active"], 3)}
