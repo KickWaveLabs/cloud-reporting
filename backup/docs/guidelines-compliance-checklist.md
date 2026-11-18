@@ -1,12 +1,13 @@
 # Backup guidelines: checklist to validate with Compliance
 
-The guidelines deck (`src/bu_guidelines_deck.py`, slide 1) rests on our reading of each regulation. Take
+The guidelines deck (`src/bu_guidelines_deck.py`, slides 1 and 2) rests on our reading of each regulation. Take
 these questions to the Compliance team before the deck goes out. The questions are in Spanish so they can be
 pasted as they are.
 
 Each item states what the deck assumes today and what to edit in the script if the answer differs. Unless
-noted, the edit is in `slide_guidelines()`: the `scopes` list (the "Cuándo varía" table) and the speaker
-notes below it. Rebuild with `python backup/src/bu_guidelines_deck.py`.
+noted, the edit is in `slide_guidelines()`: the `scopes` list (the "Cuándo varía" table, platform-neutral) and
+the speaker notes below it. When the answer changes the Azure setup, also edit the `scopes` list in `slide_azure()`
+("Ámbitos regulados: cómo se configura"). Rebuild with `python backup/src/bu_guidelines_deck.py`.
 
 ## Ley 26702, art. 183: libros y documentos (10 años)
 
@@ -66,8 +67,8 @@ notes below it. Rebuild with `python backup/src/bu_guidelines_deck.py`.
   - Deck assumes: the regulation sets no frequency. The yearly test is recommended only for regulated scopes.
   - If a frequency applies to all: add it to the "Cualquier otro dato" row.
 - [ ] **¿El estándar de redundancia del backup es ZRS en PROD y LRS en no productivo?**
-  - Deck assumes: yes (note box at the bottom of slide 1). Geo-redundant backup is out of the deck's scope.
-  - If not: change the "Redundancia del backup" line in `slide_guidelines`.
+  - Deck assumes: yes (note box at the bottom of slide 2). Geo-redundant backup is out of the deck's scope.
+  - If not: change the "Redundancia del backup" line in `slide_azure`.
 
 ## Res. SBS 00814-2025: continuidad
 
@@ -83,7 +84,7 @@ notes below it. Rebuild with `python backup/src/bu_guidelines_deck.py`.
   - If yes: add a row to `scopes` and the norm to `REGULATION_REFERENCES`, with its official link.
 - [ ] **¿La inmutabilidad de la bóveda es obligatoria o recomendada para los ámbitos regulados?**
   - Deck assumes: recommended.
-  - If mandatory: move it from the note box into the "Cómo se aplica en Azure" column of each regulated row.
+  - If mandatory: move it from the note box into the "Qué se agrega al lineamiento base" column of each regulated row.
 - [ ] **¿Hay datos regulados reales en los ambientes no productivos?**
   - Deck assumes: no ("No productivo: PITR 7 días, sin LTR").
   - If yes: either mask the data or apply the same scope rules there.

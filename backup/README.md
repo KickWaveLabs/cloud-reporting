@@ -60,8 +60,9 @@ saving, risk count and calibrated cost empty.
 
 ## Guidelines deck
 
-`bu_guidelines_deck.py` builds the three-slide guidelines deck: PITR and LTR rules per service for
-regular and regulated data, price per TB-month in Central US (LRS and ZRS, net of the bank's discount)
+`bu_guidelines_deck.py` builds the four-slide guidelines deck: the platform-neutral rule (cloud or on-premise,
+any database, servers and file shares) for regular and regulated data, how it maps to each Azure service with
+PITR and LTR explained, price per TB-month in Central US (LRS and ZRS, net of the bank's discount)
 against the vendors' quoted tariffs, and the references with the minimum period each norm sets. It needs no Azure sign-in and reads no estate data: prices come
 from the public Azure Retail Prices API, and the rules and regulatory articles are fixed in the
 script.
@@ -78,7 +79,7 @@ configured today. It reads `results/backup-database/database_inventory.csv` and,
 inflated, so run `bu_database_used_storage.py` first. Open the workbook in Excel and save it once so the
 formulas calculate.
 
-Validate slide 1 with Compliance before sending it, using
+Validate slides 1 and 2 with Compliance before sending it, using
 [docs/guidelines-compliance-checklist.md](docs/guidelines-compliance-checklist.md). When an answer, a
 regulation or a Microsoft limit changes, edit the slide text and the reference lists in the script; the
 prices refresh on every run.

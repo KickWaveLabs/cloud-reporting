@@ -2,15 +2,18 @@
 """Build the backup guidelines deck: retention rules, price per TB against the vendors, and references.
 
 Slides:
-  1. Guidelines: the base PITR / LTR rule per service, and where it changes by the data a system holds
-  2. Price per TB-month in Central US for LRS and ZRS backups, net of the bank's discount, against the vendors
-  3. References: the regulation behind slide 1, the examples each norm gives and the minimum time it asks to
+  1. Guidelines, platform-neutral (cloud or on-premise, any database engine, servers and file shares): the base
+     short- and long-term rule, and where it changes by the data a system holds
+  2. How the rule applies in Azure: PITR and LTR in plain words, the rule per Azure service and the Azure setup
+     for each regulated scope
+  3. Price per TB-month in Central US for LRS and ZRS backups, net of the bank's discount, against the vendors
+  4. References: the regulation behind slide 1, the examples each norm gives and the minimum time it asks to
      keep the data
      (Microsoft and pricing sources are in docs/)
 
 Prices come from the public Azure Retail Prices API (no sign-in, no subscription data). Retention limits and
 regulatory articles are fixed in this file, checked against the official texts in November 2026. The regulation
-is listed on slide 3; every Microsoft and pricing source is in docs/guidelines-references.md. Vendor tariffs are
+is listed on slide 4; every Microsoft and pricing source is in docs/guidelines-references.md. Vendor tariffs are
 the ones quoted in the backup guidelines review (unit to be confirmed).
 
 Usage:
@@ -40,7 +43,7 @@ GB_PER_TB = 1024
 
 # Vendor tariffs in US$ per TB-month, as quoted. The unit (protected or stored TB) is still to be confirmed.
 VENDORS = [("D3", 56.01, 7.92), ("Opción 1", 49.90, 12.84)]
-# The bank's discount on Azure list prices, applied to every Azure price on slide 2 (vendors quote net prices).
+# The bank's discount on Azure list prices, applied to every Azure price on slide 3 (vendors quote net prices).
 DISCOUNT = 0.30
 
 # (key, serviceName, productName, meterName) of every meter the deck prices. The deck shows LRS and ZRS only;
@@ -326,31 +329,59 @@ def note_box(slide, left, top, width, height, text, size=10, fill=LIGHT, color=G
 # ---------------------------------------------------------------------------
 
 
+def section_bar(slide, left, top, width, text, fill):
+    """Coloured heading bar: navy for the base rule, rust for the regulated scopes, so the two never mix."""
+    bar = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, left, top, width, Inches(0.36))
+    bar.fill.solid()
+    bar.fill.fore_color.rgb = fill
+    bar.line.fill.background()
+    bar.shadow.inherit = False
+    text_box(slide, left + Inches(0.1), top, width - Inches(0.2), Inches(0.36), text, size=12, bold=True,
+             color=WHITE, anchor=MSO_ANCHOR.MIDDLE)
+
+
+def divider(slide, left, top, height):
+    line = slide.shapes.add_connector(1, left, top, left, top + height)  # 1 = straight connector
+    line.line.color.rgb = SOFT
+    line.line.width = Pt(1.5)
+
+
 def slide_guidelines(deck):
-    slide = base_slide(deck, "Lineamientos de backup y retención en Azure",
-                       "Fuente: Ley 26702; Res. SBS 2660-2015 y 504-2021; Circular BCRP 0011-2026; "
-                       "Microsoft Learn (revisado nov-2026). Plazos legales a validar por Cumplimiento.")
+    """Platform-neutral rule: the same retention for cloud and on-premise, databases, servers and file shares."""
+    slide = base_slide(deck, "Lineamientos de backup",
+                       "Fuente: Ley 26702; Res. SBS 2660-2015 y 504-2021; Circular BCRP 0011-2026 (revisadas nov-2026). "
+                       "Plazos legales a validar por Cumplimiento.")
 
-    # Left: the rule every production service follows.
-    left, width = Inches(0.35), Inches(4.45)
-    heading(slide, left, Inches(1.08), width, "Lineamiento base: todo PROD")
+    # Left: the rule every production system follows, whatever the platform.
+    left, width = Inches(0.35), Inches(4.75)
+    section_bar(slide, left, Inches(1.08), width, "Lineamiento base: todo PROD", NAVY)
     rows = [
-        ["Azure Backup\n(VM y Files)", "1 diario,\nse guardan 7", "4 semanales\n12 mensuales"],
-        ["Azure SQL Database", "PITR 7 días", "4 semanales\n12 mensuales"],
-        ["Azure SQL Managed\nInstance", "PITR 7 días", "4 semanales\n12 mensuales"],
-        ["PostgreSQL Flexible", "PITR 7 días", "4 semanales\n12 mensuales\n(Backup vault)"],
-        ["MySQL Flexible", "PITR 7 días", "Sin largo plazo\n(Microsoft lo pausó)"],
-        ["Cosmos DB", "Continuo 7 días\n(sin costo)", "4 semanales\n12 mensuales\n(Backup vault)"],
+        ["Bases de datos\n(cualquier motor)", "Volver a cualquier\nmomento de los\núltimos 7 días",
+         "4 semanales\n12 mensuales"],
+        ["Máquinas virtuales\ny servidores", "1 copia diaria,\nse guardan 7", "4 semanales\n12 mensuales"],
+        ["Archivos\ncompartidos", "1 copia diaria,\nse guardan 7", "4 semanales\n12 mensuales"],
     ]
-    grid = table(slide, left, Inches(1.45), width, ["Servicio", "Corto plazo", "Largo plazo"], rows, [0.38, 0.29, 0.33],
-                 row_height=0.66, size=9.5)
-    grid.rows[0].height = Inches(0.42)
+    grid = table(slide, left, Inches(1.55), width, ["Qué se respalda", "Corto plazo", "Largo plazo"], rows,
+                 [0.34, 0.36, 0.30], row_height=0.78, size=10)
+    grid.rows[0].height = Inches(0.4)
+    note_box(slide, left, Inches(4.55), width, Inches(2.38), [
+        [("Corto plazo: ", True, NAVY),
+         ("recupera errores recientes (borrado, corrupción, ransomware). En bases de datos se llama "
+          "recuperación a un punto en el tiempo: se vuelve al minuto anterior al error.", False, GREY)],
+        [("", False, GREY)],
+        [("Largo plazo: ", True, NAVY),
+         ("copias completas guardadas meses o años. Cubren la conservación que pide la norma y los errores "
+          "que se detectan tarde.", False, GREY)],
+        [("", False, GREY)],
+        [("Aplica igual en nube y on-premise. ", True, NAVY),
+         ("La lámina 2 muestra cómo se configura en Azure.", False, GREY)]], size=9.5)
 
-    # Right: where the rule changes, by the data the system holds. The last column is written as short bullets
-    # so the slide reads on its own, without the presenter.
-    left, width = Inches(5.0), Inches(7.98)
-    heading(slide, left, Inches(1.08), width, "Cuándo varía: según el dato que guarda el sistema")
-    plain = {"fill": RGBColor(0xE4, 0xEA, 0xF4)}
+    divider(slide, Inches(5.3), Inches(1.08), Inches(5.85))
+
+    # Right: where the rule changes, by the data the system holds. Rust, not navy, so it reads as the regulation.
+    left, width = Inches(5.5), Inches(7.48)
+    section_bar(slide, left, Inches(1.08), width, "Cuándo varía: según el dato que guarda el sistema", RUST)
+    plain = {"fill": RGBColor(0xF6, 0xE9, 0xE4)}
     action = {"left": True, "size": 8.5}
     keep_data = ("• Si la aplicación guarda el dato 10 años: basta el lineamiento base\n"
                  "• Si lo borra antes: agregar 1 backup anual que se guarde 10 años")
@@ -362,8 +393,7 @@ def slide_guidelines(deck):
          "Conservar el dato 10 años (más si hay juicio)", (keep_data, action)],
         ["Registro de operaciones\n(≥ US$10 mil; múltiples ≥ US$50 mil/mes)", "SBS 2660-2015,\narts. 49 y 54",
          "Copia al cierre de cada trimestre, guardada 5 años; entrega en 48 h",
-         ("• Agregar 1 copia por trimestre, guardada 5 años (20 copias), en bóveda inmutable\n"
-          "• En SQL no hay copia trimestral: guardar 60 mensuales cubre los 5 años\n"
+         ("• Agregar 1 copia por trimestre, guardada 5 años (20 copias), inmutable\n"
           "• Si la aplicación borra el dato antes de 10 años: 1 backup anual por 10 años", action)],
         ["KYC, contrapartes y operaciones inusuales", "SBS 2660-2015,\narts. 55 y 58",
          "Conservar el dato 10 años", (keep_data, action)],
@@ -372,32 +402,102 @@ def slide_guidelines(deck):
          ("• Agregar 1 backup anual que se guarde 10 años\n• Probar la restauración 1 vez al año y dejarla "
           "documentada", action)],
     ]
-    grid = table(slide, left, Inches(1.45), width, ["Ámbito (dato)", "Norma", "Qué exige", "Cómo se aplica en Azure"],
-                 scopes, [0.2, 0.13, 0.24, 0.43], row_height=0.8, size=9)
-    grid.rows[0].height = Inches(0.42)
-
-    note_box(slide, Inches(0.35), Inches(6.08), Inches(12.63), Inches(0.92), [
-        [("Redundancia del backup: ", True, NAVY),
-         ("PROD: ZRS (copias en 3 zonas de la región). No productivo: LRS. Archive solo existe en bóvedas LRS.",
-          False, GREY)],
-        [("PITR", True, NAVY),
-         (" recupera errores recientes: borrado, corrupción, ransomware.   ", False, GREY),
-         ("Largo plazo", True, NAVY), (" cumple la conservación y los errores que se detectan tarde.", False, GREY)],
+    grid = table(slide, left, Inches(1.55), width,
+                 ["Ámbito (dato)", "Norma", "Qué exige", "Qué se agrega al lineamiento base"],
+                 scopes, [0.2, 0.14, 0.24, 0.42], row_height=0.8, size=9, header_fill=RUST_DARK)
+    grid.rows[0].height = Inches(0.4)
+    note_box(slide, left, Inches(6.18), width, Inches(0.75), [
         [("Recomendado en los ámbitos regulados: ", True, RUST),
-         ("bóveda inmutable y prueba de restauración documentada.", False, GREY)]], size=9.5)
+         ("copia inmutable (nadie puede borrarla ni cambiarla antes de su vencimiento) y prueba de restauración "
+          "documentada.", False, GREY)]], size=9.5)
     slide.notes_slide.notes_text_frame.text = (
-        "Largo plazo: cantidad de copias que se guardan (4 semanales = las últimas 4 semanas; 12 mensuales = el "
-        "último año). En SQL es el LTR. "
+        "El lineamiento es el mismo para cualquier plataforma (Azure, otra nube u on-premise) y cualquier motor de "
+        "base de datos. Corto plazo: en bases de datos, backup completo más los backups del log de transacciones, "
+        "que permiten restaurar a cualquier minuto de los últimos 7 días; en Azure se llama PITR. En servidores y "
+        "archivos, 1 copia diaria que se guarda 7 días. "
+        "Largo plazo: cantidad de copias completas que se guardan (4 semanales = las últimas 4 semanas; "
+        "12 mensuales = el último año). En Azure SQL se llama LTR; los proveedores lo llaman Archive. "
         "La regla base aplica a todo PROD; un sistema solo cambia si guarda uno de los datos de la tabla de ámbitos. "
         "La Ley 26702 art. 183 y la Res. SBS 2660-2015 arts. 55 y 58 obligan a conservar el dato, no el backup: si la "
         "aplicación no borra esos registros antes de 10 años, el backup se queda en la regla base. "
         "Solo dos normas piden backups: la Res. SBS 2660-2015 art. 54 (copia al final de cada trimestre, agrupada por "
         "5 años: 20 copias) y la Circular BCRP 0011-2026 Anexo V sección VI (conservar los respaldos 10 años). "
-        "SQL LTR no tiene frecuencia trimestral: 60 mensuales cubren los 5 años guardando 60 copias; una copia "
-        "trimestral a Archive inmutable guarda solo las 20 que pide la norma. "
         "Cumplimiento debe confirmar con qué frecuencia se guardan los respaldos de 10 años del LBTR (la circular no "
         "la fija) y qué aplicaciones guardan el registro de operaciones y el LBTR. "
-        "Ninguna norma fija un plazo de PITR; PITR 7 días aplica a todo. "
+        "Ninguna norma fija un plazo para el corto plazo; 7 días aplica a todo.")
+
+
+def slide_azure(deck):
+    """How the platform-neutral rule maps to each Azure service, with PITR and LTR explained in plain words."""
+    slide = base_slide(deck, "Cómo se aplica en Azure",
+                       "Fuente: Microsoft Learn (revisado nov-2026): retención, redundancia y tiempos de restauración de "
+                       "cada servicio.")
+
+    terms = [
+        ("PITR = recuperación a un punto en el tiempo",
+         "Azure guarda la base y sus cambios cada pocos minutos. Permite volver a cualquier minuto de los "
+         "últimos 7 días. Es el corto plazo."),
+        ("LTR = retención de largo plazo",
+         "Copias completas que Azure guarda aparte de la base: semanales, mensuales o anuales, hasta 10 años. "
+         "Es el largo plazo."),
+        ("Bóveda (vault) de Azure Backup",
+         "Donde se guardan las copias de VMs, Files, PostgreSQL y Cosmos DB. Inmutable: nadie la borra antes "
+         "de su vencimiento."),
+    ]
+    for index, (title, text) in enumerate(terms):
+        left = Inches(0.35 + index * 4.25)
+        rounded(slide, left, Inches(1.08), Inches(4.13), Inches(0.95), CARD)
+        text_box(slide, left + Inches(0.12), Inches(1.08), Inches(3.89), Inches(0.95),
+                 [[(title, True, ORANGE)], [(text, False, WHITE)]], size=9, anchor=MSO_ANCHOR.MIDDLE)
+
+    # Left: the base rule per Azure service.
+    left, width = Inches(0.35), Inches(6.35)
+    section_bar(slide, left, Inches(2.2), width, "Lineamiento base por servicio (todo PROD)", NAVY)
+    rows = [
+        ["Azure Backup: VM y Files", "1 diario, se guardan 7", "4 semanales, 12 mensuales (bóveda)"],
+        ["Azure SQL Database", "PITR 7 días", "LTR: 4 semanales, 12 mensuales"],
+        ["Azure SQL Managed Instance", "PITR 7 días", "LTR: 4 semanales, 12 mensuales"],
+        ["PostgreSQL Flexible", "PITR 7 días", "4 semanales, 12 mensuales (bóveda)"],
+        ["MySQL Flexible", "PITR 7 días", "Sin largo plazo (Microsoft lo pausó)"],
+        ["Cosmos DB", "Continuo 7 días (sin costo)", "4 semanales, 12 mensuales (bóveda)"],
+    ]
+    grid = table(slide, left, Inches(2.65), width, ["Servicio", "Corto plazo", "Largo plazo"], rows,
+                 [0.36, 0.26, 0.38], row_height=0.48, size=9)
+    grid.rows[0].height = Inches(0.36)
+
+    # Right: what the regulated scopes of slide 1 mean in Azure.
+    left, width = Inches(6.9), Inches(6.08)
+    section_bar(slide, left, Inches(2.2), width, "Ámbitos regulados: cómo se configura", RUST)
+    action = {"left": True, "size": 8.5}
+    scopes = [
+        ["Libros, KYC e inusuales\n(si la aplicación borra antes)",
+         ("• SQL: LTR anual guardado 10 años\n• VM: punto anual en la bóveda, pasado a Archive", action)],
+        ["Registro de operaciones\n(copia trimestral, 5 años)",
+         ("• SQL LTR no tiene frecuencia trimestral: 60 mensuales cubren los 5 años\n"
+          "• Alternativa: copia trimestral a Archive inmutable (solo las 20 copias)", action)],
+        ["Sistemas del LBTR\n(respaldos 10 años)",
+         ("• LTR anual guardado 10 años\n• Restauración de prueba anual, documentada", action)],
+        ["MySQL Flexible", ("• Sin LTR: export (mysqldump) a Blob inmutable si un ámbito lo exige", action)],
+    ]
+    grid = table(slide, left, Inches(2.65), width, ["Ámbito", "En Azure"], scopes, [0.36, 0.64],
+                 row_height=0.74, size=9, header_fill=RUST_DARK)
+    grid.rows[0].height = Inches(0.36)
+
+    note_box(slide, Inches(0.35), Inches(6.12), Inches(12.63), Inches(0.82), [
+        [("Redundancia del backup: ", True, NAVY),
+         ("PROD: ZRS (copias en 3 zonas de la región). No productivo: LRS. Archive solo existe en bóvedas LRS.",
+          False, GREY)],
+        [("Tiempos: ", True, NAVY),
+         ("SQL restaura normalmente en < 12 h; Archive tarda hasta 15 h en rehidratar, dentro de las 48 h hábiles "
+          "que da la SBS. SQL Managed Instance no admite LTR inmutable.", False, GREY)]], size=9.5)
+    slide.notes_slide.notes_text_frame.text = (
+        "PITR (point-in-time restore): Azure toma backups completos, diferenciales y del log cada 5 a 10 minutos en "
+        "SQL (hasta 5 minutos en PostgreSQL y MySQL) y con eso restaura la base a cualquier minuto dentro de los "
+        "días de retención. Es el corto plazo del lineamiento. "
+        "LTR (long-term retention): copias completas que se guardan aparte, con su propia retención (semanal, "
+        "mensual o anual, hasta 10 años). Es el largo plazo. "
+        "SQL LTR no tiene frecuencia trimestral: 60 mensuales cubren los 5 años guardando 60 copias; una copia "
+        "trimestral a Archive inmutable guarda solo las 20 que pide la norma. "
         "Redundancia: LRS guarda 3 copias en un datacenter; ZRS, 3 copias en zonas distintas de la misma región. "
         "En SQL, ZRS cuesta lo mismo que LRS. Las bóvedas ZRS no admiten Archive: el largo plazo en una bóveda ZRS "
         "queda en la capa estándar. "
@@ -558,6 +658,7 @@ def main():
     deck = Presentation()
     deck.slide_width, deck.slide_height = Inches(13.333), Inches(7.5)
     slide_guidelines(deck)
+    slide_azure(deck)
     net = {region: {key: value * (1 - args.discount) for key, value in values.items()} for region, values in tb.items()}
     slide_prices(deck, net, f"{today:%d-%m-%Y}", args.discount)
     slide_references(deck)
