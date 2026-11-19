@@ -96,8 +96,15 @@ class LogsClient:
         params = {"query": " ".join(kql.split()), "timespan": timespan}
         for attempt in range(1, 7):
             time.sleep(self.pause)
-            response = self.session.get(url, params=params, timeout=300,
-                                        headers={"Authorization": f"Bearer {self._bearer()}", "Prefer": "wait=300"})
+            try:
+                response = self.session.get(url, params=params, timeout=300,
+                                            headers={"Authorization": f"Bearer {self._bearer()}", "Prefer": "wait=300"})
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as error:
+                # A dropped or slow connection: retry, and after the last attempt log the cluster as a gap.
+                if attempt < 6:
+                    time.sleep(10 * attempt)
+                    continue
+                raise azure.ArmError("", "NetworkError", str(error)[:300], url) from None
             if response.status_code in (429, 500, 502, 503, 504) and attempt < 6:
                 retry = response.headers.get("Retry-After")
                 time.sleep(int(retry) if retry and retry.isdigit() else 10 * attempt)
