@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the corporate AKS vs Container Apps deck (slides 1 to 6) for a non-technical forum.
+"""Build the corporate AKS vs Container Apps deck (slides 1 to 7) for a non-technical forum.
 
 Same look as aa_deck.py (its drawing helpers are reused), plain figures only: TPS, vCPU, GB of RAM, instances,
 hours with traffic, money per month and per year. Slide text is in Spanish for the audience. Every amount is in
@@ -16,10 +16,14 @@ Slides (the story: what we build, where it runs, why we challenge it, the rules,
      the AKS clusters by category (only the clusters with applications enter the analysis)
   3. Hypothesis: signs that one AKS cluster per application costs more than it uses, the motivation (economic
      first, then operation and complexity) and the smallest AKS cluster against one Container Apps microservice
-  4. The ADT_019 criteria in plain words, each with the PROD figure
-  5. Result: where each application goes after applying the criteria
-  6. Possible saving: monthly and annual, with and without discount
-A seventh slide (effort and migration estimate) is the architecture team's and is not built here.
+  4. The ADT_019 criteria as six plain questions, without figures
+  5. The criteria applied: how many applications meet each one
+  6. Result: where each application goes
+  7. Possible saving: monthly and annual, with and without discount
+An eighth slide (effort and migration estimate) is the architecture team's and is not built here.
+
+Runtime counts only take resources that existed in the measured month (existed_at_measurement in the inventory):
+run the scripts after the month ends and the deck shows that month, whatever day it is built.
 
 Output: aks_aca_corporate.pptx in the newest reports/<date>-aks-aca folder (or --output). Every figure is a draft to check against
 the workbook and the CSVs before presenting.
@@ -86,10 +90,22 @@ def to_float(value):
 # ---------------------------------------------------------------------------
 
 
+def existed(row):
+    """The resource existed in the measured month (inventory column existed_at_measurement; kept when unknown)."""
+    return row.get("existed_at_measurement", "") != "NO"
+
+
+def prod_inventory(results, name):
+    """PROD rows of an inventory CSV that existed in the measured month: the inventory is current, the figures are
+    of a past month."""
+    return [row for row in results_csv(results, "aa-inventory", name) if row["environment"] == "PROD" and existed(row)]
+
+
 def read_estate(results):
-    """Figures of the runtime estate in PROD, by cluster category."""
+    """Figures of the runtime estate in PROD, by cluster category, for the measured month."""
+    in_month = {row["id"].lower() for row in prod_inventory(results, "aks_clusters.csv")}
     clusters = [row for row in results_csv(results, "aa-k8s-snapshot", "cluster_snapshot.csv")
-                if row["environment"] == "PROD" and row["in_inventory"] == "YES"]
+                if row["environment"] == "PROD" and row["in_inventory"] == "YES" and row["cluster_id"] in in_month]
     cost_rows = results_csv(results, "aa-cost", "cost_by_resource.csv")
     month = max((row["month"] for row in cost_rows if row["owner_type"] == "AKS"), default="")
     cost = defaultdict(float)
@@ -110,14 +126,12 @@ def read_estate(results):
     mem_used = sum(to_float(row["mem_used_office_avg_gib"]) or 0 for row in usage if row["mode"] != "ALLOCATABLE")
     cpu_total = sum(to_float(row["cpu_allocatable_avg"]) or 0 for row in usage if row["mode"] == "ALLOCATABLE")
     mem_total = sum(to_float(row["mem_allocatable_avg_gib"]) or 0 for row in usage if row["mode"] == "ALLOCATABLE")
-    sites = [row for row in results_csv(results, "aa-inventory", "app_services.csv") if row["environment"] == "PROD"]
-    plans = [row for row in results_csv(results, "aa-inventory", "app_service_plans.csv")
-             if row["environment"] == "PROD"]
+    sites = prod_inventory(results, "app_services.csv")
+    plans = prod_inventory(results, "app_service_plans.csv")
     prod = {
-        "aks": sum(row["environment"] == "PROD" for row in results_csv(results, "aa-inventory", "aks_clusters.csv")),
-        "aca": sum(row["environment"] == "PROD" for row in results_csv(results, "aa-inventory", "aca_apps.csv")),
-        "aca_environments": sum(row["environment"] == "PROD"
-                                for row in results_csv(results, "aa-inventory", "aca_environments.csv")),
+        "aks": len(in_month),
+        "aca": len(prod_inventory(results, "aca_apps.csv")),
+        "aca_environments": len(prod_inventory(results, "aca_environments.csv")),
         "web": sum(row.get("type") == "WEB" for row in sites),
         "functions": sum(row.get("type") == "FUNCTION" for row in sites),
         "plans": Counter(row.get("runtime") or "APP_SERVICE" for row in plans),
@@ -393,30 +407,67 @@ def adt_counts(apps):
     }
 
 
-def slide_criteria(deck, apps, source):
+# The ADT_019 criteria as six plain questions: (short label, question, what it means, destination).
+CRITERIA = [
+    ("Mucho tráfico", "¿Recibe mucho tráfico?", "Más de 100 pedidos por segundo en su hora más cargada.", "AKS"),
+    ("Todo el día y grande", "¿Trabaja todo el día y es grande?", "Más de 10 horas al día y más de 15 microservicios.",
+     "AKS"),
+    ("Se usa de noche", "¿Se usa de noche?", "Si se usa la mayor parte de la noche, no se puede apagar.", "AKS"),
+    ("Piezas muy pesadas", "¿Alguna pieza es muy pesada?", "Una pieza necesita más de 4 vCPU u 8 GB de memoria.",
+     "AKS"),
+    ("Crítica para el banco", "¿Es crítica para el banco?", "Si se cae, afecta mucho al negocio (BIA alta o muy alta).",
+     "REVIEW"),
+    ("Va a crecer", "¿Va a crecer pronto?", "En desarrollo ya pasa de 15 microservicios.", "REVIEW"),
+]
+DESTINATIONS = {"AKS": ("Se queda en AKS", d.NAVY), "REVIEW": ("Container Apps con revisión", d.ORANGE)}
+
+
+def criteria_counts(apps):
+    """Applications that meet each criterion, in the order of CRITERIA, and the base of each."""
     counts = adt_counts(apps)
-    total = len(apps)
     growing = sum(row.get("microservices_projected") not in ("", None)
                   and int(row["microservices_projected"]) > 15 >= int(row["microservices"] or 0) for row in apps)
-    rows = [["Criterio", "Qué mira, en simple", "Qué decide", "En producción hoy"],
-            ["Tráfico en la hora pico", "Cuántas peticiones por segundo recibe en su hora más cargada",
-             "Más de 100 por segundo → AKS",
-             f"{d.number(counts['over_tps'])} de {apps_label(counts['with_traffic'])} con tráfico medido"],
-            ["Uso constante y tamaño", "Si trabaja todo el día y tiene muchas piezas",
-             "Más de 10 h al día y más de 15 microservicios → AKS",
-             f"{d.number(counts['constant_large'])} de {apps_label(total)}"],
-            ["Horario de uso", "Si se usa de noche y fines de semana: Container Apps ahorra apagándose fuera de oficina",
-             "Tráfico en más de la mitad de ese tiempo → AKS",
-             f"{d.number(counts['always_on'])} de {apps_label(counts['with_traffic'])} con tráfico medido"],
-            ["Tamaño de cada copia", "Cuánta máquina necesita cada copia del servicio",
-             "Más de 4 vCPU u 8 GB de RAM → AKS", apps_label(counts["over_size"])],
-            ["Criticidad", "Qué tan grave es para el negocio si se cae",
-             "BIA ALTA o MUY ALTA → Container Apps con revisión", apps_label(counts["critical"])],
-            ["Crecimiento", "Si en desarrollo tiene más microservicios que en producción",
-             "Pasará de 15 → Container Apps con revisión", apps_label(growing)]]
-    slide = d.base_slide(deck, f"{COUNT_WORDS.get(len(rows) - 1, len(rows) - 1)} criterios deciden a dónde va cada "
-                               "aplicación", source)
-    d.table(slide, Inches(0.6), Inches(1.4), Inches(12.1), rows, [0.17, 0.33, 0.27, 0.23], row_height=0.66, size=11)
+    return [counts["over_tps"], counts["constant_large"], counts["always_on"], counts["over_size"], counts["critical"],
+            growing], counts["with_traffic"]
+
+
+def slide_criteria(deck, source):
+    slide = d.base_slide(deck, "Seis preguntas deciden a dónde va cada aplicación", source)
+    width, height, gap = Inches(3.9), Inches(2.0), Inches(0.25)
+    for index, (_, question, meaning, destination) in enumerate(CRITERIA):
+        left = Inches(0.6) + (index % 3) * (width + gap)
+        top = Inches(1.4) + (index // 3) * (height + gap)
+        box(slide, left, top, width, height, d.LIGHT)
+        shape(slide, MSO_SHAPE.OVAL, left + Inches(0.25), top + Inches(0.25), Inches(0.5), Inches(0.5), d.NAVY)
+        d.text_box(slide, left + Inches(0.25), top + Inches(0.25), Inches(0.5), Inches(0.5), str(index + 1), size=16,
+                   bold=True, color=d.WHITE, align=d.PP_ALIGN.CENTER, anchor=d.MSO_ANCHOR.MIDDLE)
+        d.text_box(slide, left + Inches(0.9), top + Inches(0.25), width - Inches(1.1), Inches(0.5), question, size=16,
+                   bold=True, color=d.NAVY, anchor=d.MSO_ANCHOR.MIDDLE)
+        d.text_box(slide, left + Inches(0.25), top + Inches(0.85), width - Inches(0.5), Inches(0.6), meaning, size=14,
+                   color=d.GREY)
+        label, colour = DESTINATIONS[destination]
+        box(slide, left + Inches(0.25), top + height - Inches(0.5), Inches(2.9), Inches(0.32), colour, radius=0.5)
+        d.text_box(slide, left + Inches(0.25), top + height - Inches(0.5), Inches(2.9), Inches(0.32), f"Sí → {label}",
+                   size=12, bold=True, color=d.WHITE, align=d.PP_ALIGN.CENTER, anchor=d.MSO_ANCHOR.MIDDLE)
+    d.text_box(slide, Inches(0.6), Inches(5.95), Inches(12.1), Inches(0.5),
+               "Si no cumple ninguna, es candidata a Container Apps.", size=16, bold=True, color=d.GREEN)
+
+
+def slide_criteria_applied(deck, apps, source):
+    values, with_traffic = criteria_counts(apps)
+    slide = d.base_slide(deck, "Al aplicar los criterios: cuántas aplicaciones cumple cada uno", source)
+    order = list(range(len(CRITERIA)))[::-1]  # a bar chart draws its first category at the bottom
+    d.bar_chart(slide, Inches(0.6), Inches(1.4), Inches(8.2), Inches(4.9), [CRITERIA[i][0] for i in order],
+                [values[i] for i in order], XL_CHART_TYPE.BAR_CLUSTERED,
+                [DESTINATIONS[CRITERIA[i][3]][1] for i in order])
+    d.text_box(slide, Inches(9.2), Inches(1.6), Inches(3.5), Inches(1.6),
+               [f"De {apps_label(len(apps))}, {d.number(with_traffic)} tienen tráfico medido.", "",
+                "Una aplicación puede cumplir más de un criterio."], size=14, color=d.GREY)
+    for index, key in enumerate(("AKS", "REVIEW")):
+        label, colour = DESTINATIONS[key]
+        top = Inches(3.5) + index * Inches(0.45)
+        box(slide, Inches(9.2), top + Inches(0.06), Inches(0.22), Inches(0.22), colour, radius=0.2)
+        d.text_box(slide, Inches(9.55), top, Inches(3.2), Inches(0.35), label, size=14, color=d.GREY)
 
 
 # Groups of the distribution slide, in plain words for a non-technical audience: (label, what it means, colour).
@@ -451,8 +502,7 @@ def slide_distribution(deck, apps, estate, source):
         groups[key]["apps"].append(row)
         groups[key]["cost"] += to_float(row["cost_month_usd"]) or 0
     movable = len(groups["ACA"]["apps"]) + len(groups["ACA_WITH_REVIEW"]["apps"])
-    slide = d.base_slide(deck, f"Aplicando los criterios, {movable} de {len(apps)} aplicaciones podrían ir a "
-                               f"Container Apps", source)
+    slide = d.base_slide(deck, f"Resultado: {movable} de {len(apps)} aplicaciones podrían ir a Container Apps", source)
     order = [key for key in DISTRIBUTION_GROUPS if groups[key]["apps"]]
     d.bar_chart(slide, Inches(0.5), Inches(1.4), Inches(5.6), Inches(4.4), [DISTRIBUTION_GROUPS[key][0] for key in order],
                 [len(groups[key]["apps"]) for key in order], XL_CHART_TYPE.COLUMN_CLUSTERED,
@@ -579,6 +629,12 @@ def main():
         raise SystemExit("No application_snapshot.csv in " + os.path.join(args.results, "aa-k8s-snapshot")
                          + ": run aa_k8s_snapshot.py first.")
     scaling = read_scaling(args.results)
+    inventory_months = {row.get("measurement_month", "") for row in results_csv(args.results, "aa-inventory",
+                                                                                "aks_clusters.csv")} - {""}
+    if inventory_months and inventory_months != {estate["month"]}:
+        aa.azure.LOG.warning("The inventory was filtered for %s but cost and metrics are of %s: rerun aa_inventory.py "
+                             "with --measurement-month %s", ", ".join(sorted(inventory_months)), estate["month"],
+                             estate["month"])
     period = month_label(estate["month"])
     measured = f"Fuente: inventario de Azure, Cost Management (costo amortizado, {period}) y métricas de {period}."
     criteria = (f"Fuente: lineamiento ADT_019; tráfico de APIM, Application Gateway y Event Hubs, Container Insights y configuración de autoescalado, "
@@ -590,7 +646,8 @@ def main():
     slide_estate(deck, estate, apps, f"{measured} {MONEY_NOTE}")
     slide_hypothesis(deck, estate, apps, scaling, args.results,
                      f"{measured} Precios de lista: Azure Retail Prices API. {MONEY_NOTE}")
-    slide_criteria(deck, apps, criteria)
+    slide_criteria(deck, "Fuente: lineamiento ADT_019 del banco.")
+    slide_criteria_applied(deck, apps, criteria)
     slide_distribution(deck, apps, estate, f"{criteria} {MONEY_NOTE}")
     slide_cost(deck, apps, estate, args.results,
                f"{measured} Precios de lista: Azure Retail Prices API. {MONEY_NOTE}")

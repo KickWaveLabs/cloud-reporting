@@ -23,7 +23,7 @@ that knows TPS, CPU, RAM and time to market. The technical deck stays as backup 
   mentioned as excluded and clusters without applications are a finding of their own.
 - Pattern 3 is dropped. Pattern 4 shows "does not scale" as a total, split into "stays at its minimum"
   (load) and "min = max" (configuration), plus the time without scaling.
-- Corporate deck, told as a story (order set by the manager on 2026-11-18; slides 1–6 by the user, slide 7,
+- Corporate deck, told as a story (order set by the manager on 2026-11-18; slides 1–7 by the user, slide 8,
   effort and migration estimate, by the manager's team). Plain words for a non-technical audience; every
   amount in soles with IGV at S/ 3.41333 per US$:
   1. Ways to build an application: modular monolith, miniservices, microservices, asynchronous processes,
@@ -32,10 +32,11 @@ that knows TPS, CPU, RAM and time to market. The technical deck stays as backup 
   3. Hypothesis, why we challenge the model: 3–4 signs (CPU and memory used of what is paid, autoscalers that
      do not scale, small applications with a cluster of their own), the motivation (economic first, then
      operation and complexity) and the smallest AKS cluster against one Container Apps microservice.
-  4. The criteria (ADT_019 tree; see [adt-019-runtime.md](adt-019-runtime.md)) in plain words, each with the
-     PROD figure.
-  5. Result: where each application goes after applying the criteria.
-  6. Possible saving: monthly and annual, with and without discount.
+  4. The criteria (ADT_019 tree; see [adt-019-runtime.md](adt-019-runtime.md)) as six plain questions, no figures.
+  5. The criteria applied: how many applications meet each one.
+  6. Result: where each application goes.
+  7. Possible saving: monthly and annual, with and without discount.
+  Runtime counts only take what existed in the measured month (`existed_at_measurement`).
 - Traffic classes (office, extended, 24x7) stay in the technical deck until another architect validates them.
 
 ## Plan (2026-11-11)
