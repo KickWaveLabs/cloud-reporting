@@ -509,7 +509,7 @@ group         = if [adt_runtime] <> "INSUFFICIENT_DATA" then [adt_runtime]
 | 3 | CPU and memory used | `aks_usage_monthly`, measured month, APPLICATION clusters only (category lookup): sum `cpu_used_office_avg` of the usage rows / sum `cpu_allocatable_avg` of the `ALLOCATABLE` rows; the same with `mem_used_office_avg_gib` and `mem_allocatable_avg_gib` |
 | 3 | Autoscalers without changing size | `hpa_snapshot`, PROD, `microservice` = YES, APPLICATION clusters, `last_scale_bucket` other than NO_DATA: (`3_TO_12_MONTHS` + `OVER_1_YEAR`) / count |
 | 3 | Applications with 15 microservices or fewer | `application_snapshot`: count with `microservices` between 1 and 15, out of the total |
-| 3 | Minimum AKS vs one Container Apps microservice | AKS: 4 × D8s v4 × 730 h × list price per hour × 0.70. Container Apps: (office seconds × (0.5 × vCPU-s price + 1 × GiB-s price) + 5 × price per million requests) × 0.70. Prices in `prices.csv`; office seconds = weekdays of the month × 12 h × 3,600 |
+| 3 | Minimum AKS vs one Container Apps microservice | AKS: 4 × D8s v4 × 730 h × list price per hour × the share of the list price the bank pays for node VMs (measured, reservations included; `--aks-discount 0.60` fixes it by hand). Container Apps: (office seconds × (0.5 × vCPU-s price + 1 × GiB-s price) + 5 × price per million requests) × 0.70 (the bank's 30%; no reservations). Prices in `prices.csv`; office seconds = weekdays of the month × 12 h × 3,600. Azure pricing calculator: Virtual Machines, 4 × D8s v4 Linux, East US 2, 730 h, pay as you go = 1,121.28 USD; the 1-year and 3-year reserved options show the reservation price |
 | 4 | The four conditions | Text only. Each one is a column above (`c1` to `c4`); it is the ADT_019 tree read the other way round |
 | 5 | Funnel | Rows with `busiest_hour_tps` not empty = "Con tráfico medido". Then filter `c1_traffic` = TRUE, then also `c2_pieces`, `c3_night`, `c4_size`: the count after each filter is one bar. The last bar equals `adt_runtime` in (ACA, ACA_WITH_REVIEW) |
 | 6 | Result per group | Pivot rows `group` (leave `IN_DEVELOPMENT` out of the chart; it is the second bullet); count of `cod_app` and sum of `cost_month_usd`, in soles |
@@ -517,7 +517,8 @@ group         = if [adt_runtime] <> "INSUFFICIENT_DATA" then [adt_runtime]
 | 7 | Saving | `aca_estimate_by_app`, filter `adt_runtime` in (ACA, ACA_WITH_REVIEW). With discount: sum `aks_cost_pen_igv` − sum `aca_with_discount_pen_igv` per month; × 12 per year. List price: sum `aks_cost_usd` / measured discount − sum `aca_list_usd`, in soles |
 
 - The measured discount is what PROD node VMs cost in the month (amortized, reservations included) divided by
-  their node-hours at list price; the script prints it on slide 7 ("se paga X % del precio de lista").
+  their node-hours at list price; the script logs it and prints it on slides 3 and 7. To check it in the portal:
+  Cost analysis, amortized cost, group by *Pricing model* and filter Virtual Machines (Reservation vs OnDemand).
 - The saving is a month repeated twelve times: the same replicas, prices and applications. It includes the
   applications "con revisión", so the firm saving is the `ACA` rows alone (filter `adt_runtime` = ACA).
 - To project with other inputs, change the columns of `aca_estimate_by_app` and recompute: more replicas

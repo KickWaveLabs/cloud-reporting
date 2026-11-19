@@ -348,19 +348,21 @@ def slide_estate(deck, estate, apps, source):
                "Microservicios = piezas de aplicación desplegadas en AKS.", size=11)
 
 
-def minimum_costs(month, prices, ratio=1 - BANK_DISCOUNT, region="eastus2"):
-    """(smallest AKS cluster, one Container Apps microservice) per month in US$, both with the bank's discount."""
+def minimum_costs(month, prices, aks_ratio, aca_ratio=1 - BANK_DISCOUNT, region="eastus2"):
+    """(smallest AKS cluster, one Container Apps microservice) per month in US$. AKS pays aks_ratio of the list price
+    (what the bank pays for node VMs, reservations included); Container Apps has no reservations, so it takes the
+    bank's discount."""
     price = lambda key: prices.get((key, region), 0)
-    aks = MIN_AKS_NODES * HOURS_MONTH * price(f"vm_{MIN_AKS_VM}_payg") * ratio
+    aks = MIN_AKS_NODES * HOURS_MONTH * price(f"vm_{MIN_AKS_VM}_payg") * aks_ratio
     aca = (office_seconds(month) * (ACA_VCPU * price("aca_vcpu_active_s") + ACA_GIB * price("aca_mem_active_gib_s"))
-           + ACA_REQUESTS_MILLION * price("aca_requests_million")) * ratio
+           + ACA_REQUESTS_MILLION * price("aca_requests_million")) * aca_ratio
     return aks, aca
 
 
-def slide_hypothesis(deck, estate, apps, scaling, results, source):
+def slide_hypothesis(deck, estate, apps, scaling, results, source, aks_ratio):
     month = estate["month"]
     prices = read_prices(results)
-    aks_min, aca_min = minimum_costs(month, prices)
+    aks_min, aca_min = minimum_costs(month, prices, aks_ratio)
     small = sum(0 < int(row["microservices"] or 0) <= 15 for row in apps)
     slide = d.base_slide(deck, "Hipótesis: un cluster AKS por aplicación paga más de lo que usa", source)
     d.heading(slide, Inches(0.6), Inches(1.3), Inches(7.2), "Indicios", size=14)
@@ -382,14 +384,13 @@ def slide_hypothesis(deck, estate, apps, scaling, results, source):
                                   "Complejidad: sin servidores ni versiones de Kubernetes que administrar")):
         d.callout(slide, Inches(8.1), Inches(3.05) + index * Inches(0.75), Inches(4.6), Inches(0.65), text, size=12,
                   fill=d.CARD)
-    d.heading(slide, Inches(0.6), Inches(4.75), Inches(12.1), "Lo mínimo que se paga al mes (con el 30 % de descuento "
-              "del banco)", size=14)
+    d.heading(slide, Inches(0.6), Inches(4.75), Inches(12.1), "Lo mínimo que se paga al mes", size=14)
     d.kpi(slide, Inches(0.6), Inches(5.15), Inches(5.9), Inches(1.3), soles(aks_min),
-          "el cluster AKS más chico (4 servidores), aunque la aplicación sea pequeña", value_color=d.RUST,
-          value_size=28, label_size=11)
+          f"el cluster AKS más chico (4 servidores), aunque la aplicación sea pequeña; con reservas "
+          f"({d.percent(1 - aks_ratio)} de descuento)", value_color=d.RUST, value_size=28, label_size=11)
     d.kpi(slide, Inches(6.8), Inches(5.15), Inches(5.9), Inches(1.3), soles(aca_min),
-          "un microservicio en Container Apps, encendido en horario de oficina", value_color=d.GREEN,
-          value_size=28, label_size=11)
+          f"un microservicio en Container Apps, encendido en horario de oficina; con el "
+          f"{d.percent(BANK_DISCOUNT)} de descuento del banco", value_color=d.GREEN, value_size=28, label_size=11)
 
 
 def apps_label(count):
@@ -625,10 +626,9 @@ def aca_estimate(results, apps, month, prices, region="eastus2"):
     return {row["cod_app"]: row["aca_list_usd"] for row in aca_breakdown(results, apps, month, prices, 1.0, region)}
 
 
-def slide_cost(deck, apps, estate, results, source):
+def slide_cost(deck, apps, estate, results, source, ratio):
     month = estate["month"]
     prices = read_prices(results)
-    ratio = measured_discount(results, month, prices)
     aca = aca_estimate(results, apps, month, prices)
     movable = [row for row in apps if row["adt_runtime"] in ("ACA", "ACA_WITH_REVIEW")]
     aks_paid = sum(to_float(row["cost_month_usd"]) or 0 for row in movable)
@@ -636,7 +636,7 @@ def slide_cost(deck, apps, estate, results, source):
     # AKS: what the bank paid (reservations included); Container Apps in consumption has no reservations, so only
     # the bank's discount on list prices applies to it.
     scenarios = [("Precio de lista (sin descuento)", aks_paid / ratio, aca_list),
-                 ("Con el descuento del banco", aks_paid, aca_list * (1 - BANK_DISCOUNT))]
+                 ("Con descuentos (AKS con reservas)", aks_paid, aca_list * (1 - BANK_DISCOUNT))]
     saving = scenarios[1][1] - scenarios[1][2]
     slide = d.base_slide(deck, f"Mover las {len(movable)} aplicaciones candidatas ahorraría ~{soles(saving)} al mes "
                                f"({soles(saving * 12)} al año)", source)
@@ -649,7 +649,7 @@ def slide_cost(deck, apps, estate, results, source):
     rows = [["Cómo se paga", "AKS", "Container Apps"],
             ["Cobro", "Nodos completos (VM) las 24 horas", "vCPU-segundo y GB-segundo en uso, y peticiones"],
             ["Fuera de horario", "Se paga igual", "Escala a cero (ADT_019: instancias calientes de 8 a 20 h)"],
-            ["Descuento", f"Medido: se paga {d.percent(ratio)} del precio de lista de las VM (con reservas)",
+            ["Descuento", f"Con reservas: se paga {d.percent(ratio)} del precio de lista de las VM",
              f"{d.percent(BANK_DISCOUNT)} del banco (sin reservas)"]]
     d.table(slide, Inches(0.6), Inches(3.25), Inches(12.1), rows, [0.2, 0.38, 0.42], row_height=0.45, size=12)
     d.note_box(slide, Inches(0.6), Inches(5.35), Inches(12.1), Inches(0.65),
@@ -665,6 +665,9 @@ def main():
     parser.add_argument("--results", default=aa.RESULTS_DIR, help="Folder with the aa-<source> result folders")
     parser.add_argument("--output", default=None,
                         help="Output .pptx. Default: aks_aca_corporate.pptx in the newest reports/<date>-aks-aca folder")
+    parser.add_argument("--aks-discount", type=float, default=None,
+                        help="Discount on the list price of AKS node VMs, as a fraction (0.60 = 60%%). Default: measured, "
+                             "the amortized cost of PROD node VMs in the month over their node-hours at list price")
     args = parser.parse_args()
     aa.azure.setup_logging(False)
 
@@ -684,21 +687,27 @@ def main():
     criteria = (f"Fuente: lineamiento ADT_019; tráfico de APIM, Application Gateway y Event Hubs, Container Insights y configuración de autoescalado, "
                 f"{period}.")
 
+    prices = read_prices(args.results)
+    if args.aks_discount is not None:
+        aks_ratio = 1 - args.aks_discount
+    else:
+        aks_ratio = measured_discount(args.results, estate["month"], prices)
+    aa.azure.LOG.info("AKS node VMs: %.0f%% of the list price is paid (%s)", aks_ratio * 100,
+                      "--aks-discount" if args.aks_discount is not None else "measured")
     deck = Presentation()
     deck.slide_width, deck.slide_height = Inches(13.333), Inches(7.5)
     slide_context(deck, apps, "Fuente: lineamientos de arquitectura del banco (FAT_001, ADT_019).")
     slide_estate(deck, estate, apps, f"{measured} {MONEY_NOTE}")
     slide_hypothesis(deck, estate, apps, scaling, args.results,
-                     f"{measured} Precios de lista: Azure Retail Prices API. {MONEY_NOTE}")
+                     f"{measured} Precios de lista: Azure Retail Prices API. {MONEY_NOTE}", aks_ratio)
     slide_criteria(deck, "Fuente: lineamiento ADT_019 del banco.")
     slide_criteria_applied(deck, apps, criteria)
     slide_distribution(deck, apps, estate, f"{criteria} {MONEY_NOTE}")
     slide_cost(deck, apps, estate, args.results,
-               f"{measured} Precios de lista: Azure Retail Prices API. {MONEY_NOTE}")
+               f"{measured} Precios de lista: Azure Retail Prices API. {MONEY_NOTE}", aks_ratio)
     reports = sorted(glob.glob(os.path.join(aa.TOPIC_DIR, "reports", "*-aks-aca")))
     output = args.output or os.path.join(reports[-1] if reports else aa.TOPIC_DIR, "aks_aca_corporate.pptx")
     deck.save(output)
-    prices = read_prices(args.results)
     breakdown = aca_breakdown(args.results, apps, estate["month"], prices, 1 - BANK_DISCOUNT)
     aa.azure.Output(os.path.dirname(os.path.abspath(output)), ",").csv("aca_estimate_by_app.csv", breakdown)
     aa.azure.LOG.info("Wrote %s (%d slides)", output, len(deck.slides))

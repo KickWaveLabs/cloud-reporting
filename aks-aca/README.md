@@ -182,7 +182,8 @@ python aks-aca/src/aa_deck_exec.py
     (signs, motivation, minimum AKS vs Container Apps), the four conditions to move to Container Apps, the
     conditions applied as a funnel, the result per application and the possible saving with and without discount. Runtime counts only take
     what existed in the measured month. It reads only
-    `results/` (including `application_snapshot.csv`), so it needs no saved workbook.
+    `results/` (including `application_snapshot.csv`), so it needs no saved workbook. AKS takes the discount measured on its node VMs (reservations included); `--aks-discount 0.60`
+    fixes it by hand. Container Apps takes the bank's 30%.
 
 Smoke tests before a full run: `aa_metrics.py --clusters <one-cluster> --skip-apim --start <day>
 --end <day>` and `aa_container_insights.py --clusters <one-cluster> --start <day> --end <day>`, each
