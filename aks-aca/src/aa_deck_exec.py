@@ -446,6 +446,11 @@ def slide_hypothesis(deck, estate, apps, scaling, results, source):
     d.kpi(slide, Inches(6.8), Inches(5.15), Inches(5.9), Inches(1.3), soles(aca_min),
           "un microservicio en Container Apps, encendido en horario de oficina", value_color=d.GREEN, value_size=28,
           label_size=11)
+    # Both minimums leave out the load balancer every AKS cluster and every Container Apps environment pays.
+    balancer = HOURS_MONTH * read_prices(results).get(("lb_standard_rules_hour", "eastus2"), 0) * (1 - BANK_DISCOUNT)
+    d.text_box(slide, Inches(0.6), Inches(6.5), Inches(12.1), Inches(0.3),
+               f"Ninguno incluye el balanceador, que cada cluster AKS y cada environment de Container Apps paga aparte "
+               f"(~{soles(balancer)} al mes).", size=10, color=d.GREY, italic=True)
 
 
 def apps_label(count):
