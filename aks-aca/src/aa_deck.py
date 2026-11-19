@@ -441,6 +441,9 @@ def read_signals(folder, applications=None):
         signals["oom"] = {"kills": sum(by_workload.values()), "workloads": len(by_workload),
                           "clusters": len({key[0] for key in by_workload}), "top": top}
     latency = read_csv(os.path.join(folder, "apim_latency_monthly.csv"))
+    # A UX or Core API's latency includes the gateways after it: keep BS when the CSV says the layer.
+    if latency and "apim_layer" in latency[0]:
+        latency = [row for row in latency if row["apim_layer"] == "BS"]
     if latency:
         current = date.today().strftime("%Y-%m")
         months = sorted({row["month"] for row in latency if row["month"] < current}) or sorted({row["month"] for row in latency})

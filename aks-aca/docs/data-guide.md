@@ -52,8 +52,10 @@ is true, else `count`.
 | CSV | One row is | Main columns |
 |---|---|---|
 | `aks_usage_monthly.csv` | Cluster x pool x month (usage rows), or cluster x month with `mode = ALLOCATABLE` (capacity row) | Usage rows: `nodes_avg`, `cpu_used_office_avg`, `cpu_used_offhours_avg`, `cpu_used_p95`, `cpu_used_max` (vCPU) and the same for memory (GiB). Capacity rows: `cpu_allocatable_avg`, `mem_allocatable_avg_gib` |
-| `apim_api_monthly.csv` | APIM x API x month | `requests`, `office_requests`, `offhours_requests`, `peak_5min_requests` (divide by 300 for requests per second), `peak_hour_requests`, `offhours_wakeups` |
-| `apim_hourly_profile.csv` | APIM x API x day type (`weekday`/`weekend`) x Lima hour | `avg_requests_per_hour` |
+| `apim_api_monthly.csv` | APIM x API x month | `apim_layer` (BS, UX, CORE, OPEN_BANKING, YAPE), `requests`, `office_requests`, `offhours_requests`, `peak_5min_requests` (divide by 300 for requests per second), `peak_hour_requests`, `offhours_wakeups` |
+| `apim_hourly_profile.csv` | APIM x API x day type (`weekday`/`weekend`) x Lima hour | `apim_layer`, `avg_requests_per_hour` |
+| `entry_points_monthly.csv` | Entry point outside APIM x month | The same columns as `apim_api_monthly`; `apim_layer` is `APP_GATEWAY` (`TotalRequests` of the Application Gateways of AKS applications) or `EVENT_HUB` / `SERVICE_BUS` (`IncomingMessages` of applications with no AKS-backed API: messages, not requests) |
+| `entry_points_hourly_profile.csv` | Entry point x day type x Lima hour | `apim_layer`, `avg_requests_per_hour` |
 
 - Usage comes from `node_cpu_usage_millicores` and `node_memory_working_set_bytes`, summed over the
   nodes of each pool, hour by hour.
@@ -63,6 +65,9 @@ is true, else `count`.
   part: 2 x 32 GiB nodes give about 61 GiB.
 - Use % = sum of usage / sum of allocatable. Both rows types have `environment`, so filter PROD and
   divide the two sums.
+- **Never add APIM layers.** One call from a channel goes through the UX, BS and Core APIM, so the same
+  request shows in each. Figures of the estate filter `apim_layer` = BS; figures per application come from
+  `application_snapshot`, which already took one layer per application (`traffic_layer`).
 
 ### aa-container-insights
 
@@ -215,7 +220,7 @@ keep their samples) and ranks the top 20 app codes by growth from their first sa
 | `aks_autoscaler_monthly.csv` | Cluster x month | `hours_with_data` (0 = no autoscaler, the metric is not emitted), `hours_with_unschedulable`, `office_hours_with_unschedulable`, `unschedulable_pods_max` (highest hourly average) |
 | `aks_oomkilled_monthly.csv` | Cluster x namespace x workload x month | `oom_kills`, `pods` affected, `system_namespace`, `microservice` (`YES` = an application workload, same rule as `deployment_snapshot`) |
 | `aks_stack_memory.csv` | Cluster x namespace x workload (last `--stack-days`, office hours) | `stack` (Quarkus, Spring Boot, Java, .NET, Node.js, Python, Unidentified), `replicas_avg`, `app_mem_gib_per_replica`, `sidecar_mem_gib_per_replica` (Istio; empty when the pod has no sidecar) |
-| `apim_latency_monthly.csv` | APIM x API x month | `backend_duration_avg_ms`, `backend_duration_max_ms` (APIM to the backend and back), `duration_avg_ms`, `duration_max_ms` (whole gateway request) |
+| `apim_latency_monthly.csv` | APIM x API x month (same APIM layers as `aa_metrics.py`) | `apim_layer`, `backend_duration_avg_ms`, `backend_duration_max_ms` (APIM to the backend and back), `duration_avg_ms`, `duration_max_ms` (whole gateway request) |
 
 - Unschedulable pods: `cluster_autoscaler_unschedulable_pods_count`, hourly average. An hour above 0
   had pods waiting for a node at some point.
@@ -228,10 +233,12 @@ keep their samples) and ranks the top 20 app codes by growth from their first sa
   The framework comes from the repositories (`pom.xml`) or the platform team.
 - Latency averages are per request over the whole month (metric interval `FULL`). The maximum is a
   single slow request; use the average to compare with a Container Apps cold start (up to ~30 s).
+  The cold start only hits the first call after the replica scaled to zero (outside office hours under
+  ADT_019), so latency is a check on condition 3 ("can be turned off at night"), not a criterion of its own.
 
 ## Building your own workbooks
 
-Three workbooks cover the deck: `cost_and_capacity_summary.xlsx` (everything with money),
+Three workbooks cover the technical deck (section 6 covers the corporate deck): `cost_and_capacity_summary.xlsx` (everything with money),
 `ms_and_hpa_summary.xlsx` (microservices, HPA and cluster health) and `apim_traffic_summary.xlsx`.
 
 Open each CSV with *Data > From Text/CSV*, comma delimiter. Opening it with a double click splits the
@@ -273,7 +280,7 @@ Inputs: `aks_clusters.csv`, `aks_node_pools.csv`, `aks_usage_monthly.csv`, `cost
 
 | Figure | Pivot or formula |
 |---|---|
-| PROD clusters | `aks_clusters`, filter `environment` = PROD, count `id` (two clusters can share a name) |
+| PROD clusters | `aks_clusters`, filter `environment` = PROD and `existed_at_measurement` other than NO, count `id` (two clusters can share a name; the inventory is current, the month is past) |
 | Monthly cost | `cost_by_resource`, filter `owner_type` = AKS, `environment` = PROD; rows `month`; sum `cost_usd` |
 | Cost by type | Same pivot with `meter_category` in rows |
 | Cost per cluster | Same pivot with `owner_id` in rows |
@@ -316,18 +323,22 @@ only the rows; a slicer on `environment` connected to every pivot (*Report conne
 Inputs: `apim_api_monthly.csv`, `apim_hourly_profile.csv`, `apim_latency_monthly.csv`, and
 `application_snapshot.csv` for the per-application figures.
 
+Standard filter for the per-API figures: `month` = the measured month and `apim_layer` = BS. Without the
+layer filter a request is counted once per gateway it passes (UX, BS, Core).
+
 | Figure | Pivot or formula |
 |---|---|
-| Requests per API, office and off-hours | `apim_api_monthly`, filter `month` = last full month; rows `api_id`; sum `requests`, plus calculated fields `office_pct = SI(requests=0, 0, office_requests/requests)` and `offhours_pct` the same with `offhours_requests`, formatted as %. Office = weekday 8:00–19:59 Lima |
+| Requests per API, office and off-hours | `apim_api_monthly`, standard filter; rows `api_id`; sum `requests`, plus calculated fields `office_pct = SI(requests=0, 0, office_requests/requests)` and `offhours_pct` the same with `offhours_requests`, formatted as %. Office = weekday 8:00–19:59 Lima |
 | Off-hours share of the estate | The grand total row of `offhours_pct` in the same pivot |
-| Peak TPS per API | Power Query column `peak_tps = [peak_5min_requests] / 300` (the busiest 5 minutes of the month, as requests per second). Pivot: same `month` filter; rows `api_id`; **max** of `peak_tps`, sorted descending. *Value filters > Greater than* 100 keeps the APIs above the ADT_019 threshold; an empty result is a finding too. The 5-minute average dilutes shorter bursts |
-| Load per application (ADT_019 100 TPS rule) | `application_snapshot` (PROD application clusters only, no filter needed). Power Query: types with the `en-US` locale for `busiest_hour_tps`, `peak_tps_upper_bound`, `weekday_hours_with_traffic`, `microservices`; columns `over_100_tps = if [busiest_hour_tps] = null then "NO_TRAFFIC" else if [busiest_hour_tps] > 100 then "YES" else "NO"` and `constant_and_large = if [weekday_hours_with_traffic] <> null and [weekday_hours_with_traffic] > 10 and [microservices] > 15 then "YES" else "NO"`. Pivot 1: rows `over_100_tps`; count of `cod_app` (YES + NO = applications with traffic). Pivot 2: rows `constant_and_large`; count. Pivot 3: rows `cod_app`; max of `busiest_hour_tps` and `peak_tps_upper_bound`, sorted descending. `busiest_hour_tps` adds the application's APIs hour by hour (average weekday or weekend profile) and takes the busiest hour; `peak_tps_upper_bound` adds each API's own 5-minute peak, which happen at different times, so it overstates the load |
-| Backend latency | `apim_latency_monthly`, last full month; distribution of `backend_duration_avg_ms` (for example < 100 ms, 100–500 ms, > 500 ms) |
+| Peak TPS per API | Power Query column `peak_tps = [peak_5min_requests] / 300` (the busiest 5 minutes of the month, as requests per second). Pivot: standard filter; rows `api_id`; **max** of `peak_tps`, sorted descending. *Value filters > Greater than* 100 keeps the APIs above the ADT_019 threshold; an empty result is a finding too. The 5-minute average dilutes shorter bursts |
+| Load per application (ADT_019 100 TPS rule) | `application_snapshot` (PROD application clusters only, one traffic layer per application already chosen). Power Query: types with the `en-US` locale for `busiest_hour_tps`, `peak_tps_upper_bound`, `weekday_hours_with_traffic`, `microservices`, `microservices_projected`; columns `expected_ms = List.Max({[microservices], if [microservices_projected] = null then 0 else [microservices_projected]})` (PROD, or PROD plus DESA when larger), `over_100_tps = if [traffic_status] <> "MEASURED" then "NO_TRAFFIC" else if [busiest_hour_tps] > 100 then "YES" else "NO"` and `constant_and_large = if [weekday_hours_with_traffic] <> null and [weekday_hours_with_traffic] > 10 and [expected_ms] > 15 then "YES" else "NO"`. `traffic_layer` in the filter area shows which gateway measured each application. Pivot 1: rows `over_100_tps`; count of `cod_app` (YES + NO = applications with traffic). Pivot 2: rows `constant_and_large`; count. Pivot 3: rows `cod_app`; max of `busiest_hour_tps` and `peak_tps_upper_bound`, sorted descending. `busiest_hour_tps` adds the application's APIs hour by hour (average weekday or weekend profile) and takes the busiest hour; `peak_tps_upper_bound` adds each API's own 5-minute peak, which happen at different times, so it overstates the load |
+| Backend latency | `apim_latency_monthly`, `month` = the measured month and `apim_layer` = BS; distribution of `backend_duration_avg_ms` (for example < 100 ms, 100–500 ms, > 500 ms) |
 | Traffic class per API (optional) | Already built in the `Traffic_profile` sheet of `aks_aca_comparison.xlsx`; technical deck only until an architect validates the classes. Office vs off-hours above is the ADT_019 model (warm weekdays 8–20, scale to zero otherwise). To rebuild it: `apim_hourly_profile`: helper `week = avg_requests_per_hour x (5 on weekday, 2 on weekend)` and helper window (office: weekday 8–19; extended: any day 6–21; rest). Pivot `api_id` x window, sum `week`. Office >= 90% → OFICINA; office + extended >= 90% → EXTENDIDO; else 24/7 |
 
 The class is per API. Mapping APIs to clusters needs the API → deployment mapping, which is still pending.
 
-**Every TPS in one pivot per application.** `apim_api_monthly` already has `cod_app`. Two figures are
+**Every TPS in one pivot per application.** `apim_api_monthly` already has `cod_app`. Use the standard filter
+(BS only); an application whose `traffic_layer` is not BS has its figures in `application_snapshot` only. Two figures are
 per application, not per API, so they enter the per-API rows through a lookup and are summarised by **max**
 (each API row of an application carries the same value; a sum would multiply it by the number of APIs):
 
@@ -444,6 +455,54 @@ step of its monthly Container Apps cost, so the saving slide can be rebuilt by h
 - Most of the cost is keeping replicas warm and the environment: on the October test run the requests were
   about 0.1% of the candidates' Container Apps cost and the environments about 60%. Sharing one environment among
   several applications lowers that line (`ENVIRONMENTS_PER_APP` in `aa_deck_exec.py`).
+
+### 6. Corporate deck figures (`aks_aca_corporate.pptx`)
+
+Every figure of the corporate deck, so it can be explained and rebuilt in Excel. Money: US$ × 3.41333 × 1.18
+(exchange rate and IGV); the CSVs keep US$. Month: the measured month (`month` of `cost_by_resource`, the
+latest with AKS cost).
+
+Inputs: `application_snapshot.csv` (one row per PROD application: the base of slides 1 and 3 to 7),
+`cluster_snapshot.csv`, `hpa_snapshot.csv`, `aks_usage_monthly.csv`, `cost_by_resource.csv`, the inventory CSVs
+and `aca_estimate_by_app.csv` (written next to the deck).
+
+Power Query columns on `application_snapshot` (types with the `en-US` locale), used by several slides:
+
+```text
+expected_ms   = List.Max({[microservices], if [microservices_projected] = null then 0 else [microservices_projected]})
+c1_traffic    = [busiest_hour_tps] <= 100
+c2_pieces     = not ([weekday_hours_with_traffic] > 10 and [expected_ms] > 15)
+c3_night      = [offhours_active_share] <= 0.5
+c4_size       = [microservices_over_aca_size] = 0
+group         = if [adt_runtime] <> "INSUFFICIENT_DATA" then [adt_runtime]
+                else if [no_traffic_reason] = "IN_DEVELOPMENT" then "IN_DEVELOPMENT"
+                else if [no_traffic_reason] = "IN_USE_NOT_MEASURED" then "IN_USE" else "NOT_IN_USE"
+```
+
+(an empty `offhours_active_share` counts as 0, as in the script.)
+
+| Slide | Figure | Pivot or formula |
+|---|---|---|
+| 1 | Applications and microservices on AKS | `application_snapshot`: count of `cod_app`; sum of `microservices` |
+| 2 | Runtimes in PROD (cards) | Inventory CSVs, filter `environment` = PROD and `existed_at_measurement` other than NO: `aks_clusters` (count `id`), `aca_apps`, `aca_environments`, `app_services` by `type` (WEB, FUNCTION), `app_service_plans` by `runtime` |
+| 2 | Cost per runtime | `cost_by_resource`, measured month, `environment` = PROD; rows `owner_type`; sum `cost_usd`, in soles |
+| 2 | Clusters by category (table) | `cluster_snapshot`, PROD, `in_inventory` = YES, cluster existed in the month; rows `category`; count and cost (lookup of `owner_id` in `cost_by_resource`) |
+| 3 | CPU and memory used | `aks_usage_monthly`, measured month, APPLICATION clusters only (category lookup): sum `cpu_used_office_avg` of the usage rows / sum `cpu_allocatable_avg` of the `ALLOCATABLE` rows; the same with `mem_used_office_avg_gib` and `mem_allocatable_avg_gib` |
+| 3 | Autoscalers without changing size | `hpa_snapshot`, PROD, `microservice` = YES, APPLICATION clusters, `last_scale_bucket` other than NO_DATA: (`3_TO_12_MONTHS` + `OVER_1_YEAR`) / count |
+| 3 | Applications with 15 microservices or fewer | `application_snapshot`: count with `microservices` between 1 and 15, out of the total |
+| 3 | Minimum AKS vs one Container Apps microservice | AKS: 4 × D8s v4 × 730 h × list price per hour × 0.70. Container Apps: (office seconds × (0.5 × vCPU-s price + 1 × GiB-s price) + 5 × price per million requests) × 0.70. Prices in `prices.csv`; office seconds = weekdays of the month × 12 h × 3,600 |
+| 4 | The four conditions | Text only. Each one is a column above (`c1` to `c4`); it is the ADT_019 tree read the other way round |
+| 5 | Funnel | Rows with `busiest_hour_tps` not empty = "Con tráfico medido". Then filter `c1_traffic` = TRUE, then also `c2_pieces`, `c3_night`, `c4_size`: the count after each filter is one bar. The last bar equals `adt_runtime` in (ACA, ACA_WITH_REVIEW) |
+| 6 | Result per group | Pivot rows `group` (leave `IN_DEVELOPMENT` out of the chart; it is the second bullet); count of `cod_app` and sum of `cost_month_usd`, in soles |
+| 6 | Single microservice | Count of `possible_monolith` = YES |
+| 7 | Saving | `aca_estimate_by_app`, filter `adt_runtime` in (ACA, ACA_WITH_REVIEW). With discount: sum `aks_cost_pen_igv` − sum `aca_with_discount_pen_igv` per month; × 12 per year. List price: sum `aks_cost_usd` / measured discount − sum `aca_list_usd`, in soles |
+
+- The measured discount is what PROD node VMs cost in the month (amortized, reservations included) divided by
+  their node-hours at list price; the script prints it on slide 7 ("se paga X % del precio de lista").
+- The saving is a month repeated twelve times: the same replicas, prices and applications. It includes the
+  applications "con revisión", so the firm saving is the `ACA` rows alone (filter `adt_runtime` = ACA).
+- To project with other inputs, change the columns of `aca_estimate_by_app` and recompute: more replicas
+  (`replicas_office`), more environments (146 US$ each per month), more requests (`requests_with_buffer`).
 
 ## Metrics not collected today
 

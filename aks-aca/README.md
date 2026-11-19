@@ -91,7 +91,7 @@ python aks-aca/src/aa_container_insights.py
 python aks-aca/src/aa_cost.py
 python aks-aca/src/aa_prices.py
 python aks-aca/src/aa_k8s_snapshot.py --snapshot-date <export-day>   # optional, needs the exports below
-python aks-aca/src/aa_signals.py --apim-names apigp01,apigp03,apigp05   # optional
+python aks-aca/src/aa_signals.py   # optional; after aa_metrics.py
 python aks-aca/src/aa_microservice_history.py   # optional; at least once a month, keeps a growing history
 python aks-aca/src/aa_workbook.py
 python aks-aca/src/aa_deck.py        # after opening the workbook in Excel and saving it
@@ -162,7 +162,7 @@ python aks-aca/src/aa_deck_exec.py
 9. Optional: `aa_signals.py` checks the other side of the usage figures: hours with unschedulable pods
    per cluster (only clusters with the autoscaler emit the metric), OOMKilled containers per workload,
    stack and memory per replica split into app and Istio sidecar (last 7 days), and APIM backend latency
-   per API and month. It runs on its own after the inventory and writes to
+   per API and month (the same APIM layers and environments as `aa_metrics.py`; `apim_layer` on every row). It runs on its own after the inventory and writes to
    `results/aa-signals/`; the workbook does not read it yet.
 10. Optional: `aa_microservice_history.py` counts the microservices running in each PROD cluster on the 1st and
     the 15th of each month (10:00-11:00 Lima) from Container Insights, as far back as the workspace keeps. It
