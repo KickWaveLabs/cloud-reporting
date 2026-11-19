@@ -65,6 +65,14 @@ SHOW_FUNCTIONS = False
 # Official Azure icons (Azure Architecture Icons, as packaged by draw.io), rasterised to PNG.
 ICONS_DIR = os.path.join(aa.TOPIC_DIR, "assets", "icons")
 ACA_VCPU, ACA_GIB, ACA_REQUESTS_MILLION = 0.5, 1.0, 5
+# The two minimums on slide 3 come from the Azure pricing calculator (East US 2, pay as you go list prices, before
+# the bank's discount), so anyone can rebuild them there:
+#   AKS: 4 x D8s v4 Linux, 730 h, 3-year reservation (nodes); 4 managed OS disks P10; Standard tier (uptime SLA).
+#   Container Apps: Consumption, 0.5 vCPU / 1 GiB, 5 M requests, 190.08 ms per request, 1 concurrent request
+#   (the warm replica over October's office hours), 10.06 US$ + 6.20 of free grant the calculator subtracts.
+CALCULATOR_DATE = "19/11/2026"
+CALCULATOR_AKS_USD = {"nodes": 426.11, "disks": 71.68, "tier": 73.00}
+CALCULATOR_ACA_USD = 16.26
 
 
 def soles(usd):
@@ -320,18 +328,13 @@ def slide_estate(deck, estate, apps, source):
                "Microservicios = servicios de una aplicación desplegados en AKS.", size=11)
 
 
-def minimum_costs(month, prices, aks_ratio, aca_ratio=1 - BANK_DISCOUNT, region="eastus2"):
-    """(smallest AKS cluster, one Container Apps microservice) per month in US$. AKS pays aks_ratio of the list price
-    (what the bank pays for node VMs, reservations included); Container Apps has no reservations, so it takes the
-    bank's discount."""
-    price = lambda key: prices.get((key, region), 0)
-    # Every PROD cluster runs the Standard tier (uptime SLA), billed per cluster-hour; reservations do not cover it,
-    # so it takes the bank's discount (October 2026: 51.60 US$ paid per cluster against 73 at list price).
-    aks = (MIN_AKS_NODES * HOURS_MONTH * price(f"vm_{MIN_AKS_VM}_payg") * aks_ratio
-           + HOURS_MONTH * price("aks_standard_tier_hour") * (1 - BANK_DISCOUNT))
-    aca = (office_seconds(month) * (ACA_VCPU * price("aca_vcpu_active_s") + ACA_GIB * price("aca_mem_active_gib_s"))
-           + ACA_REQUESTS_MILLION * price("aca_requests_million")) * aca_ratio
-    return aks, aca
+def minimum_costs():
+    """(smallest AKS cluster, one Container Apps microservice) per month in US$, from the pricing calculator. The AKS
+    nodes already carry the 3-year reservation; its disks and tier, and Container Apps (no reservations), take the
+    bank's discount (October 2026 bills: 51.60 US$ of tier per cluster against 73 at list price)."""
+    aks = (CALCULATOR_AKS_USD["nodes"]
+           + (CALCULATOR_AKS_USD["disks"] + CALCULATOR_AKS_USD["tier"]) * (1 - BANK_DISCOUNT))
+    return aks, CALCULATOR_ACA_USD * (1 - BANK_DISCOUNT)
 
 
 def measured_minimum_aks(results, month):
@@ -365,18 +368,16 @@ def measured_minimum_aks(results, month):
     return (bills[middle] if len(bills) % 2 else (bills[middle - 1] + bills[middle]) / 2), len(bills)
 
 
-def slide_hypothesis(deck, estate, apps, scaling, results, source, aks_ratio):
+def slide_hypothesis(deck, estate, apps, scaling, results, source):
     month = estate["month"]
-    prices = read_prices(results)
-    aks_min, aca_min = minimum_costs(month, prices, aks_ratio)
+    aks_min, aca_min = minimum_costs()
+    # Cross-check only: what the real smallest clusters cost in the month.
     measured_min, measured_clusters = measured_minimum_aks(results, month)
     if measured_min:
-        aks_min = measured_min
-        aks_label = (f"lo que costó en {month_label(month)} un cluster AKS de {MIN_AKS_NODES} servidores, con sus "
-                     f"discos y descuentos (mediana de {measured_clusters} clusters de producción)")
-    else:
-        aks_label = (f"el cluster AKS más chico ({MIN_AKS_NODES} servidores y tier Standard), aunque la aplicación "
-                     f"sea pequeña; servidores con reservas ({d.percent(1 - aks_ratio)} de descuento)")
+        aa.azure.LOG.info("Minimum AKS: calculator %.2f US$; real bills %.2f US$ (median of %d clusters, %s)",
+                          aks_min, measured_min, measured_clusters, month)
+    aks_label = (f"el cluster AKS más chico ({MIN_AKS_NODES} servidores con reserva de 3 años, discos y tier "
+                 f"Standard), aunque la aplicación sea pequeña")
     small = sum(0 < int(row["microservices"] or 0) <= 15 for row in apps)
     slide = d.base_slide(deck, "Hipótesis: un cluster AKS por aplicación paga más de lo que usa", source)
     d.heading(slide, Inches(0.6), Inches(1.3), Inches(7.2), "Indicios", size=14)
@@ -398,12 +399,13 @@ def slide_hypothesis(deck, estate, apps, scaling, results, source, aks_ratio):
                                   "Complejidad: sin servidores ni versiones de Kubernetes que administrar")):
         d.callout(slide, Inches(8.1), Inches(3.05) + index * Inches(0.75), Inches(4.6), Inches(0.65), text, size=12,
                   fill=d.CARD)
-    d.heading(slide, Inches(0.6), Inches(4.75), Inches(12.1), "Lo mínimo que se paga al mes", size=14)
+    d.heading(slide, Inches(0.6), Inches(4.75), Inches(12.1), f"Lo mínimo que se paga al mes, según la calculadora "
+              f"de Azure (con el {d.percent(BANK_DISCOUNT)} de descuento del banco)", size=14)
     d.kpi(slide, Inches(0.6), Inches(5.15), Inches(5.9), Inches(1.3), soles(aks_min), aks_label,
           value_color=d.RUST, value_size=28, label_size=11)
     d.kpi(slide, Inches(6.8), Inches(5.15), Inches(5.9), Inches(1.3), soles(aca_min),
-          f"un microservicio en Container Apps, encendido en horario de oficina; con el "
-          f"{d.percent(BANK_DISCOUNT)} de descuento del banco", value_color=d.GREEN, value_size=28, label_size=11)
+          "un microservicio en Container Apps, encendido en horario de oficina", value_color=d.GREEN, value_size=28,
+          label_size=11)
 
 
 def apps_label(count):
@@ -719,7 +721,7 @@ def main():
     slide_context(deck, apps, "Fuente: lineamientos de arquitectura del banco (FAT_001, ADT_019).")
     slide_estate(deck, estate, apps, f"{measured} {MONEY_NOTE}")
     slide_hypothesis(deck, estate, apps, scaling, args.results,
-                     f"{measured} Precios de lista: Azure Retail Prices API. {MONEY_NOTE}", aks_ratio)
+                     f"{measured} Mínimos: calculadora de precios de Azure (East US 2, {CALCULATOR_DATE}). {MONEY_NOTE}")
     slide_criteria(deck, "Fuente: lineamiento ADT_019 del banco.")
     slide_criteria_applied(deck, apps, criteria)
     slide_distribution(deck, apps, estate, f"{criteria} {MONEY_NOTE}")
