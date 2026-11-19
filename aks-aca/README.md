@@ -179,8 +179,8 @@ python aks-aca/src/aa_deck_exec.py
     slide). Open the workbook in Excel and save it first. Its figures are a draft to check.
 13. `aa_deck_exec.py` builds `aks_aca_corporate.pptx`, the corporate deck (slides 1 to 7, text in Spanish, amounts in
     soles with IGV) for a non-technical forum: ways to build an application, the runtime estate, the hypothesis
-    (signs, motivation, minimum AKS vs Container Apps), the ADT_019 criteria as six plain questions, the criteria
-    applied, the result per application and the possible saving with and without discount. Runtime counts only take
+    (signs, motivation, minimum AKS vs Container Apps), the four conditions to move to Container Apps, the
+    conditions applied as a funnel, the result per application and the possible saving with and without discount. Runtime counts only take
     what existed in the measured month. It reads only
     `results/` (including `application_snapshot.csv`), so it needs no saved workbook.
 

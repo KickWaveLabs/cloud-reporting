@@ -32,8 +32,10 @@ that knows TPS, CPU, RAM and time to market. The technical deck stays as backup 
   3. Hypothesis, why we challenge the model: 3–4 signs (CPU and memory used of what is paid, autoscalers that
      do not scale, small applications with a cluster of their own), the motivation (economic first, then
      operation and complexity) and the smallest AKS cluster against one Container Apps microservice.
-  4. The criteria (ADT_019 tree; see [adt-019-runtime.md](adt-019-runtime.md)) as six plain questions, no figures.
-  5. The criteria applied: how many applications meet each one.
+  4. The four conditions to move to Container Apps (ADT_019 tree read the other way round; see
+     [adt-019-runtime.md](adt-019-runtime.md)), no figures; critical and growing applications are validated before
+     moving, not sent to AKS (ADT_019 asks to consult governance and to review).
+  5. The conditions applied as a funnel, ending in the candidates.
   6. Result: where each application goes.
   7. Possible saving: monthly and annual, with and without discount.
   Runtime counts only take what existed in the measured month (`existed_at_measurement`).

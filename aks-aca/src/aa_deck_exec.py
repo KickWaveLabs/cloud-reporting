@@ -16,8 +16,9 @@ Slides (the story: what we build, where it runs, why we challenge it, the rules,
      the AKS clusters by category (only the clusters with applications enter the analysis)
   3. Hypothesis: signs that one AKS cluster per application costs more than it uses, the motivation (economic
      first, then operation and complexity) and the smallest AKS cluster against one Container Apps microservice
-  4. The ADT_019 criteria as six plain questions, without figures
-  5. The criteria applied: how many applications meet each one
+  4. The four conditions to move to Container Apps (the ADT_019 tree read the other way round: meeting all four
+     is the same as meeting none of the AKS conditions), plus what is validated before moving (critical, growing)
+  5. The conditions applied as a funnel: applications with measured traffic, then those left after each one
   6. Result: where each application goes
   7. Possible saving: monthly and annual, with and without discount
 An eighth slide (effort and migration estimate) is the architecture team's and is not built here.
@@ -394,80 +395,73 @@ def apps_label(count):
     return f"{d.number(count)} {'aplicación' if count == 1 else 'aplicaciones'}"
 
 
-def adt_counts(apps):
-    with_traffic = [row for row in apps if row["busiest_hour_tps"] != ""]
-    return {
-        "with_traffic": len(with_traffic),
-        "over_tps": sum(to_float(row["busiest_hour_tps"]) > 100 for row in with_traffic),
-        "constant_large": sum((to_float(row["weekday_hours_with_traffic"]) or 0) > 10
-                              and int(row["microservices"]) > 15 for row in with_traffic),
-        "over_size": sum(int(row["microservices_over_aca_size"]) > 0 for row in apps),
-        "always_on": sum((to_float(row.get("offhours_active_share")) or 0) > 0.5 for row in with_traffic),
-        "critical": sum(row["bia"] in ("MUY ALTA", "ALTA") for row in apps),
-    }
+def expected_microservices(row):
+    """Microservices in PROD, or the projection with DESA when larger (as the ADT_019 rule in the snapshot)."""
+    return max(int(row["microservices"] or 0), int(to_float(row.get("microservices_projected")) or 0))
 
 
-# The ADT_019 criteria as six plain questions: (short label, question, what it means, destination).
-CRITERIA = [
-    ("Mucho tráfico", "¿Recibe mucho tráfico?", "Más de 100 pedidos por segundo en su hora más cargada.", "AKS"),
-    ("Todo el día y grande", "¿Trabaja todo el día y es grande?", "Más de 10 horas al día y más de 15 microservicios.",
-     "AKS"),
-    ("Se usa de noche", "¿Se usa de noche?", "Si se usa la mayor parte de la noche, no se puede apagar.", "AKS"),
-    ("Piezas muy pesadas", "¿Alguna pieza es muy pesada?", "Una pieza necesita más de 4 vCPU u 8 GB de memoria.",
-     "AKS"),
-    ("Crítica para el banco", "¿Es crítica para el banco?", "Si se cae, afecta mucho al negocio (BIA alta o muy alta).",
-     "REVIEW"),
-    ("Va a crecer", "¿Va a crecer pronto?", "En desarrollo ya pasa de 15 microservicios.", "REVIEW"),
+# The ADT_019 tree read the other way round: an application goes to Container Apps when it meets all four
+# conditions (the same as meeting none of the AKS ones). (short label, condition, plain meaning, test on a row).
+ACA_CONDITIONS = [
+    ("Tráfico moderado", "Tráfico moderado", "Menos de 100 pedidos por segundo en su hora más cargada.",
+     lambda row: (to_float(row["busiest_hour_tps"]) or 0) <= 100),
+    ("Pocas piezas o por horas", "Pocas piezas o uso por horas",
+     "Hasta 15 microservicios (contando los que vienen de desarrollo), o menos de 10 horas de uso al día.",
+     lambda row: not ((to_float(row["weekday_hours_with_traffic"]) or 0) > 10 and expected_microservices(row) > 15)),
+    ("Se apaga de noche", "Se puede apagar de noche", "Casi no se usa de noche ni los fines de semana.",
+     lambda row: (to_float(row.get("offhours_active_share")) or 0) <= 0.5),
+    ("Piezas livianas", "Piezas livianas", "Cada pieza necesita hasta 4 vCPU y 8 GB de memoria.",
+     lambda row: int(row["microservices_over_aca_size"] or 0) == 0),
 ]
-DESTINATIONS = {"AKS": ("Se queda en AKS", d.NAVY), "REVIEW": ("Container Apps con revisión", d.ORANGE)}
-
-
-def criteria_counts(apps):
-    """Applications that meet each criterion, in the order of CRITERIA, and the base of each."""
-    counts = adt_counts(apps)
-    growing = sum(row.get("microservices_projected") not in ("", None)
-                  and int(row["microservices_projected"]) > 15 >= int(row["microservices"] or 0) for row in apps)
-    return [counts["over_tps"], counts["constant_large"], counts["always_on"], counts["over_size"], counts["critical"],
-            growing], counts["with_traffic"]
+CHECKS_BEFORE_MOVING = ["Si es crítica para el banco, se valida con gobierno de arquitectura.",
+                        "Si va a pasar de 15 microservicios, se confirma que siga cumpliendo."]
 
 
 def slide_criteria(deck, source):
-    slide = d.base_slide(deck, "Seis preguntas deciden a dónde va cada aplicación", source)
-    width, height, gap = Inches(3.9), Inches(2.0), Inches(0.25)
-    for index, (_, question, meaning, destination) in enumerate(CRITERIA):
-        left = Inches(0.6) + (index % 3) * (width + gap)
-        top = Inches(1.4) + (index // 3) * (height + gap)
+    slide = d.base_slide(deck, "Para pasar a Container Apps, una aplicación cumple estas cuatro condiciones", source)
+    width, height, gap = Inches(5.9), Inches(1.45), Inches(0.3)
+    for index, (_, title, meaning, _) in enumerate(ACA_CONDITIONS):
+        left = Inches(0.6) + (index % 2) * (width + gap)
+        top = Inches(1.4) + (index // 2) * (height + gap)
         box(slide, left, top, width, height, d.LIGHT)
-        shape(slide, MSO_SHAPE.OVAL, left + Inches(0.25), top + Inches(0.25), Inches(0.5), Inches(0.5), d.NAVY)
-        d.text_box(slide, left + Inches(0.25), top + Inches(0.25), Inches(0.5), Inches(0.5), str(index + 1), size=16,
+        shape(slide, MSO_SHAPE.OVAL, left + Inches(0.3), top + Inches(0.4), Inches(0.6), Inches(0.6), d.GREEN)
+        d.text_box(slide, left + Inches(0.3), top + Inches(0.4), Inches(0.6), Inches(0.6), str(index + 1), size=18,
                    bold=True, color=d.WHITE, align=d.PP_ALIGN.CENTER, anchor=d.MSO_ANCHOR.MIDDLE)
-        d.text_box(slide, left + Inches(0.9), top + Inches(0.25), width - Inches(1.1), Inches(0.5), question, size=16,
-                   bold=True, color=d.NAVY, anchor=d.MSO_ANCHOR.MIDDLE)
-        d.text_box(slide, left + Inches(0.25), top + Inches(0.85), width - Inches(0.5), Inches(0.6), meaning, size=14,
+        d.text_box(slide, left + Inches(1.15), top + Inches(0.25), width - Inches(1.4), Inches(0.45), title, size=18,
+                   bold=True, color=d.NAVY)
+        d.text_box(slide, left + Inches(1.15), top + Inches(0.75), width - Inches(1.4), Inches(0.5), meaning, size=14,
                    color=d.GREY)
-        label, colour = DESTINATIONS[destination]
-        box(slide, left + Inches(0.25), top + height - Inches(0.5), Inches(2.9), Inches(0.32), colour, radius=0.5)
-        d.text_box(slide, left + Inches(0.25), top + height - Inches(0.5), Inches(2.9), Inches(0.32), f"Sí → {label}",
-                   size=12, bold=True, color=d.WHITE, align=d.PP_ALIGN.CENTER, anchor=d.MSO_ANCHOR.MIDDLE)
-    d.text_box(slide, Inches(0.6), Inches(5.95), Inches(12.1), Inches(0.5),
-               "Si no cumple ninguna, es candidata a Container Apps.", size=16, bold=True, color=d.GREEN)
+    top = Inches(1.4) + 2 * (height + gap)
+    box(slide, Inches(0.6), top, Inches(12.1), Inches(1.45), d.LIGHT)
+    d.text_box(slide, Inches(0.9), top + Inches(0.15), Inches(11.5), Inches(0.4), "Antes de mover, se valida:", size=16,
+               bold=True, color=d.ORANGE)
+    d.text_box(slide, Inches(0.9), top + Inches(0.55), Inches(11.5), Inches(0.8), [f"• {line}" for line in
+                                                                                    CHECKS_BEFORE_MOVING],
+               size=14, color=d.GREY)
+    d.text_box(slide, Inches(0.6), Inches(6.35), Inches(12.1), Inches(0.4),
+               "Si no cumple alguna de las cuatro, se queda en AKS.", size=14, bold=True, color=d.NAVY)
 
 
 def slide_criteria_applied(deck, apps, source):
-    values, with_traffic = criteria_counts(apps)
-    slide = d.base_slide(deck, "Al aplicar los criterios: cuántas aplicaciones cumple cada uno", source)
-    order = list(range(len(CRITERIA)))[::-1]  # a bar chart draws its first category at the bottom
-    d.bar_chart(slide, Inches(0.6), Inches(1.4), Inches(8.2), Inches(4.9), [CRITERIA[i][0] for i in order],
-                [values[i] for i in order], XL_CHART_TYPE.BAR_CLUSTERED,
-                [DESTINATIONS[CRITERIA[i][3]][1] for i in order])
-    d.text_box(slide, Inches(9.2), Inches(1.6), Inches(3.5), Inches(1.6),
-               [f"De {apps_label(len(apps))}, {d.number(with_traffic)} tienen tráfico medido.", "",
-                "Una aplicación puede cumplir más de un criterio."], size=14, color=d.GREY)
-    for index, key in enumerate(("AKS", "REVIEW")):
-        label, colour = DESTINATIONS[key]
-        top = Inches(3.5) + index * Inches(0.45)
-        box(slide, Inches(9.2), top + Inches(0.06), Inches(0.22), Inches(0.22), colour, radius=0.2)
-        d.text_box(slide, Inches(9.55), top, Inches(3.2), Inches(0.35), label, size=14, color=d.GREY)
+    """A funnel: applications with measured traffic, then those that still qualify after each condition."""
+    remaining = [row for row in apps if row["busiest_hour_tps"] != ""]
+    labels, values = ["Con tráfico medido"], [len(remaining)]
+    for label, _, _, test in ACA_CONDITIONS:
+        remaining = [row for row in remaining if test(row)]
+        labels.append(f"+ {label.lower()}")
+        values.append(len(remaining))
+    review = sum(row["adt_runtime"] == "ACA_WITH_REVIEW" for row in remaining)
+    slide = d.base_slide(deck, f"Al aplicar las condiciones, {len(remaining)} aplicaciones pueden pasar a "
+                               "Container Apps", source)
+    colours = [d.GREY] + [d.STEEL] * (len(values) - 2) + [d.GREEN]
+    d.bar_chart(slide, Inches(0.6), Inches(1.4), Inches(8.4), Inches(4.9), labels[::-1], values[::-1],
+                XL_CHART_TYPE.BAR_CLUSTERED, colours[::-1])
+    lines = [f"De {apps_label(len(apps))}, {d.number(values[0])} tienen tráfico medido; las demás se ven aparte.", "",
+             "Cada barra suma una condición: quedan las que cumplen todas las anteriores."]
+    if review:
+        lines += ["", f"{d.number(review)} de las {d.number(len(remaining))} se validan antes de mover (críticas o en "
+                      "crecimiento)."]
+    d.text_box(slide, Inches(9.3), Inches(1.6), Inches(3.4), Inches(4.0), lines, size=14, color=d.GREY)
 
 
 # Groups of the distribution slide, in plain words for a non-technical audience: (label, what it means, colour).
