@@ -37,13 +37,7 @@ import aa_deck as d
 
 MONTHS_ES = ("enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre",
              "noviembre", "diciembre")
-RUNTIME_LABELS = {"AKS": "Se queda en AKS", "ACA": "Candidata a Container Apps",
-                  "ACA_WITH_REVIEW": "Container Apps, con revisión", "INSUFFICIENT_DATA": "Sin tráfico medido"}
-NO_TRAFFIC_LABELS = {"IN_USE_NOT_MEASURED": "en uso sin medición de tráfico", "IN_DEVELOPMENT": "en desarrollo", "NOT_IN_USE": "sin uso, desplegadas hace menos de un año",
-                     "NOT_IN_USE_OVER_1_YEAR": "sin uso, desplegadas hace más de un año",
-                     "EMPTY_CLUSTER": "con el cluster vacío"}
 COUNT_WORDS = {3: "Tres", 4: "Cuatro", 5: "Cinco", 6: "Seis", 7: "Siete"}
-RUNTIME_COLORS = {"AKS": d.NAVY, "ACA": d.GREEN, "ACA_WITH_REVIEW": d.ORANGE, "INSUFFICIENT_DATA": d.GREY}
 
 
 def month_label(month):
@@ -267,44 +261,62 @@ def slide_criteria(deck, apps, scaling, source):
                    f"de un año. Container Apps arranca en frío en ~30 s: los consumidores deben reintentar.", size=11)
 
 
+# Groups of the distribution slide, in plain words for a non-technical audience: (label, what it means, colour).
+DISTRIBUTION_GROUPS = {
+    "AKS": ("Se queda en AKS", "Mucho tráfico o trabaja día y noche", d.NAVY),
+    "ACA_WITH_REVIEW": ("Container Apps, con revisión", "Poco tráfico, pero es crítica o seguirá creciendo", d.ORANGE),
+    "ACA": ("Candidata a Container Apps", "Poco tráfico y solo en horario de oficina", d.GREEN),
+    "IN_USE": ("Sin tráfico medido: en uso", "Trabaja, pero no se puede medir su tráfico", d.STEEL),
+    "NOT_IN_USE": ("Sin tráfico medido: sin uso", "No recibe tráfico: revisar si se apaga", d.GREY),
+}
+EXAMPLES = 3
+
+
+def distribution_group(row):
+    """Slide group of an application; None for one still in development (shown in the note, not in the chart)."""
+    if row["adt_runtime"] != "INSUFFICIENT_DATA":
+        return row["adt_runtime"]
+    reason = row.get("no_traffic_reason")
+    if reason == "IN_DEVELOPMENT":
+        return None
+    return "IN_USE" if reason == "IN_USE_NOT_MEASURED" else "NOT_IN_USE"
+
+
 def slide_distribution(deck, apps, estate, source):
     month = month_label(estate["month"])
-    groups = defaultdict(lambda: {"apps": 0, "cost": 0.0, "microservices": 0})
+    groups = defaultdict(lambda: {"apps": [], "cost": 0.0})
+    developing = []
     for row in apps:
-        entry = groups[row["adt_runtime"]]
-        entry["apps"] += 1
-        entry["cost"] += to_float(row["cost_month_usd"]) or 0
-        entry["microservices"] += int(row["microservices"] or 0)
-    movable = groups["ACA"]["apps"] + groups["ACA_WITH_REVIEW"]["apps"]
+        key = distribution_group(row)
+        if key is None:
+            developing.append(row["cod_app"])
+            continue
+        groups[key]["apps"].append(row)
+        groups[key]["cost"] += to_float(row["cost_month_usd"]) or 0
+    movable = len(groups["ACA"]["apps"]) + len(groups["ACA_WITH_REVIEW"]["apps"])
     slide = d.base_slide(deck, f"Aplicando los criterios, {movable} de {len(apps)} aplicaciones podrían ir a "
                                f"Container Apps", source)
-    order = [key for key in ("AKS", "ACA_WITH_REVIEW", "ACA", "INSUFFICIENT_DATA") if groups[key]["apps"]]
-    d.bar_chart(slide, Inches(0.5), Inches(1.4), Inches(6.2), Inches(4.4), [RUNTIME_LABELS[key] for key in order],
-                [groups[key]["apps"] for key in order], XL_CHART_TYPE.COLUMN_CLUSTERED,
-                [RUNTIME_COLORS[key] for key in order])
-    rows = [["Destino", "Apps", "Micro-\nservicios", f"Costo AKS\n{month}"]]
+    order = [key for key in DISTRIBUTION_GROUPS if groups[key]["apps"]]
+    d.bar_chart(slide, Inches(0.5), Inches(1.4), Inches(5.6), Inches(4.4), [DISTRIBUTION_GROUPS[key][0] for key in order],
+                [len(groups[key]["apps"]) for key in order], XL_CHART_TYPE.COLUMN_CLUSTERED,
+                [DISTRIBUTION_GROUPS[key][2] for key in order])
+    rows = [["Destino", "Apps", "Ejemplos", f"Costo AKS\n{month}"]]
     for key in order:
-        rows.append([RUNTIME_LABELS[key], d.number(groups[key]["apps"]), d.number(groups[key]["microservices"]),
-                     d.money(groups[key]["cost"])])
-    d.table(slide, Inches(7.0), Inches(1.5), Inches(5.8), rows, [0.4, 0.14, 0.2, 0.26], row_height=0.5, size=11)
-    monoliths = sum(row["possible_monolith"] == "YES" for row in apps)
-    d.note_box(slide, Inches(7.0), Inches(3.6), Inches(5.8), Inches(1.0),
-               f"{d.number(monoliths)} aplicaciones tienen un solo microservicio: si son monolitos, el lineamiento las "
-               f"llevaría a App Service. Se confirma con cada equipo.", size=11)
-    reasons = Counter(row.get("no_traffic_reason") for row in apps if row["adt_runtime"] == "INSUFFICIENT_DATA")
-    no_traffic = ", ".join(f"{d.number(count)} {NO_TRAFFIC_LABELS.get(reason, 'sin dato')}"
-                           for reason, count in reasons.most_common())
-    outside_bs = sum(row.get("traffic_layer") not in ("", "BS", None) for row in apps)
+        label, meaning, _ = DISTRIBUTION_GROUPS[key]
+        busiest = sorted(groups[key]["apps"], key=lambda row: -(to_float(row["cost_month_usd"]) or 0))
+        rows.append([f"{label}\n{meaning}", d.number(len(groups[key]["apps"])),
+                     ", ".join(row["cod_app"] for row in busiest[:EXAMPLES]), d.money(groups[key]["cost"])])
+    d.table(slide, Inches(6.3), Inches(1.5), Inches(6.6), rows, [0.47, 0.1, 0.23, 0.2], row_height=0.62, size=10)
     notes = []
-    if groups["ACA_WITH_REVIEW"]["apps"]:
-        notes.append("\"Con revisión\": criticidad alta (BIA ALTA o MUY ALTA) o crecerá a más de 15 microservicios.")
-    if reasons:
-        notes.append(f"\"Sin tráfico medido\" ({no_traffic}): fuera de la migración hasta tener una medición.")
-    if outside_bs:
-        notes.append(f"{d.number(outside_bs)} aplicaciones sin tráfico en BS se midieron en otra capa (UX, Application "
-                     "Gateway, Open Banking, Yape, Core o colas).")
+    single = sum(row["possible_monolith"] == "YES" for row in apps)
+    if single:
+        notes.append(f"{d.number(single)} aplicaciones tienen un solo microservicio, también en desarrollo: podrían ir a "
+                     "App Service.")
+    if developing:
+        notes.append(f"{d.number(len(developing))} en desarrollo ({', '.join(sorted(developing))}) aún no tienen "
+                     "tráfico en producción.")
     if notes:
-        d.note_box(slide, Inches(7.0), Inches(4.75), Inches(5.8), Inches(1.45), " ".join(notes), size=10)
+        d.note_box(slide, Inches(6.3), Inches(4.75), Inches(6.6), Inches(0.75), " ".join(notes), size=10)
 
 
 def office_seconds(month):

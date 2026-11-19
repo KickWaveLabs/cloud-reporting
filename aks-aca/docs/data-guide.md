@@ -164,7 +164,8 @@ Only APPLICATION clusters enter the analysis. `cluster_overrides.csv` in the inp
 - `offhours_active_share` = off-hours 5-minute intervals with traffic / every off-hours interval of the month,
   for the application's busiest API (a floor: two APIs active in the same interval count once). It measures
   coverage, not load: 0.1 TPS spread over the night keeps a replica warm just as much as 10 TPS.
-- `possible_monolith` = a single microservice. The tree sends internal monoliths to App Service, but a single
+- `possible_monolith` = a single microservice in PROD and no more once DESA is added (an application with more
+  microservices in DESA is growing). The tree sends internal monoliths to App Service, but a single
   deployment is not proof of a monolith: confirm with the application team.
 - The tree's questions on Azure-event functions and multi-application platforms are not tested: every cluster
   serves one application today.

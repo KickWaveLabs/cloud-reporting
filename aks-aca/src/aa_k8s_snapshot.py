@@ -890,7 +890,7 @@ def application_rows(cluster_table, hpas, deployments, traffic, coverage, cost_b
                    "microservices", "namespaces", "hpas", "microservices_over_aca_size", "statefulsets", "batch_jobs",
                    "pods_too_big_for_node")},
                "hpas_not_scaling_share": round(sum(cause != "SCALES" for cause in causes) / len(causes), 3) if causes else "",
-               "possible_monolith": yes(sum(row["microservices"] for row in rows) == 1),
+               "possible_monolith": "",
                **projection(prod_names.get(code, set()), desa_names.get(code)),
                **dict(zip(("prod_cluster_created", "prod_cluster_age_days"), newest_cluster(rows, inventory))),
                "office_vcpu_used": cpu.get(code, ""),
@@ -902,6 +902,8 @@ def application_rows(cluster_table, hpas, deployments, traffic, coverage, cost_b
                    "traffic_layer", "apis_with_traffic", "requests_month", "office_share", "peak_tps_upper_bound", "busiest_hour_tps",
                    "busiest_hour", "busiest_hour_in_office", "busiest_office_hour_tps", "busiest_offhours_hour_tps",
                    "weekday_hours_with_traffic", "offhours_active_share")}}
+        # One microservice in PROD and no more in DESA: a single deployment that is not growing.
+        app["possible_monolith"] = yes(app["microservices"] == 1 and app["microservices_projected"] in ("", 0, 1))
         app["adt_runtime"], app["adt_reason"] = adt_runtime(app)
         app["no_traffic_reason"] = no_traffic_reason(app) if app["adt_runtime"] == "INSUFFICIENT_DATA" else ""
         out.append(app)
