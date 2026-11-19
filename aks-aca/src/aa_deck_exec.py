@@ -407,8 +407,10 @@ def expected_microservices(row):
 ACA_CONDITIONS = [
     ("Tráfico moderado", "Tráfico moderado", "Menos de 100 transacciones por segundo (TPS) en su hora más cargada.",
      lambda row: (to_float(row["busiest_hour_tps"]) or 0) <= 100),
-    ("Pequeña o de uso por horas", "Pequeña o de uso por horas",
-     "Solo va a AKS si tiene más de 15 servicios y además se usa más de 10 horas al día.",
+    # The test is the ADT_019 rule (more than 15 services and more than 10 hours a day means AKS). The slide shows
+    # only the services: hours alone are no reason to stay, since Container Apps is warm all office hours anyway; an
+    # application that passes only through the hours is named on the funnel slide.
+    ("Hasta 15 servicios", "Hasta 15 servicios", "Una aplicación más grande se queda en AKS.",
      lambda row: not ((to_float(row["weekday_hours_with_traffic"]) or 0) > 10 and expected_microservices(row) > 15)),
     ("Se apaga fuera de horario", "Se puede apagar fuera de horario",
      "En noches y fines de semana tiene tráfico menos de la mitad del tiempo.",
@@ -417,7 +419,7 @@ ACA_CONDITIONS = [
      lambda row: int(row["microservices_over_aca_size"] or 0) == 0),
 ]
 CHECKS_BEFORE_MOVING = ["Si es crítica para el banco, se valida con gobierno de arquitectura.",
-                        "Si va a pasar de 15 servicios (cuenta los nuevos que ya están en desarrollo), se confirma que siga cumpliendo."]
+                        "Si está creciendo y pronto pasará de 15 servicios, se confirma antes de mover."]
 
 
 def slide_criteria(deck, source):
@@ -454,6 +456,7 @@ def slide_criteria_applied(deck, apps, source):
         labels.append(f"+ {label.lower()}")
         values.append(len(remaining))
     review = sum(row["adt_runtime"] == "ACA_WITH_REVIEW" for row in remaining)
+    large = sum(expected_microservices(row) > 15 for row in remaining)
     slide = d.base_slide(deck, f"Al aplicar las condiciones, {len(remaining)} aplicaciones pueden pasar a "
                                "Container Apps", source)
     colours = [d.GREY] + [d.STEEL] * (len(values) - 2) + [d.GREEN]
@@ -464,6 +467,9 @@ def slide_criteria_applied(deck, apps, source):
     if review:
         lines += ["", f"{d.number(review)} de las {d.number(len(remaining))} se validan antes de mover (críticas o en "
                       "crecimiento)."]
+    if large:
+        lines += ["", f"{d.number(large)} {'tiene' if large == 1 else 'tienen'} más de 15 servicios, pero se "
+                      f"{'usa' if large == 1 else 'usan'} menos de 10 horas al día (ADT_019)."]
     d.text_box(slide, Inches(9.3), Inches(1.6), Inches(3.4), Inches(4.0), lines, size=14, color=d.GREY)
 
 
