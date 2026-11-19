@@ -761,13 +761,16 @@ NEW_CLUSTER_DAYS = 120
 # traffic of an application without any API on APIM.
 BALANCER_NOTE = "Own ingress load balancer and no API on APIM: callers reach it directly"
 NEW_CLUSTER_NOTE = "New cluster (created {})"
+# DESA test requests in the month from which an application counts as in development (~50 per working day); a few
+# requests a day are occasional checks. Only used when the DESA APIM was measured (a one-off check).
+DESA_ACTIVE_REQUESTS = 1000
 
 
 def no_traffic_reason(app):
     """Why an INSUFFICIENT_DATA application has no traffic, for the decks: IN_DEVELOPMENT (new cluster, or DESA runs
     microservices PROD does not have yet), EMPTY_CLUSTER (no microservice running) or NOT_IN_USE (deployed, no use)."""
     if app["traffic_note"].startswith(NEW_CLUSTER_NOTE.split("{")[0]) or app["microservices_new_in_desa"] or \
-            app["desa_requests_month"] not in ("", 0):
+            (app["desa_requests_month"] or 0) >= DESA_ACTIVE_REQUESTS:
         return "IN_DEVELOPMENT"
     return "EMPTY_CLUSTER" if not app["microservices"] else "NOT_IN_USE"
 
