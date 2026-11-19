@@ -65,14 +65,13 @@ SHOW_FUNCTIONS = False
 # Official Azure icons (Azure Architecture Icons, as packaged by draw.io), rasterised to PNG.
 ICONS_DIR = os.path.join(aa.TOPIC_DIR, "assets", "icons")
 ACA_VCPU, ACA_GIB, ACA_REQUESTS_MILLION = 0.5, 1.0, 5
-# The two minimums on slide 3 come from the Azure pricing calculator (East US 2, pay as you go list prices, before
-# the bank's discount), so anyone can rebuild them there:
-#   AKS: 4 x D8s v4 Linux, 730 h, 3-year reservation (nodes); 4 managed OS disks P10; Standard tier (uptime SLA).
-#   Container Apps: Consumption, 0.5 vCPU / 1 GiB, 5 M requests, 190.08 ms per request, 1 concurrent request
-#   (the warm replica over October's office hours), 10.06 US$ + 6.20 of free grant the calculator subtracts.
-CALCULATOR_DATE = "19/11/2026"
-CALCULATOR_AKS_USD = {"nodes": 426.11, "disks": 71.68, "tier": 73.00}
-CALCULATOR_ACA_USD = 16.26
+# The two minimums on slide 3 are computed from the list prices in prices.csv (Azure Retail Prices API, the same
+# prices as the Azure pricing calculator), set up as one would enter them in the calculator (East US 2):
+#   AKS: Standard tier, 4 x D8s v4 Linux, 730 h, 3-year reservation, one P10 managed OS disk per node.
+#   Container Apps: Consumption, 0.5 vCPU / 1 GiB warm over the month's office hours, 5 M requests (the calculator
+#   shows it minus the monthly free grant, which belongs to the subscription, not to one application).
+# On 2026-11-19 the calculator gave AKS 426.11 + 71.68 + 73.00 = 570.79 US$ and Container Apps 10.06 + 6.20 = 16.26.
+MIN_AKS_DISK, MIN_AKS_RESERVATION = "P10", "3y"
 
 
 def soles(usd):
@@ -328,13 +327,22 @@ def slide_estate(deck, estate, apps, source):
                "Microservicios = servicios de una aplicación desplegados en AKS.", size=11)
 
 
-def minimum_costs():
-    """(smallest AKS cluster, one Container Apps microservice) per month in US$, from the pricing calculator. The AKS
-    nodes already carry the 3-year reservation; its disks and tier, and Container Apps (no reservations), take the
-    bank's discount (October 2026 bills: 51.60 US$ of tier per cluster against 73 at list price)."""
-    aks = (CALCULATOR_AKS_USD["nodes"]
-           + (CALCULATOR_AKS_USD["disks"] + CALCULATOR_AKS_USD["tier"]) * (1 - BANK_DISCOUNT))
-    return aks, CALCULATOR_ACA_USD * (1 - BANK_DISCOUNT)
+def minimum_costs(month, prices, region="eastus2"):
+    """(smallest AKS cluster, one Container Apps microservice) per month in US$ after discount, and the list-price
+    lines as the calculator shows them. The AKS nodes already carry the 3-year reservation; their disks and tier, and
+    Container Apps (no reservations), take the bank's discount (October 2026 bills: 51.60 US$ of tier per cluster
+    against 73 at list price)."""
+    price = lambda key: prices.get((key, region), 0)
+    term_hours = {"1y": 8760, "3y": 26280}[MIN_AKS_RESERVATION]  # a reservation is quoted for its whole term
+    lines = {
+        "aks_nodes": MIN_AKS_NODES * HOURS_MONTH * price(f"vm_{MIN_AKS_VM}_{MIN_AKS_RESERVATION}") / term_hours,
+        "aks_disks": MIN_AKS_NODES * price(f"disk_{MIN_AKS_DISK}_month"),
+        "aks_tier": HOURS_MONTH * price("aks_standard_tier_hour"),
+        "aca": office_seconds(month) * (ACA_VCPU * price("aca_vcpu_active_s") + ACA_GIB * price("aca_mem_active_gib_s"))
+               + ACA_REQUESTS_MILLION * price("aca_requests_million"),
+    }
+    aks = lines["aks_nodes"] + (lines["aks_disks"] + lines["aks_tier"]) * (1 - BANK_DISCOUNT)
+    return aks, lines["aca"] * (1 - BANK_DISCOUNT), lines
 
 
 def measured_minimum_aks(results, month):
@@ -370,11 +378,14 @@ def measured_minimum_aks(results, month):
 
 def slide_hypothesis(deck, estate, apps, scaling, results, source):
     month = estate["month"]
-    aks_min, aca_min = minimum_costs()
+    aks_min, aca_min, lines = minimum_costs(month, read_prices(results))
+    aa.azure.LOG.info("Minimum AKS at list price (as in the calculator): nodes %.2f + disks %.2f + tier %.2f = %.2f US$; "
+                      "Container Apps %.2f US$", lines["aks_nodes"], lines["aks_disks"], lines["aks_tier"],
+                      lines["aks_nodes"] + lines["aks_disks"] + lines["aks_tier"], lines["aca"])
     # Cross-check only: what the real smallest clusters cost in the month.
     measured_min, measured_clusters = measured_minimum_aks(results, month)
     if measured_min:
-        aa.azure.LOG.info("Minimum AKS: calculator %.2f US$; real bills %.2f US$ (median of %d clusters, %s)",
+        aa.azure.LOG.info("Minimum AKS after discount: %.2f US$; real bills %.2f US$ (median of %d clusters, %s)",
                           aks_min, measured_min, measured_clusters, month)
     aks_label = (f"el cluster AKS más chico ({MIN_AKS_NODES} servidores con reserva de 3 años, discos y tier "
                  f"Standard), aunque la aplicación sea pequeña")
@@ -721,7 +732,7 @@ def main():
     slide_context(deck, apps, "Fuente: lineamientos de arquitectura del banco (FAT_001, ADT_019).")
     slide_estate(deck, estate, apps, f"{measured} {MONEY_NOTE}")
     slide_hypothesis(deck, estate, apps, scaling, args.results,
-                     f"{measured} Mínimos: calculadora de precios de Azure (East US 2, {CALCULATOR_DATE}). {MONEY_NOTE}")
+                     f"{measured} Mínimos: calculadora de precios de Azure (East US 2, precios de lista). {MONEY_NOTE}")
     slide_criteria(deck, "Fuente: lineamiento ADT_019 del banco.")
     slide_criteria_applied(deck, apps, criteria)
     slide_distribution(deck, apps, estate, f"{criteria} {MONEY_NOTE}")
