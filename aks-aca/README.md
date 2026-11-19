@@ -157,6 +157,8 @@ python aks-aca/src/aa_deck_exec.py
    Container Apps technical fit per cluster with its BIA; which BIA levels stay on AKS is an editable cell.
    `ACA_by_cluster` compares each PROD application cluster's cost with Container Apps running the replicas
    Container Insights measured (sized by request and by use, 24/7 and with the ADT_019 schedule).
+   `APIM_traffic` and `Traffic_profile` keep, for each application, only the layer it is measured on (`traffic_layer`
+   in `application_snapshot.csv`, entry points included), so no call is counted twice.
    `Traffic_profile` classifies each API as OFFICE, EXTENDED or 24x7 from `apim_hourly_profile.csv`; the
    windows and threshold are editable cells, so reclassifying needs no new Azure query.
 9. Optional: `aa_signals.py` checks the other side of the usage figures: hours with unschedulable pods

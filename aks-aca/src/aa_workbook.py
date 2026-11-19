@@ -235,13 +235,14 @@ ASSUMPTIONS = [
      "Reference: wake-ups outside office hours × 300 s cooldown (APIM). Billed at the active rate: outside office "
      "hours the minimum is 0 replicas, and a replica above the minimum is always billed as active."),
     ("env_count", "Container Apps environments per application", 1, "One environment per application."),
-    ("env_mgmt_apply", "Charge 'Environment Management Hour' (1 = yes)", 1,
-     "Meter effective since 2026-09; Microsoft Learn does not say which environments it applies to. In "
-     "September–October 2026 the bank's environments (workload profiles without a dedicated profile) did not pay "
-     "it: 1 is the conservative case."),
-    ("pe_apply", "Charge 'Environment Private Endpoint' (1 = yes)", 1,
-     "ADT_019: private network. No charges in the bank's environments in September–October 2026. Set 0 if the "
-     "environment uses VNet integration without a private endpoint."),
+    ("env_mgmt_apply", "Charge 'Environment Management Hour' (1 = yes)", 0,
+     "Billed only with dedicated profiles, private endpoints or planned maintenance (Microsoft Learn, Container Apps "
+     "billing). None of the bank's 24 environments paid it in October 2026."),
+    ("pe_apply", "Charge 'Environment Private Endpoint' (1 = yes)", 0,
+     "The bank's environments use VNet integration with an internal load balancer, not a private endpoint; no "
+     "charges in October 2026. Set 1 if an environment enables one."),
+    ("lb_apply", "Charge the environment's internal Standard load balancer (1 = yes)", 1,
+     "What every environment of the bank pays: 13.02 US$ in October 2026 (744 h × 0.025 × 0.70)."),
     ("grant_apply", "Apply the monthly free grant (1 = yes)", 0,
      "0 = left out, as in the deck. The grant is per subscription and month and shared by every app in it; set 1 to "
      "see a subscription that runs a single application."),
@@ -341,7 +342,8 @@ def build_assumptions(workbook, refs, apis_sheet, workloads_sheet, cost, usage=N
     set_formula("rate_active", "{cpu_rep}*{p_vcpu_active}+{mem_rep}*{p_mem_active}", "0.0000000")
     set_formula("rate_idle", "{cpu_rep}*{p_vcpu_idle}+{mem_rep}*{p_mem_idle}", "0.0000000")
     set_formula("aca_env_month", "{env_count}*{hours_month}*({env_mgmt_apply}*" + price('"aca_env_management_hour"')
-                + "+{pe_apply}*" + price('"aca_env_private_endpoint_hour"') + ")", USD2)
+                + "+{pe_apply}*" + price('"aca_env_private_endpoint_hour"')
+                + "+{lb_apply}*" + price('"lb_standard_rules_hour"') + ")", USD2)
     set_formula("aca_grant", "{grant_apply}*({grant_vcpu_s}*{p_vcpu_active}+{grant_mem_s}*{p_mem_active}"
                 "+{grant_requests}/1000000*{p_requests})", USD2)
     set_formula("p_vm_hour", price('"vm_"&{node_sku}&"_payg"'), "0.0000")
@@ -744,6 +746,23 @@ def build_measured(workbook, clusters, usage, cost, workloads, services, months,
     set_widths(sheet, [34, 12, 10, 10, 22, 16, 12, 14, 12, 10, 12, 14, 10, 10, 40, 14, 18])
     sheet.freeze_panes = "B5"
     return refs, last
+
+
+def one_layer_per_application(traffic, profile, entry_points, entry_profile, apis, applications):
+    """Keep, for each application, only the rows of the layer it is measured on (traffic_layer in
+    application_snapshot.csv: BS, else UX, Open Banking, Yape, Core, its Application Gateway or its Event Hubs).
+    A call passes through several gateways, so adding layers counts it more than once. Only PROD APIs with an AKS
+    backend count. Older results without layers are returned as they are."""
+    layer_of = {row["cod_app"]: row.get("traffic_layer") for row in applications if row.get("traffic_layer")}
+    if not layer_of or not traffic or "apim_layer" not in traffic[0]:
+        return traffic, profile
+    api_code = {(row["apim"], row["api_id"]): row.get("backend_cod_app", "") for row in apis
+                if row.get("backend_platform") == "AKS" and row.get("apim_environment", "PROD") == "PROD"}
+
+    def keep(rows, entries):
+        kept = [row for row in rows if layer_of.get(api_code.get((row["apim"], row["api_id"]))) == row["apim_layer"]]
+        return kept + [row for row in entries if layer_of.get(row.get("cod_app")) == row.get("apim_layer")]
+    return keep(traffic, entry_points), keep(profile, entry_profile)
 
 
 def build_traffic(workbook, traffic, apis, months):
@@ -1955,11 +1974,15 @@ def main():
     apps = load(args.results, "aa-inventory", "aca_apps.csv")
     usage = load(args.results, "aa-metrics", "aks_usage_monthly.csv")
     traffic = load(args.results, "aa-metrics", "apim_api_monthly.csv")
+    entry_points = load(args.results, "aa-metrics", "entry_points_monthly.csv")
     workloads = load(args.results, "aa-container-insights", "aks_workloads_monthly.csv")
     services = [row for row in load(args.results, "aa-container-insights", "aks_services.csv")
                 if not aa.is_platform_namespace(row["namespace"])]
     cost = load(args.results, "aa-cost", "cost_by_resource.csv")
     profile = [row for row in load(args.results, "aa-metrics", "apim_hourly_profile.csv") if row["api_id"] != "__Empty"]
+    traffic, profile = one_layer_per_application(
+        traffic, profile, entry_points, load(args.results, "aa-metrics", "entry_points_hourly_profile.csv"), apis,
+        load(args.results, "aa-k8s-snapshot", "application_snapshot.csv"))
     last_cost_month = max((row["month"] for row in cost), default="")
     hpas = load(args.results, "aa-k8s-snapshot", "hpa_snapshot.csv")
     deployments = load(args.results, "aa-k8s-snapshot", "deployment_snapshot.csv")
