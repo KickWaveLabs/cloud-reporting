@@ -263,11 +263,11 @@ def slide_criteria(deck, apps, scaling, source):
 
 # Groups of the distribution slide, in plain words for a non-technical audience: (label, what it means, colour).
 DISTRIBUTION_GROUPS = {
-    "AKS": ("Se queda en AKS", "Mucho tráfico o trabaja día y noche", d.NAVY),
-    "ACA_WITH_REVIEW": ("Container Apps, con revisión", "Poco tráfico, pero es crítica o seguirá creciendo", d.ORANGE),
-    "ACA": ("Candidata a Container Apps", "Poco tráfico y solo en horario de oficina", d.GREEN),
-    "IN_USE": ("Sin tráfico medido: en uso", "Trabaja, pero no se puede medir su tráfico", d.STEEL),
-    "NOT_IN_USE": ("Sin tráfico medido: sin uso", "No recibe tráfico: revisar si se apaga", d.GREY),
+    "AKS": ("Se queda en AKS", "Mucho tráfico o uso 24/7", d.NAVY),
+    "ACA_WITH_REVIEW": ("Container Apps, con revisión", "Poco tráfico, pero crítica o creciendo", d.ORANGE),
+    "ACA": ("Candidata a Container Apps", "Poco tráfico, solo en horario de oficina", d.GREEN),
+    "IN_USE": ("En uso, sin medición", "Tiene uso, pero su tráfico no se ve", d.STEEL),
+    "NOT_IN_USE": ("Sin uso", "Por revisar", d.GREY),
 }
 
 
@@ -308,12 +308,14 @@ def slide_distribution(deck, apps, estate, source):
     notes = []
     single = sum(row["possible_monolith"] == "YES" for row in apps)
     if single:
-        notes.append(f"{d.number(single)} aplicaciones con un solo microservicio (sin más en desarrollo) podrían ir a "
-                     "App Service.")
+        notes.append(f"• {d.number(single)} aplicaciones tienen un solo microservicio: podrían ir a App Service.")
     if developing:
-        notes.append(f"{d.number(len(developing))} aplicaciones más están en desarrollo, sin tráfico en producción.")
+        notes.append(f"• {d.number(len(developing))} aplicaciones están en desarrollo y aún no salen a producción.")
     if notes:
-        d.note_box(slide, Inches(6.3), Inches(4.75), Inches(6.6), Inches(0.75), " ".join(notes), size=10)
+        box = d.rounded(slide, Inches(6.3), Inches(4.75), Inches(6.6), Inches(0.8), d.LIGHT, radius=0.1)
+        box.line.color.rgb = d.SOFT
+        d.text_box(slide, Inches(6.5), Inches(4.75), Inches(6.2), Inches(0.8), notes, size=11,
+                   anchor=d.MSO_ANCHOR.MIDDLE)
 
 
 def office_seconds(month):
