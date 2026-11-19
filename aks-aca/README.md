@@ -106,7 +106,7 @@ python aks-aca/src/aa_deck_exec.py
 | `aa_cost.py` | Every environment for AKS and ACA; PROD for App Service and Functions; `AmortizedCost` | ~10 min, plus one query per PROD subscription with App Service | `cost_errors.csv`; `app_service_subscriptions_queried` in `cost_summary.json` |
 | `aa_prices.py` | VM sizes in the inventory; eastus2, centralus | < 1 min | `queries_without_rows` in `prices_summary.json` |
 | `aa_k8s_snapshot.py` | Every row of the exports; the workbook counts PROD application clusters | < 10 s | `prod_clusters_by_category`, `cluster_names_shared_by_several_clusters`, `prod_application` in `snapshot_summary.json` |
-| `aa_signals.py` | PROD clusters; the APIM in `--apim-names` | not timed yet (smoke test: 3 clusters + 1 APIM, 1 month, 20 s) | `signals_errors.csv` |
+| `aa_signals.py` | PROD clusters with the add-on; the same PROD APIM layers as `aa_metrics.py` | not timed yet (smoke test: 3 clusters + 1 APIM, 1 month, 20 s) | `signals_errors.csv` |
 | `aa_microservice_history.py` | PROD clusters with the add-on; sample days not in the history yet | not timed yet | `history_errors.csv`, `history_summary.json` |
 | `aa_workbook.py` | Everything above | ~30 s | Open in Excel and save once |
 
