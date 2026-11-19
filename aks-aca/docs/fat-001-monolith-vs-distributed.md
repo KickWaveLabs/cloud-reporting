@@ -110,8 +110,9 @@ pattern to extract features gradually.
 
 ## How the aks-aca work uses it
 
-- The corporate deck keeps monolith vs miniservice vs microservice out (decision of 2026-11-12): it is a
-  high-level proposal about runtimes, not about architecture style.
+- The corporate deck now opens with the four ways to build an application (modular monolith, miniservices,
+  microservices, asynchronous processes) and the runtime each usually needs (manager's request of 2026-11-18;
+  on 2026-11-12 they were left out).
 - Slide 1 (context) can borrow the spectrum figure: each style needs a runtime, and finer granularity
   means higher cost.
 - The BIA rule (Alta or Muy Alta = critical) matches how the workbook flags critical clusters.

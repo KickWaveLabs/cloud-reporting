@@ -1,20 +1,25 @@
 #!/usr/bin/env python3
-"""Build the corporate AKS vs Container Apps deck (slides 1 to 5) for a non-technical forum.
+"""Build the corporate AKS vs Container Apps deck (slides 1 to 6) for a non-technical forum.
 
 Same look as aa_deck.py (its drawing helpers are reused), plain figures only: TPS, vCPU, GB of RAM, instances,
-hours with traffic, USD per month and per year. Slide text is in Spanish for the audience.
+hours with traffic, money per month and per year. Slide text is in Spanish for the audience. Every amount is in
+soles with IGV (18 %) at S/ 3.41333 per US$ (soles()), as the forum reads the bank's numbers.
 
 Reads only results/ (inventory, metrics, cost, prices, snapshot), so it needs no saved workbook. The cost slide
 uses a simplified ADT_019 model (see aca_estimate); the workbook's ACA_by_cluster sheet has the detail per
 cluster. No Azure call is made; nothing leaves the machine.
 
-Slides:
-  1. Context: monoliths and microservices, and the runtime for each
-  2. The PROD runtime estate: AKS, Container Apps, App Service and Functions, and the AKS clusters by category
-     (only the clusters with applications enter the analysis)
-  3. Criteria to sort the estate (ADT_019), each with the PROD figure
-  4. Theoretical distribution after applying the criteria
-  5. Cost optimization: monthly and annual, with and without discount
+Slides (the story: what we build, where it runs, why we challenge it, the rules, the result, the money):
+  1. Ways to build an application: modular monolith, miniservices, microservices, asynchronous processes, each
+     drawn and with its usual runtime (FAT_001 and ADT_019)
+  2. The PROD runtime estate: AKS, Container Apps, App Service and Functions, each drawn as it works inside, and
+     the AKS clusters by category (only the clusters with applications enter the analysis)
+  3. Hypothesis: signs that one AKS cluster per application costs more than it uses, the motivation (economic
+     first, then operation and complexity) and the smallest AKS cluster against one Container Apps microservice
+  4. The ADT_019 criteria in plain words, each with the PROD figure
+  5. Result: where each application goes after applying the criteria
+  6. Possible saving: monthly and annual, with and without discount
+A seventh slide (effort and migration estimate) is the architecture team's and is not built here.
 
 Output: aks_aca_corporate.pptx in the newest reports/<date>-aks-aca folder (or --output). Every figure is a draft to check against
 the workbook and the CSVs before presenting.
@@ -30,6 +35,7 @@ from datetime import date
 
 from pptx import Presentation
 from pptx.enum.chart import XL_CHART_TYPE
+from pptx.enum.shapes import MSO_SHAPE
 from pptx.util import Inches
 
 import aa_common as aa
@@ -38,6 +44,21 @@ import aa_deck as d
 MONTHS_ES = ("enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre",
              "noviembre", "diciembre")
 COUNT_WORDS = {3: "Tres", 4: "Cuatro", 5: "Cinco", 6: "Seis", 7: "Siete"}
+# Every amount on the slides: soles with IGV, at the exchange rate the forum uses.
+EXCHANGE_RATE, IGV = 3.41333, 0.18
+MONEY_NOTE = "Montos en soles con IGV (18 %); tipo de cambio S/ 3,41333 por US$."
+# Smallest PROD AKS cluster (architecture team: 2 system + 2 user nodes of 8 vCPU / 32 GB) and the Container Apps
+# microservice of the ADT_019 model (0.5 vCPU / 1 GiB warm in office hours, 5 million requests a month).
+MIN_AKS_NODES, MIN_AKS_VM, HOURS_MONTH = 4, "Standard_D8s_v4", 730
+# The bank's discount on Azure list prices for the minimum comparison (the measured node discount includes
+# reservations that a new, small cluster would not have).
+BANK_DISCOUNT = 0.30
+ACA_VCPU, ACA_GIB, ACA_REQUESTS_MILLION = 0.5, 1.0, 5
+
+
+def soles(usd):
+    """US$ amount -> 'S/ 1.234' in soles with IGV."""
+    return f"S/ {usd * EXCHANGE_RATE * (1 + IGV):,.0f}".replace(",", ".") if d.is_number(usd) else "-"
 
 
 def month_label(month):
@@ -141,31 +162,127 @@ def read_applications(results):
 # ---------------------------------------------------------------------------
 
 
-def runtime_card(slide, left, top, width, height, title, runtime, lines, accent):
-    d.rounded(slide, left, top, width, height, d.CARD)
-    d.text_box(slide, left + Inches(0.25), top + Inches(0.15), width - Inches(0.5), Inches(0.45), title, size=18,
-               bold=True, color=accent)
-    d.text_box(slide, left + Inches(0.25), top + Inches(0.6), width - Inches(0.5), Inches(0.9), lines, size=12,
-               color=d.WHITE)
-    d.text_box(slide, left + Inches(0.25), top + height - Inches(0.55), width - Inches(0.5), Inches(0.4), runtime,
-               size=13, bold=True, color=d.WHITE)
+def box(slide, left, top, width, height, fill, radius=0.12):
+    shape = d.rounded(slide, left, top, width, height, fill, radius=radius)
+    shape.line.fill.background()
+    return shape
 
 
-def slide_context(deck, source):
-    slide = d.base_slide(deck, "Monolitos y microservicios necesitan runtimes distintos", source)
-    runtime_card(slide, Inches(0.6), Inches(1.4), Inches(3.7), Inches(2.6), "Monolito",
-                 "Runtime: App Service",
-                 ["• Una sola aplicación que se despliega completa.", "• Escala toda junta."], d.SKY)
-    runtime_card(slide, Inches(4.55), Inches(1.4), Inches(8.15), Inches(2.6), "Microservicios",
-                 "Runtime: AKS o Container Apps, según la carga",
-                 ["• Muchos servicios pequeños que se despliegan y escalan por separado.",
-                  "• Carga alta y constante → AKS (Kubernetes): nodos encendidos las 24 horas.",
-                  "• Carga baja, variable o en horario de oficina → Container Apps: paga por uso y apaga "
-                  "fuera de horario."], d.ORANGE)
-    runtime_card(slide, Inches(0.6), Inches(4.2), Inches(3.7), Inches(1.5), "Eventos de Azure",
-                 "Runtime: Azure Functions", ["• Código que responde a un evento."], d.GREEN)
-    d.callout(slide, Inches(4.55), Inches(4.2), Inches(8.15), Inches(1.5),
-              "Hoy casi todo corre en AKS, el runtime pensado para carga alta y constante.", size=18, fill=d.RUST)
+def shape(slide, kind, left, top, width, height, fill):
+    item = slide.shapes.add_shape(kind, left, top, width, height)
+    item.fill.solid()
+    item.fill.fore_color.rgb = fill
+    item.line.fill.background()
+    return item
+
+
+def draw_monolith(slide, left, top, width, accent):
+    """One block with modules inside."""
+    box(slide, left + width / 2 - Inches(0.85), top, Inches(1.7), Inches(1.15), accent)
+    for row in range(2):
+        for column in range(2):
+            box(slide, left + width / 2 - Inches(0.7) + column * Inches(0.75), top + Inches(0.15) + row * Inches(0.5),
+                Inches(0.65), Inches(0.38), d.WHITE, radius=0.2)
+
+
+def draw_pieces(slide, left, top, width, accent, columns, rows, size):
+    """A grid of separate pieces: few and medium (miniservices) or many and small (microservices)."""
+    gap = Inches(0.1)
+    total = columns * size + (columns - 1) * gap
+    for row in range(rows):
+        for column in range(columns):
+            box(slide, left + (width - total) / 2 + column * (size + gap), top + row * (size + gap), size, size,
+                accent, radius=0.2)
+
+
+def draw_async(slide, left, top, width, accent):
+    """Messages waiting in a queue, then the process that takes them."""
+    start = left + width / 2 - Inches(1.25)
+    box(slide, start, top + Inches(0.3), Inches(1.1), Inches(0.55), d.SOFT, radius=0.15)
+    for index in range(4):
+        box(slide, start + Inches(0.1) + index * Inches(0.25), top + Inches(0.38), Inches(0.17), Inches(0.39), accent,
+            radius=0.3)
+    shape(slide, MSO_SHAPE.RIGHT_ARROW, start + Inches(1.2), top + Inches(0.42), Inches(0.4), Inches(0.3), d.GREY)
+    box(slide, start + Inches(1.7), top + Inches(0.2), Inches(0.8), Inches(0.75), accent)
+
+
+def type_card(slide, left, width, title, drawing, lines, runtime, accent):
+    top, height = Inches(1.35), Inches(4.35)
+    box(slide, left, top, width, height, d.LIGHT)
+    d.text_box(slide, left, top + Inches(0.15), width, Inches(0.4), title, size=16, bold=True, color=accent,
+               align=d.PP_ALIGN.CENTER)
+    drawing(slide, left, top + Inches(0.7), width, accent)
+    d.text_box(slide, left + Inches(0.2), top + Inches(2.05), width - Inches(0.4), Inches(1.4), lines, size=12,
+               color=d.GREY, align=d.PP_ALIGN.CENTER)
+    box(slide, left + Inches(0.2), top + height - Inches(0.8), width - Inches(0.4), Inches(0.6), accent)
+    d.text_box(slide, left + Inches(0.2), top + height - Inches(0.8), width - Inches(0.4), Inches(0.6), runtime,
+               size=12, bold=True, color=d.WHITE, align=d.PP_ALIGN.CENTER, anchor=d.MSO_ANCHOR.MIDDLE)
+
+
+def slide_context(deck, apps, source):
+    slide = d.base_slide(deck, "Cuatro formas de construir una aplicación, cada una con su runtime", source)
+    width, gap = Inches(2.95), Inches(0.12)
+    cards = [("Monolito modular", draw_monolith,
+              ["Una sola aplicación, ordenada en módulos por negocio.", "Se despliega y escala completa."],
+              "App Service", d.SKY),
+             ("Miniservicios", lambda sl, le, to, wi, ac: draw_pieces(sl, le, to, wi, ac, 2, 1, Inches(0.95)),
+              ["Pocas piezas medianas: cada una agrupa funciones de un mismo negocio."],
+              "Container Apps o AKS", d.GREEN),
+             ("Microservicios", lambda sl, le, to, wi, ac: draw_pieces(sl, le, to, wi, ac, 4, 3, Inches(0.33)),
+              ["Muchas piezas pequeñas: cada una se despliega y escala sola."],
+              "AKS o Container Apps, según la carga", d.ORANGE),
+             ("Procesos asíncronos", draw_async,
+              ["Atienden mensajes o eventos que esperan en una cola: nadie espera la respuesta."],
+              "Functions, Container Apps o AKS", d.STEEL)]
+    for index, (title, drawing, lines, runtime, accent) in enumerate(cards):
+        type_card(slide, Inches(0.6) + index * (width + gap), width, title, drawing, lines, runtime, accent)
+    microservices = sum(int(row["microservices"] or 0) for row in apps)
+    d.callout(slide, Inches(0.6), Inches(5.9), Inches(12.15), Inches(0.75),
+              f"Hoy casi todo corre en AKS: {d.number(len(apps))} aplicaciones y {d.number(microservices)} "
+              "microservicios, en el runtime pensado para carga alta y constante.", size=15, fill=d.RUST)
+
+
+def draw_aks(slide, left, top, width, accent):
+    """A cluster: servers that are always on, with the services packed inside."""
+    outer = Inches(2.3)
+    start = left + (width - outer) / 2
+    box(slide, start, top, outer, Inches(1.0), d.ROYAL)
+    for index in range(4):
+        box(slide, start + Inches(0.12) + index * Inches(0.54), top + Inches(0.15), Inches(0.46), Inches(0.7), accent,
+            radius=0.15)
+        for slot in range(2):
+            box(slide, start + Inches(0.2) + index * Inches(0.54), top + Inches(0.25) + slot * Inches(0.28),
+                Inches(0.3), Inches(0.2), d.WHITE, radius=0.3)
+
+
+def draw_aca(slide, left, top, width, accent):
+    """Copies that turn on with use and off without it."""
+    outer = Inches(2.3)
+    start = left + (width - outer) / 2
+    box(slide, start, top, outer, Inches(1.0), d.ROYAL)
+    for index, fill in enumerate((accent, accent, d.GREY, d.GREY)):
+        shape(slide, MSO_SHAPE.OVAL, start + Inches(0.15) + index * Inches(0.53), top + Inches(0.25), Inches(0.45),
+              Inches(0.45), fill)
+
+
+def draw_app_service(slide, left, top, width, accent):
+    """A plan: fixed servers shared by several web apps."""
+    outer = Inches(2.3)
+    start = left + (width - outer) / 2
+    box(slide, start, top, outer, Inches(1.0), d.ROYAL)
+    for index in range(2):
+        box(slide, start + Inches(0.2) + index * Inches(1.05), top + Inches(0.15), Inches(0.9), Inches(0.7), accent,
+            radius=0.15)
+        box(slide, start + Inches(0.32) + index * Inches(1.05), top + Inches(0.32), Inches(0.66), Inches(0.36),
+            d.WHITE, radius=0.3)
+
+
+def draw_functions(slide, left, top, width, accent):
+    """Code that runs only when an event arrives."""
+    start = left + width / 2 - Inches(0.9)
+    shape(slide, MSO_SHAPE.LIGHTNING_BOLT, start, top + Inches(0.1), Inches(0.6), Inches(0.8), d.ORANGE)
+    shape(slide, MSO_SHAPE.RIGHT_ARROW, start + Inches(0.7), top + Inches(0.35), Inches(0.35), Inches(0.3), d.SOFT)
+    box(slide, start + Inches(1.15), top + Inches(0.2), Inches(0.65), Inches(0.6), accent, radius=0.2)
 
 
 def slide_estate(deck, estate, apps, source):
@@ -175,27 +292,31 @@ def slide_estate(deck, estate, apps, source):
     app = category.get(aa.APPLICATION, {"clusters": 0, "cost": 0.0, "microservices": 0})
 
     def web_cost(owner_type):
-        return f"{d.money(estate['prod_cost'][owner_type])} al mes" if estate["web_measured"] else "Costo no medido"
+        return f"{soles(estate['prod_cost'][owner_type])} al mes" if estate["web_measured"] else "Costo no medido"
     slide = d.base_slide(deck, f"Producción: {prod['aks']} clusters AKS concentran los microservicios", source)
-    cards = [("AKS", prod["aks"], "clusters",
-              [f"{d.number(app['microservices'])} microservicios", f"{d.number(len(apps))} aplicaciones",
-               f"{d.money(estate['prod_cost']['AKS'])} al mes"], d.ORANGE),
-             ("Container Apps", prod["aca"], "apps",
-              [f"{d.number(prod['aca_environments'])} environments", f"{d.money(estate['prod_cost']['ACA'])} al mes"], d.GREEN),
-             ("App Service", prod["web"], "web apps", [f"{d.number(prod['plans']['APP_SERVICE'])} planes",
-                                                      web_cost("APP_SERVICE")], d.SKY),
-             ("Azure Functions", prod["functions"], "function apps",
-              [f"{d.number(prod['plans']['FUNCTIONS'])} planes", web_cost("FUNCTIONS")], d.SKY)]
-    for index, (name, count, unit, lines, accent) in enumerate(cards):
+    cards = [("AKS", draw_aks, "Servidores encendidos 24/7", prod["aks"], "clusters",
+              [f"{d.number(app['microservices'])} microservicios", f"{soles(estate['prod_cost']['AKS'])} al mes"],
+              d.ORANGE),
+             ("Container Apps", draw_aca, "Copias que se prenden y apagan con el uso", prod["aca"], "apps",
+              [f"{d.number(prod['aca_environments'])} environments", f"{soles(estate['prod_cost']['ACA'])} al mes"],
+              d.GREEN),
+             ("App Service", draw_app_service, "Servidores fijos que comparten apps web", prod["web"], "web apps",
+              [f"{d.number(prod['plans']['APP_SERVICE'])} planes", web_cost("APP_SERVICE")], d.SKY),
+             ("Azure Functions", draw_functions, "Código que corre solo cuando llega un evento", prod["functions"],
+              "function apps", [f"{d.number(prod['plans']['FUNCTIONS'])} planes", web_cost("FUNCTIONS")], d.SKY)]
+    for index, (name, drawing, meaning, count, unit, lines, accent) in enumerate(cards):
         left = Inches(0.6 + index * 3.07)
-        d.rounded(slide, left, Inches(1.35), Inches(2.9), Inches(2.45), d.CARD)
-        d.text_box(slide, left, Inches(1.45), Inches(2.9), Inches(0.4), name, size=14, bold=True, color=d.WHITE,
+        d.rounded(slide, left, Inches(1.3), Inches(2.9), Inches(3.55), d.CARD)
+        d.text_box(slide, left, Inches(1.38), Inches(2.9), Inches(0.4), name, size=14, bold=True, color=d.WHITE,
                    align=d.PP_ALIGN.CENTER)
-        d.text_box(slide, left, Inches(1.85), Inches(2.9), Inches(0.75), d.number(count), size=36, bold=True,
+        drawing(slide, left, Inches(1.85), Inches(2.9), accent)
+        d.text_box(slide, left + Inches(0.1), Inches(2.9), Inches(2.7), Inches(0.35), meaning, size=10, color=d.SOFT,
+                   align=d.PP_ALIGN.CENTER)
+        d.text_box(slide, left, Inches(3.2), Inches(2.9), Inches(0.6), d.number(count), size=30, bold=True,
                    color=accent, align=d.PP_ALIGN.CENTER)
-        d.text_box(slide, left, Inches(2.55), Inches(2.9), Inches(0.3), unit, size=11, color=d.SOFT,
+        d.text_box(slide, left, Inches(3.75), Inches(2.9), Inches(0.3), unit, size=11, color=d.SOFT,
                    align=d.PP_ALIGN.CENTER)
-        d.text_box(slide, left + Inches(0.15), Inches(2.9), Inches(2.6), Inches(0.85), lines, size=11, bold=True,
+        d.text_box(slide, left + Inches(0.15), Inches(4.05), Inches(2.6), Inches(0.75), lines, size=11, bold=True,
                    color=d.WHITE, align=d.PP_ALIGN.CENTER)
     rows = [["Clusters AKS en producción", "Clusters", f"Costo {month}"]]
     for code, label in ((aa.APPLICATION, "Con aplicaciones (base del análisis)"),
@@ -204,13 +325,59 @@ def slide_estate(deck, estate, apps, source):
                         (aa.NO_DATA, "Sin datos")):
         entry = category.get(code)
         if entry and entry["clusters"]:
-            rows.append([label, d.number(entry["clusters"]), d.money(entry["cost"])])
-    d.table(slide, Inches(0.6), Inches(4.1), Inches(7.9), rows, [0.6, 0.15, 0.25], highlight_column=None,
-            row_height=0.4, size=12)
-    d.note_box(slide, Inches(8.85), Inches(4.1), Inches(3.85), Inches(2.0),
-               [f"Los clusters con aplicaciones usan {d.percent(d.share_of(estate['cpu_used'], estate['cpu_total']))} "
-                f"de su CPU y {d.percent(d.share_of(estate['mem_used'], estate['mem_total']))} de su RAM en horario "
-                f"de oficina.", "", "Microservicios = deployments de aplicación en AKS."], size=11)
+            rows.append([label, d.number(entry["clusters"]), soles(entry["cost"])])
+    d.table(slide, Inches(0.6), Inches(5.0), Inches(7.9), rows, [0.6, 0.15, 0.25], highlight_column=None,
+            row_height=0.32, size=11)
+    d.note_box(slide, Inches(8.85), Inches(5.0), Inches(3.85), Inches(1.3),
+               "Microservicios = piezas de aplicación desplegadas en AKS.", size=11)
+
+
+def minimum_costs(month, prices, ratio=1 - BANK_DISCOUNT, region="eastus2"):
+    """(smallest AKS cluster, one Container Apps microservice) per month in US$, both with the bank's discount."""
+    price = lambda key: prices.get((key, region), 0)
+    aks = MIN_AKS_NODES * HOURS_MONTH * price(f"vm_{MIN_AKS_VM}_payg") * ratio
+    aca = (office_seconds(month) * (ACA_VCPU * price("aca_vcpu_active_s") + ACA_GIB * price("aca_mem_active_gib_s"))
+           + ACA_REQUESTS_MILLION * price("aca_requests_million")) * ratio
+    return aks, aca
+
+
+def slide_hypothesis(deck, estate, apps, scaling, results, source):
+    month = estate["month"]
+    prices = read_prices(results)
+    aks_min, aca_min = minimum_costs(month, prices)
+    small = sum(0 < int(row["microservices"] or 0) <= 15 for row in apps)
+    slide = d.base_slide(deck, "Hipótesis: un cluster AKS por aplicación paga más de lo que usa", source)
+    d.heading(slide, Inches(0.6), Inches(1.3), Inches(7.2), "Indicios", size=14)
+    tiles = [(d.percent(d.share_of(estate["cpu_used"], estate["cpu_total"])),
+              "de la CPU pagada se usa en horario de oficina"),
+             (d.percent(d.share_of(estate["mem_used"], estate["mem_total"])),
+              "de la memoria pagada se usa en horario de oficina"),
+             (d.percent(d.share_of(scaling["over_3_months"], scaling["dated"])) if scaling["dated"] else "-",
+              "de los autoescalados no cambia de tamaño hace más de 3 meses"),
+             (f"{d.number(small)} de {d.number(len(apps))}",
+              "aplicaciones tienen 15 microservicios o menos y aun así un cluster propio")]
+    for index, (value, label) in enumerate(tiles):
+        d.kpi(slide, Inches(0.6) + (index % 2) * Inches(3.65), Inches(1.75) + (index // 2) * Inches(1.45), Inches(3.5),
+              Inches(1.3), value, label, value_size=26, label_size=11)
+    d.heading(slide, Inches(8.1), Inches(1.3), Inches(4.6), "Motivación", size=14)
+    d.callout(slide, Inches(8.1), Inches(1.75), Inches(4.6), Inches(1.2),
+              "Económica: pagar por uso, no por servidores encendidos 24/7", size=15, fill=d.RUST)
+    for index, text in enumerate(("Operación: menos clusters que actualizar y vigilar",
+                                  "Complejidad: sin servidores ni versiones de Kubernetes que administrar")):
+        d.callout(slide, Inches(8.1), Inches(3.05) + index * Inches(0.75), Inches(4.6), Inches(0.65), text, size=12,
+                  fill=d.CARD)
+    d.heading(slide, Inches(0.6), Inches(4.75), Inches(12.1), "Lo mínimo que se paga al mes (con el 30 % de descuento "
+              "del banco)", size=14)
+    d.kpi(slide, Inches(0.6), Inches(5.15), Inches(5.9), Inches(1.3), soles(aks_min),
+          "el cluster AKS más chico (4 servidores), aunque la aplicación sea pequeña", value_color=d.RUST,
+          value_size=28, label_size=11)
+    d.kpi(slide, Inches(6.8), Inches(5.15), Inches(5.9), Inches(1.3), soles(aca_min),
+          "un microservicio en Container Apps, encendido en horario de oficina", value_color=d.GREEN,
+          value_size=28, label_size=11)
+
+
+def apps_label(count):
+    return f"{d.number(count)} {'aplicación' if count == 1 else 'aplicaciones'}"
 
 
 def adt_counts(apps):
@@ -222,43 +389,34 @@ def adt_counts(apps):
                               and int(row["microservices"]) > 15 for row in with_traffic),
         "over_size": sum(int(row["microservices_over_aca_size"]) > 0 for row in apps),
         "always_on": sum((to_float(row.get("offhours_active_share")) or 0) > 0.5 for row in with_traffic),
-        "peak_off_office": sum(row.get("busiest_hour_in_office") == "NO" for row in with_traffic),
         "critical": sum(row["bia"] in ("MUY ALTA", "ALTA") for row in apps),
-        "very_high_cost_share": d.share_of(sum(to_float(row["cost_month_usd"]) or 0 for row in apps
-                                               if row["bia"] == "MUY ALTA"),
-                                           sum(to_float(row["cost_month_usd"]) or 0 for row in apps)),
     }
 
 
-def slide_criteria(deck, apps, scaling, source):
+def slide_criteria(deck, apps, source):
     counts = adt_counts(apps)
     total = len(apps)
-    not_scaling = scaling["never"] + scaling["fixed"]
-    rows = [["Criterio", "Va a AKS si…", "Producción hoy"],
-            ["Carga (TPS en la hora pico)", "Más de 100 TPS",
-             f"{d.number(counts['over_tps'])} de {d.number(counts['with_traffic'])} aplicaciones con tráfico medido"],
-            ["Uso constante y tamaño", "Más de 10 h de tráfico al día y más de 15 microservicios",
-             f"{d.number(counts['constant_large'])} de {d.number(total)} aplicaciones"],
-            ["Horario de uso", "Tráfico en más de la mitad de las noches y fines de semana: no puede apagarse",
-             f"{d.number(counts['always_on'])} de {d.number(counts['with_traffic'])} aplicaciones con tráfico medido; "
-             f"{d.number(counts['peak_off_office'])} con su hora pico fuera de oficina"],
-            ["Tamaño por instancia", "Más de 4 vCPU / 8 GB de RAM",
-             f"{d.number(counts['over_size'])} aplicaciones con algún microservicio más grande"],
-            ["¿Escala con la demanda?", "Escalar a cero es la ventaja de Container Apps",
-             f"{d.percent(d.share_of(not_scaling, scaling['known']))} de los autoescalados no escala "
-             f"({d.percent(d.share_of(scaling['never'], scaling['known']))} en su mínimo, "
-             f"{d.percent(d.share_of(scaling['fixed'], scaling['known']))} con mínimo = máximo)"],
-            ["Criticidad del negocio", "BIA ALTA o MUY ALTA",
-             f"{d.number(counts['critical'])} aplicaciones; las MUY ALTA concentran "
-             f"{d.percent(counts['very_high_cost_share'])} del costo AKS"]]
-    slide = d.base_slide(deck, f"{COUNT_WORDS.get(len(rows) - 1, len(rows) - 1)} criterios ordenan el parque; "
-                               f"cada uno con su cifra de producción", source)
-    d.table(slide, Inches(0.6), Inches(1.4), Inches(12.1), rows, [0.24, 0.36, 0.40], row_height=0.6, size=12)
-    if scaling["dated"]:
-        d.note_box(slide, Inches(0.6), Inches(5.75), Inches(12.1), Inches(0.75),
-                   f"{d.percent(d.share_of(scaling['over_3_months'], scaling['dated']))} de los autoescalados no escala "
-                   f"hace más de 3 meses y {d.percent(d.share_of(scaling['over_1_year'], scaling['dated']))} hace más "
-                   f"de un año. Container Apps arranca en frío en ~30 s: los consumidores deben reintentar.", size=11)
+    growing = sum(row.get("microservices_projected") not in ("", None)
+                  and int(row["microservices_projected"]) > 15 >= int(row["microservices"] or 0) for row in apps)
+    rows = [["Criterio", "Qué mira, en simple", "Qué decide", "En producción hoy"],
+            ["Tráfico en la hora pico", "Cuántas peticiones por segundo recibe en su hora más cargada",
+             "Más de 100 por segundo → AKS",
+             f"{d.number(counts['over_tps'])} de {apps_label(counts['with_traffic'])} con tráfico medido"],
+            ["Uso constante y tamaño", "Si trabaja todo el día y tiene muchas piezas",
+             "Más de 10 h al día y más de 15 microservicios → AKS",
+             f"{d.number(counts['constant_large'])} de {apps_label(total)}"],
+            ["Horario de uso", "Si se usa de noche y fines de semana: Container Apps ahorra apagándose fuera de oficina",
+             "Tráfico en más de la mitad de ese tiempo → AKS",
+             f"{d.number(counts['always_on'])} de {apps_label(counts['with_traffic'])} con tráfico medido"],
+            ["Tamaño de cada copia", "Cuánta máquina necesita cada copia del servicio",
+             "Más de 4 vCPU u 8 GB de RAM → AKS", apps_label(counts["over_size"])],
+            ["Criticidad", "Qué tan grave es para el negocio si se cae",
+             "BIA ALTA o MUY ALTA → Container Apps con revisión", apps_label(counts["critical"])],
+            ["Crecimiento", "Si en desarrollo tiene más microservicios que en producción",
+             "Pasará de 15 → Container Apps con revisión", apps_label(growing)]]
+    slide = d.base_slide(deck, f"{COUNT_WORDS.get(len(rows) - 1, len(rows) - 1)} criterios deciden a dónde va cada "
+                               "aplicación", source)
+    d.table(slide, Inches(0.6), Inches(1.4), Inches(12.1), rows, [0.17, 0.33, 0.27, 0.23], row_height=0.66, size=11)
 
 
 # Groups of the distribution slide, in plain words for a non-technical audience: (label, what it means, colour).
@@ -299,10 +457,10 @@ def slide_distribution(deck, apps, estate, source):
     d.bar_chart(slide, Inches(0.5), Inches(1.4), Inches(5.6), Inches(4.4), [DISTRIBUTION_GROUPS[key][0] for key in order],
                 [len(groups[key]["apps"]) for key in order], XL_CHART_TYPE.COLUMN_CLUSTERED,
                 [DISTRIBUTION_GROUPS[key][2] for key in order])
-    rows = [["Destino", "Apps", f"Costo AKS al mes\n({month})"]]
+    rows = [["Destino", "Apps", f"Costo AKS al mes\n({month}, con IGV)"]]
     for key in order:
         label, meaning, _ = DISTRIBUTION_GROUPS[key]
-        rows.append([f"{label}\n{meaning}", d.number(len(groups[key]["apps"])), d.money(groups[key]["cost"])])
+        rows.append([f"{label}\n{meaning}", d.number(len(groups[key]["apps"])), soles(groups[key]["cost"])])
     d.table(slide, Inches(6.3), Inches(1.5), Inches(6.6), rows, [0.6, 0.13, 0.27], highlight_column=2, row_height=0.62,
             size=10)
     notes = []
@@ -386,12 +544,12 @@ def slide_cost(deck, apps, estate, results, source):
     scenarios = [("Precio de lista (sin descuento)", aks_paid / ratio, aca_list),
                  ("Con el descuento del banco", aks_paid, aca_list * ratio)]
     saving = scenarios[1][1] - scenarios[1][2]
-    slide = d.base_slide(deck, f"Mover las {len(movable)} aplicaciones candidatas ahorraría ~{d.money(saving)} al mes "
-                               f"({d.money(saving * 12)} al año)", source)
-    rows = [["Escenario", "AKS hoy / mes", "Container Apps / mes", "Ahorro / mes", "Ahorro / año"]]
+    slide = d.base_slide(deck, f"Mover las {len(movable)} aplicaciones candidatas ahorraría ~{soles(saving)} al mes "
+                               f"({soles(saving * 12)} al año)", source)
+    rows = [["Escenario (con IGV)", "AKS hoy / mes", "Container Apps / mes", "Ahorro / mes", "Ahorro / año"]]
     for label, aks_cost, aca_cost in scenarios:
-        rows.append([label, d.money(aks_cost), d.money(aca_cost), d.money(aks_cost - aca_cost),
-                     d.money((aks_cost - aca_cost) * 12)])
+        rows.append([label, soles(aks_cost), soles(aca_cost), soles(aks_cost - aca_cost),
+                     soles((aks_cost - aca_cost) * 12)])
     d.table(slide, Inches(0.6), Inches(1.4), Inches(12.1), rows, [0.3, 0.17, 0.19, 0.17, 0.17], highlight_column=3,
             row_height=0.5, size=13)
     rows = [["Cómo se paga", "AKS", "Container Apps"],
@@ -428,11 +586,14 @@ def main():
 
     deck = Presentation()
     deck.slide_width, deck.slide_height = Inches(13.333), Inches(7.5)
-    slide_context(deck, "Fuente: lineamientos de arquitectura del banco.")
-    slide_estate(deck, estate, apps, measured)
-    slide_criteria(deck, apps, scaling, criteria)
-    slide_distribution(deck, apps, estate, criteria)
-    slide_cost(deck, apps, estate, args.results, measured + " Precios de lista: Azure Retail Prices API.")
+    slide_context(deck, apps, "Fuente: lineamientos de arquitectura del banco (FAT_001, ADT_019).")
+    slide_estate(deck, estate, apps, f"{measured} {MONEY_NOTE}")
+    slide_hypothesis(deck, estate, apps, scaling, args.results,
+                     f"{measured} Precios de lista: Azure Retail Prices API. {MONEY_NOTE}")
+    slide_criteria(deck, apps, criteria)
+    slide_distribution(deck, apps, estate, f"{criteria} {MONEY_NOTE}")
+    slide_cost(deck, apps, estate, args.results,
+               f"{measured} Precios de lista: Azure Retail Prices API. {MONEY_NOTE}")
     reports = sorted(glob.glob(os.path.join(aa.TOPIC_DIR, "reports", "*-aks-aca")))
     output = args.output or os.path.join(reports[-1] if reports else aa.TOPIC_DIR, "aks_aca_corporate.pptx")
     deck.save(output)
