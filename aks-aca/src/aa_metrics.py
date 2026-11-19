@@ -22,6 +22,9 @@ Outputs (in --output-dir):
   apim_api_monthly.csv    APIM x API x month: requests (office / off-hours), peak 5 minutes and hour,
                           share of office buckets with traffic, off-hours wake-ups and active buckets
   apim_hourly_profile.csv APIM x API x weekday/weekend x Lima hour: average requests per hour
+  queue_monthly.csv       the same figures for the IncomingMessages of the Event Hubs / Service Bus namespaces of
+                          AKS applications with no AKS-backed PROD API (event-driven: their load is messages)
+  queue_hourly_profile.csv the same profile for those namespaces
   metrics_errors.csv
   metrics_summary.json
 """
@@ -215,6 +218,31 @@ def apim_requests(ctx, service, start, end, args):
     return states
 
 
+def queue_messages(ctx, namespace, start, end, args):
+    """IncomingMessages of an Event Hubs or Service Bus namespace in 5-minute buckets, as one ApiState."""
+    state = ApiState(args.cooldown)
+    for begin, finish in aa.chunks(start, end, args.apim_chunk_days):
+        pieces = ctx.try_arm("queue-messages", namespace["name"], aa.get_metrics_split, ctx, namespace["id"],
+                             ["IncomingMessages"], begin, finish, "PT5M", "Total")
+        for values in pieces or []:
+            for series in (values or [{}])[0].get("timeseries", []):
+                for moment, value in aa.series_points(series, "total"):
+                    state.add(moment, value)
+    return state
+
+
+def queue_namespaces(inventory, clusters, apis, environments):
+    """PROD namespaces of AKS applications without any AKS-backed PROD API: event-driven applications."""
+    with_api = {row.get("backend_cod_app") for row in apis
+                if row.get("apim_environment", "PROD") == "PROD"
+                and (row.get("backend_platform") or aa.backend_platform(row.get("backend_host"))) == "AKS"}
+    aks_apps = {row["cod_app"] for row in clusters if row.get("cod_app") and row["cod_app"] not in aa.INFRASTRUCTURE_APPS
+                and (environments is None or row["environment"] in environments)}
+    return [row for row in aa.read_csv(os.path.join(inventory, "messaging_namespaces.csv"))
+            if (environments is None or row["environment"] in environments)
+            and row.get("cod_app") in aks_apps - with_api]
+
+
 def bucket_calendar(start, end):
     """Number of 5-minute buckets per (Lima month, is office) in [start, end)."""
     counts = defaultdict(int)
@@ -250,6 +278,8 @@ def main():
                         help="Comma-separated APIM layers to measure (BS, UX, CORE, OPEN_BANKING, YAPE). Default: %(default)s")
     parser.add_argument("--skip-aks", action="store_true")
     parser.add_argument("--skip-apim", action="store_true")
+    parser.add_argument("--skip-queues", action="store_true",
+                        help="Do not measure the Event Hubs / Service Bus namespaces of applications with no API on APIM")
     parser.add_argument("--chunk-days", type=int, default=31, help="Days per AKS metrics call (hourly points)")
     parser.add_argument("--apim-chunk-days", type=int, default=2, help="Days per APIM metrics call (5-minute points)")
     parser.add_argument("--top", type=int, default=2000, help="Max APIs per APIM metrics call")
@@ -265,7 +295,9 @@ def main():
     pools = aa.read_csv(os.path.join(args.inventory, "aks_node_pools.csv"))
     services = aa.read_csv(os.path.join(args.inventory, "apim_services.csv"))
     cluster_codes = aa.cluster_cod_app(aa.cod_app_by_cluster(clusters))
-    api_codes = aa.cod_app_by_api(aa.read_csv(os.path.join(args.inventory, "apim_apis.csv")))
+    api_inventory = aa.read_csv(os.path.join(args.inventory, "apim_apis.csv"))
+    api_codes = aa.cod_app_by_api(api_inventory)
+    namespaces = queue_namespaces(args.inventory, clusters, api_inventory, environments)
     if not clusters and not services:
         raise SystemExit("Run aa_inventory.py first: no aks_clusters.csv or apim_services.csv in " + args.inventory)
     wanted_clusters = {name.strip().lower() for name in args.clusters.split(",") if name.strip()}
@@ -310,6 +342,19 @@ def main():
         output.csv("apim_hourly_profile.csv", aa.with_cod_app(aa.insert_column(profile_rows, "apim", "apim_layer", layer),
                                                               "api_id", api_code))
 
+    queue_rows, queue_profile = [], []
+    if not args.skip_queues and namespaces:
+        days = day_counts(start, end)
+        calendar = bucket_calendar(start, end)
+        for namespace in namespaces:
+            state = queue_messages(ctx, namespace, start, end, args)
+            queue_rows.extend(dict(row, apim_layer=namespace["kind"], cod_app=namespace["cod_app"])
+                              for row in state.rows(namespace["name"], "IncomingMessages", calendar))
+            queue_profile.extend(dict(row, apim_layer=namespace["kind"], cod_app=namespace["cod_app"])
+                                 for row in state.profile_rows(namespace["name"], "IncomingMessages", days))
+        output.csv("queue_monthly.csv", queue_rows)
+        output.csv("queue_hourly_profile.csv", queue_profile)
+
     output.csv("metrics_errors.csv", ctx.errors.rows, azure.ErrorLog.FIELDS)
     output.json("metrics_summary.json", azure.run_metadata(ctx, {
         "window_utc": {"from": aa.iso_z(start), "to": aa.iso_z(end)},
@@ -319,6 +364,7 @@ def main():
         "apim": [row["name"] for row in services],
         "apim_layers": {row["name"]: layer_of[row["name"]] for row in services},
         "aks_rows": len(usage_rows), "apim_api_rows": len(api_rows),
+        "queue_namespaces": [row["name"] for row in namespaces] if not args.skip_queues else [],
     }))
     print(json.dumps({"aks_rows": len(usage_rows), "apim_api_rows": len(api_rows), "errors": len(ctx.errors.rows)}))
 

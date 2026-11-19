@@ -97,6 +97,10 @@ APIM_LAYER_DOMAINS = (("apibs", "BS"), ("apicr", "CORE"), ("apiux", "UX"), ("api
 # applications without BS traffic, since their calls go on to BS and would count twice. Core is internal (BS ->
 # Core -> mainframe): last, only for applications that have traffic nowhere else.
 TRAFFIC_LAYERS = ("BS", "UX", "OPEN_BANKING", "YAPE", "CORE")
+# Event-driven applications with no API on APIM: their load is the messages their namespace receives. Last in the
+# order, and only measured for applications without an AKS-backed PROD API (aa_metrics.py).
+QUEUE_LAYERS = ("EVENT_HUB", "SERVICE_BUS")
+APPLICATION_TRAFFIC_ORDER = TRAFFIC_LAYERS + QUEUE_LAYERS
 APP_SERVICE_SUFFIX, CONTAINER_APPS_SUFFIX = ".azurewebsites.net", ".azurecontainerapps.io"
 
 

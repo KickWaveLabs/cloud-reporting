@@ -38,9 +38,11 @@ import aa_deck as d
 MONTHS_ES = ("enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre",
              "noviembre", "diciembre")
 RUNTIME_LABELS = {"AKS": "Se queda en AKS", "ACA": "Candidata a Container Apps",
-                  "ACA_WITH_REVIEW": "Container Apps, con revisión"}
+                  "ACA_WITH_REVIEW": "Container Apps, con revisión", "INSUFFICIENT_DATA": "Sin tráfico en producción"}
+NO_TRAFFIC_LABELS = {"IN_DEVELOPMENT": "en desarrollo", "NOT_IN_USE": "desplegadas sin uso",
+                     "EMPTY_CLUSTER": "con el cluster vacío"}
 COUNT_WORDS = {3: "Tres", 4: "Cuatro", 5: "Cinco", 6: "Seis", 7: "Siete"}
-RUNTIME_COLORS = {"AKS": d.NAVY, "ACA": d.GREEN, "ACA_WITH_REVIEW": d.ORANGE}
+RUNTIME_COLORS = {"AKS": d.NAVY, "ACA": d.GREEN, "ACA_WITH_REVIEW": d.ORANGE, "INSUFFICIENT_DATA": d.GREY}
 
 
 def month_label(month):
@@ -275,7 +277,7 @@ def slide_distribution(deck, apps, estate, source):
     movable = groups["ACA"]["apps"] + groups["ACA_WITH_REVIEW"]["apps"]
     slide = d.base_slide(deck, f"Aplicando los criterios, {movable} de {len(apps)} aplicaciones podrían ir a "
                                f"Container Apps", source)
-    order = [key for key in ("AKS", "ACA_WITH_REVIEW", "ACA") if groups[key]["apps"]]
+    order = [key for key in ("AKS", "ACA_WITH_REVIEW", "ACA", "INSUFFICIENT_DATA") if groups[key]["apps"]]
     d.bar_chart(slide, Inches(0.5), Inches(1.4), Inches(6.2), Inches(4.4), [RUNTIME_LABELS[key] for key in order],
                 [groups[key]["apps"] for key in order], XL_CHART_TYPE.COLUMN_CLUSTERED,
                 [RUNTIME_COLORS[key] for key in order])
@@ -288,8 +290,16 @@ def slide_distribution(deck, apps, estate, source):
     d.note_box(slide, Inches(7.0), Inches(3.6), Inches(5.8), Inches(1.0),
                f"{d.number(monoliths)} aplicaciones tienen un solo microservicio: si son monolitos, el lineamiento las "
                f"llevaría a App Service. Se confirma con cada equipo.", size=11)
-    d.note_box(slide, Inches(7.0), Inches(4.8), Inches(5.8), Inches(1.0),
-               "\"Con revisión\": criticidad alta (BIA ALTA o MUY ALTA) o tráfico sin medir.", size=11)
+    reasons = Counter(row.get("no_traffic_reason") for row in apps if row["adt_runtime"] == "INSUFFICIENT_DATA")
+    no_traffic = ", ".join(f"{d.number(count)} {NO_TRAFFIC_LABELS.get(reason, 'sin dato')}"
+                           for reason, count in reasons.most_common())
+    notes = []
+    if groups["ACA_WITH_REVIEW"]["apps"]:
+        notes.append("\"Con revisión\": criticidad alta (BIA ALTA o MUY ALTA) o crecerá a más de 15 microservicios.")
+    if reasons:
+        notes.append(f"\"Sin tráfico en producción\" ({no_traffic}): quedan fuera de la migración hasta que tengan uso.")
+    if notes:
+        d.note_box(slide, Inches(7.0), Inches(4.8), Inches(5.8), Inches(1.0), " ".join(notes), size=11)
 
 
 def office_seconds(month):
@@ -397,7 +407,7 @@ def main():
     scaling = read_scaling(args.results)
     period = month_label(estate["month"])
     measured = f"Fuente: inventario de Azure, Cost Management (costo amortizado, {period}) y métricas de {period}."
-    criteria = (f"Fuente: lineamiento ADT_019; tráfico de APIM, Container Insights y configuración de autoescalado, "
+    criteria = (f"Fuente: lineamiento ADT_019; tráfico de APIM y Event Hubs, Container Insights y configuración de autoescalado, "
                 f"{period}.")
 
     deck = Presentation()

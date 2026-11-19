@@ -118,7 +118,9 @@ python aks-aca/src/aa_deck_exec.py
    default. Each application's traffic comes from one layer, the first with traffic in this order: BS, UX, Open
    Banking, Yape, Core. Layers are never added, since a call goes on from one gateway to the next; Core is internal
    and only stands in for applications with traffic nowhere else. An application without PROD traffic is
-   `INSUFFICIENT_DATA`, out of the migration list; its reason says whether DESA runs microservices that PROD does not
+   `INSUFFICIENT_DATA`, out of the migration list (shown apart on the corporate deck as "Sin tráfico en producción");
+   an event-driven application with no API on APIM is measured by the messages of its Event Hubs or Service Bus
+   namespace (`queue_monthly.csv`, `--skip-queues` to leave it out); its reason says whether DESA runs microservices that PROD does not
    have yet (from the export). `--apim-environments PROD,DESA` on both scripts adds DESA test requests as a one-off
    check; it is not part of the monthly run (~3,600 more APIs). `--apim-names` still picks services
    by name for a smoke test.
