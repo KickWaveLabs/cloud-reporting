@@ -138,6 +138,9 @@ def read_estate(results):
              if row["month"] == month and aa.cluster_id_of(row, ids_by_name) in application_ids]
     cpu_used = sum(to_float(row["cpu_used_office_avg"]) or 0 for row in usage if row["mode"] != "ALLOCATABLE")
     mem_used = sum(to_float(row["mem_used_office_avg_gib"]) or 0 for row in usage if row["mode"] != "ALLOCATABLE")
+    # Peak: each pool's busiest hour of the month, added up. The hours differ, so the estate's real peak is lower.
+    cpu_peak = sum(to_float(row["cpu_used_max"]) or 0 for row in usage if row["mode"] != "ALLOCATABLE")
+    mem_peak = sum(to_float(row["mem_used_max_gib"]) or 0 for row in usage if row["mode"] != "ALLOCATABLE")
     cpu_total = sum(to_float(row["cpu_allocatable_avg"]) or 0 for row in usage if row["mode"] == "ALLOCATABLE")
     mem_total = sum(to_float(row["mem_allocatable_avg_gib"]) or 0 for row in usage if row["mode"] == "ALLOCATABLE")
     sites = prod_inventory(results, "app_services.csv")
@@ -163,6 +166,7 @@ def read_estate(results):
     web_measured = web_scope == "ALL" or "PROD" in web_scope
     return {"month": month, "by_category": by_category, "total_clusters": len(clusters),
             "cpu_used": cpu_used, "cpu_total": cpu_total, "mem_used": mem_used, "mem_total": mem_total,
+            "cpu_peak": cpu_peak, "mem_peak": mem_peak,
             "prod": prod, "prod_cost": prod_cost, "web_measured": web_measured}
 
 
@@ -392,10 +396,12 @@ def slide_hypothesis(deck, estate, apps, scaling, results, source):
     small = sum(0 < int(row["microservices"] or 0) <= 15 for row in apps)
     slide = d.base_slide(deck, "Hipótesis: un cluster AKS por aplicación paga más de lo que usa", source)
     d.heading(slide, Inches(0.6), Inches(1.3), Inches(7.2), "Indicios", size=14)
-    tiles = [(d.percent(d.share_of(estate["cpu_used"], estate["cpu_total"])),
-              "de la CPU pagada se usa en horario de oficina"),
-             (d.percent(d.share_of(estate["mem_used"], estate["mem_total"])),
-              "de la memoria pagada se usa en horario de oficina"),
+    def average_and_peak(used, peak, total):
+        return f"{d.percent(d.share_of(used, total))} | {d.percent(d.share_of(peak, total))}"
+    tiles = [(average_and_peak(estate["cpu_used"], estate["cpu_peak"], estate["cpu_total"]),
+              "de la CPU usada: promedio en oficina | pico del mes"),
+             (average_and_peak(estate["mem_used"], estate["mem_peak"], estate["mem_total"]),
+              "de la memoria usada: promedio en oficina | pico del mes"),
              (d.percent(d.share_of(scaling["over_3_months"], scaling["dated"])) if scaling["dated"] else "-",
               "de los autoescalados no cambia de tamaño hace más de 3 meses"),
              (f"{d.number(small)} de {d.number(len(apps))}",
