@@ -620,7 +620,7 @@ def measured_discount(results, month, prices):
 
 # Headroom on the requests each application received in the month, so the saving is not overstated.
 REQUESTS_BUFFER = 1.25
-# Container Apps environments per application: each one bills its management and private endpoint hours.
+# Container Apps environments per application: each one bills its internal Standard load balancer.
 ENVIRONMENTS_PER_APP = 1
 
 
@@ -634,7 +634,7 @@ def aca_breakdown(results, apps, month, prices, ratio, region="eastus2"):
         vcpu_s = replicas x vCPU x office seconds          gib_s = replicas x GiB x office seconds
         requests = requests of the month x REQUESTS_BUFFER
         list = vcpu_s x vCPU-s price + gib_s x GiB-s price + requests / 1e6 x price per million
-               + ENVIRONMENTS_PER_APP x 730 h x (management + private endpoint hour price)
+               + ENVIRONMENTS_PER_APP x 730 h x Standard load balancer hour price
         with discount = list x ratio
     Every second is billed at the active rate and the free grant is left out (one per subscription)."""
     price = lambda key: prices.get((key, region), 0)
@@ -655,7 +655,10 @@ def aca_breakdown(results, apps, month, prices, ratio, region="eastus2"):
         entry["replicas"] += replicas
         entry["vcpu_s"] += replicas * vcpu * seconds
         entry["gib_s"] += replicas * 2 * vcpu * seconds
-    environment_hour = price("aca_env_management_hour") + price("aca_env_private_endpoint_hour")
+    # A Consumption environment inside the VNet bills only its internal Standard load balancer (October 2026: 13.02 US$
+    # per environment, 744 h x 0.025 x 0.70, in all 24 of the bank's environments). The 0.10 US$/h management charge
+    # applies only with dedicated profiles, private endpoints or planned maintenance, which they do not use.
+    environment_hour = price("lb_standard_rules_hour")
     out = []
     for app in apps:
         entry = per_app[app["cod_app"]]

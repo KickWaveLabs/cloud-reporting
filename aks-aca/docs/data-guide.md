@@ -462,7 +462,7 @@ step of its monthly Container Apps cost, so the saving slide can be rebuilt by h
 | Requests | `requests_with_buffer` | requests of the month × 1.25 (headroom so the saving is not overstated) |
 | Compute | `compute_usd`, `memory_usd` | vCPU-s × 0.000024 + GiB-s × 0.000003 (active rate, list price) |
 | Requests | `requests_usd` | requests / 1,000,000 × 0.40 |
-| Environment | `environment_usd` | 1 environment × 730 h × (0.10 management + 0.10 private endpoint) = 146 |
+| Environment | `environment_usd` | 1 environment × 730 h × 0.025 (its internal Standard load balancer, 5 rules or fewer) = 18.25. A Consumption environment has no fee of its own; the 0.10 US$/h "Dedicated Plan Management" applies only with dedicated profiles, private endpoints or planned maintenance. October 2026: all 24 of the bank's environments billed 13.02 US$ of load balancer (744 h × 0.025 × 0.70) and no management |
 | List total | `aca_list_usd` | sum of the four lines above |
 | With discount | `aca_with_discount_usd` | list × 0.70 (the bank's 30%; Container Apps in consumption has no reservations) |
 | In soles | `aca_with_discount_pen_igv` | × 3.41333 × 1.18 |
@@ -471,9 +471,9 @@ step of its monthly Container Apps cost, so the saving slide can be rebuilt by h
 
 - In the calculator, enter `vcpu_seconds` and `gib_seconds` as the active usage, `requests_with_buffer` as the
   requests, and add the environment hours as a separate line; it subtracts the free grant, which the CSV leaves out.
-- Most of the cost is keeping replicas warm and the environment: on the October test run the requests were
-  about 0.1% of the candidates' Container Apps cost and the environments about 60%. Sharing one environment among
-  several applications lowers that line (`ENVIRONMENTS_PER_APP` in `aa_deck_exec.py`).
+- Most of the cost is keeping replicas warm: on the October test run the requests were about 0.1% of the
+  candidates' Container Apps cost. Sharing one environment among several applications lowers the environment line
+  (`ENVIRONMENTS_PER_APP` in `aa_deck_exec.py`).
 
 ### 6. Corporate deck figures (`aks_aca_corporate.pptx`)
 
