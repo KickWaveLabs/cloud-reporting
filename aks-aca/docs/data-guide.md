@@ -337,6 +337,25 @@ layer filter a request is counted once per gateway it passes (UX, BS, Core).
 
 The class is per API. Mapping APIs to clusters needs the API → deployment mapping, which is still pending.
 
+**Traffic per application across every layer (rebuilds `traffic_layer` and `requests_month`).** Two joins and an
+append; on the October test run it matched `application_snapshot` for all 117 applications.
+
+1. Load `apim_apis.csv` as a connection-only query, keeping `apim`, `api_id`, `apim_environment`,
+   `backend_platform` and `backend_cod_app`.
+2. In `apim_api_monthly`: *Home > Merge Queries* with `apim_apis` on **`apim` and `api_id`** (select both columns,
+   in the same order, on each side), left outer; expand `apim_environment`, `backend_platform`, `backend_cod_app`.
+   Keep the rows with `backend_platform` = AKS and `apim_environment` = PROD (an API in front of App Service or
+   OpenShift is not AKS traffic). Use `backend_cod_app` as the application.
+3. Load `entry_points_monthly.csv` (Application Gateways and Event Hubs / Service Bus) and add a column
+   `backend_cod_app` = `cod_app`. Event Hubs count messages, not requests.
+4. *Home > Append Queries as New*: the two queries. Keep `backend_cod_app`, `apim_layer`, `month`, `requests`.
+5. Pivot: filter `month`; rows `backend_cod_app`; columns `apim_layer`; sum `requests`.
+6. Next to the pivot, per row: the layer is BS when its BS cell is above 0, else the column with the largest
+   value; the requests are that cell. For example `=SI(B5>0; B5; MAX(C5:H5))` and
+   `=SI(B5>0; "BS"; INDICE($C$4:$H$4; COINCIDIR(MAX(C5:H5); C5:H5; 0)))`, with BS in column B.
+7. Check: `BUSCARX` of each application in `application_snapshot` (`traffic_layer`, `requests_month`) gives the
+   same values. Never add the columns of one row: the same call passes through several gateways.
+
 **Every TPS in one pivot per application.** `apim_api_monthly` already has `cod_app`. Use the standard filter
 (BS only); an application whose `traffic_layer` is not BS has its figures in `application_snapshot` only. Two figures are
 per application, not per API, so they enter the per-API rows through a lookup and are summarised by **max**
