@@ -269,7 +269,6 @@ DISTRIBUTION_GROUPS = {
     "IN_USE": ("Sin tráfico medido: en uso", "Trabaja, pero no se puede medir su tráfico", d.STEEL),
     "NOT_IN_USE": ("Sin tráfico medido: sin uso", "No recibe tráfico: revisar si se apaga", d.GREY),
 }
-EXAMPLES = 3
 
 
 def distribution_group(row):
@@ -300,21 +299,19 @@ def slide_distribution(deck, apps, estate, source):
     d.bar_chart(slide, Inches(0.5), Inches(1.4), Inches(5.6), Inches(4.4), [DISTRIBUTION_GROUPS[key][0] for key in order],
                 [len(groups[key]["apps"]) for key in order], XL_CHART_TYPE.COLUMN_CLUSTERED,
                 [DISTRIBUTION_GROUPS[key][2] for key in order])
-    rows = [["Destino", "Apps", "Ejemplos", f"Costo AKS\n{month}"]]
+    rows = [["Destino", "Apps", f"Costo AKS al mes\n({month})"]]
     for key in order:
         label, meaning, _ = DISTRIBUTION_GROUPS[key]
-        busiest = sorted(groups[key]["apps"], key=lambda row: -(to_float(row["cost_month_usd"]) or 0))
-        rows.append([f"{label}\n{meaning}", d.number(len(groups[key]["apps"])),
-                     ", ".join(row["cod_app"] for row in busiest[:EXAMPLES]), d.money(groups[key]["cost"])])
-    d.table(slide, Inches(6.3), Inches(1.5), Inches(6.6), rows, [0.47, 0.1, 0.23, 0.2], row_height=0.62, size=10)
+        rows.append([f"{label}\n{meaning}", d.number(len(groups[key]["apps"])), d.money(groups[key]["cost"])])
+    d.table(slide, Inches(6.3), Inches(1.5), Inches(6.6), rows, [0.6, 0.13, 0.27], highlight_column=2, row_height=0.62,
+            size=10)
     notes = []
     single = sum(row["possible_monolith"] == "YES" for row in apps)
     if single:
-        notes.append(f"{d.number(single)} aplicaciones tienen un solo microservicio, también en desarrollo: podrían ir a "
+        notes.append(f"{d.number(single)} aplicaciones con un solo microservicio (sin más en desarrollo) podrían ir a "
                      "App Service.")
     if developing:
-        notes.append(f"{d.number(len(developing))} en desarrollo ({', '.join(sorted(developing))}) aún no tienen "
-                     "tráfico en producción.")
+        notes.append(f"{d.number(len(developing))} aplicaciones más están en desarrollo, sin tráfico en producción.")
     if notes:
         d.note_box(slide, Inches(6.3), Inches(4.75), Inches(6.6), Inches(0.75), " ".join(notes), size=10)
 
