@@ -34,9 +34,16 @@
 # calls between microservices of the same application are left out, as APIM only sees the entry.
 sum by (cluster, destination_workload_namespace) (rate(istio_requests_total{reporter="destination", source_workload=~"unknown|.*gateway.*"}[1h]))
 
-# M2. Replicas of each HPA, hourly average. Query type Range, Min step 1h. If it is too heavy, export it a
-# week at a time or by groups of clusters (filter cluster=~"...").
-avg_over_time(kube_horizontalpodautoscaler_status_current_replicas[1h])
+# M2. Replicas of each HPA per hour: average (label stat="avg", for the cost) and maximum (stat="max": an
+# hourly average hides a 15-minute burst, so it cannot tell whether the HPA reached its limit).
+# Query type Range, Min step 1h. If it is too heavy, export it a week at a time or by groups of clusters
+# (filter cluster=~"..."), or fall back to the average alone plus M2b.
+label_replace(avg_over_time(kube_horizontalpodautoscaler_status_current_replicas[1h]), "stat", "avg", "", "")
+or
+label_replace(max_over_time(kube_horizontalpodautoscaler_status_current_replicas[1h]), "stat", "max", "", "")
+
+# M2b (fallback only). Highest replicas of each HPA in the month, one value per HPA. Query type Instant.
+max_over_time(kube_horizontalpodautoscaler_status_current_replicas[31d])
 
 # M3 (optional). p95 latency per microservice over the month, ms, to weigh a cold start. Query type Instant.
 histogram_quantile(0.95, sum by (le, cluster, destination_workload) (increase(istio_request_duration_milliseconds_bucket{reporter="destination"}[31d])))
