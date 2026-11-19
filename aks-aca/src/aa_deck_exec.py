@@ -353,7 +353,10 @@ def minimum_costs(month, prices, aks_ratio, aca_ratio=1 - BANK_DISCOUNT, region=
     (what the bank pays for node VMs, reservations included); Container Apps has no reservations, so it takes the
     bank's discount."""
     price = lambda key: prices.get((key, region), 0)
-    aks = MIN_AKS_NODES * HOURS_MONTH * price(f"vm_{MIN_AKS_VM}_payg") * aks_ratio
+    # Every PROD cluster runs the Standard tier (uptime SLA), billed per cluster-hour; reservations do not cover it,
+    # so it takes the bank's discount (October 2026: 51.60 US$ paid per cluster against 73 at list price).
+    aks = (MIN_AKS_NODES * HOURS_MONTH * price(f"vm_{MIN_AKS_VM}_payg") * aks_ratio
+           + HOURS_MONTH * price("aks_standard_tier_hour") * (1 - BANK_DISCOUNT))
     aca = (office_seconds(month) * (ACA_VCPU * price("aca_vcpu_active_s") + ACA_GIB * price("aca_mem_active_gib_s"))
            + ACA_REQUESTS_MILLION * price("aca_requests_million")) * aca_ratio
     return aks, aca
@@ -386,8 +389,8 @@ def slide_hypothesis(deck, estate, apps, scaling, results, source, aks_ratio):
                   fill=d.CARD)
     d.heading(slide, Inches(0.6), Inches(4.75), Inches(12.1), "Lo mínimo que se paga al mes", size=14)
     d.kpi(slide, Inches(0.6), Inches(5.15), Inches(5.9), Inches(1.3), soles(aks_min),
-          f"el cluster AKS más chico (4 servidores), aunque la aplicación sea pequeña; con reservas "
-          f"({d.percent(1 - aks_ratio)} de descuento)", value_color=d.RUST, value_size=28, label_size=11)
+          f"el cluster AKS más chico (4 servidores y tier Standard), aunque la aplicación sea pequeña; servidores con "
+          f"reservas ({d.percent(1 - aks_ratio)} de descuento)", value_color=d.RUST, value_size=28, label_size=11)
     d.kpi(slide, Inches(6.8), Inches(5.15), Inches(5.9), Inches(1.3), soles(aca_min),
           f"un microservicio en Container Apps, encendido en horario de oficina; con el "
           f"{d.percent(BANK_DISCOUNT)} de descuento del banco", value_color=d.GREEN, value_size=28, label_size=11)
