@@ -380,6 +380,30 @@ def measured_minimum_aks(results, month):
     return (bills[middle] if len(bills) % 2 else (bills[middle - 1] + bills[middle]) / 2), len(bills)
 
 
+PEAK_COLOR, TRACK_COLOR = d.RGBColor(0xF7, 0xD3, 0xB0), d.RGBColor(0x3A, 0x50, 0x75)
+
+
+def usage_tile(slide, left, top, width, height, title, average, peak):
+    """A tile with the share used on average (office hours) and at the month's peak, and a bar of the whole
+    capacity: the strong part is the average, the light part reaches the peak."""
+    d.rounded(slide, left, top, width, height, d.CARD)
+    d.text_box(slide, left, top + Inches(0.05), width, Inches(0.3), title, size=11, bold=True, color=d.WHITE,
+               align=d.PP_ALIGN.CENTER)
+    half = int(width / 2)
+    for column, (share, caption, colour) in enumerate(((average, "promedio en oficina", d.ORANGE),
+                                                        (peak, "pico del mes", PEAK_COLOR))):
+        d.text_box(slide, left + column * half, top + Inches(0.3), half, Inches(0.45), d.percent(share), size=24,
+                   bold=True, color=colour, align=d.PP_ALIGN.CENTER, anchor=d.MSO_ANCHOR.MIDDLE)
+        d.text_box(slide, left + column * half, top + Inches(0.74), half, Inches(0.25), caption, size=9, color=d.SOFT,
+                   align=d.PP_ALIGN.CENTER)
+    bar_left, bar_width = left + Inches(0.3), width - Inches(0.6)
+    bar_top, bar_height = top + height - Inches(0.27), Inches(0.12)
+    for share, colour in ((1.0, TRACK_COLOR), (peak or 0, PEAK_COLOR), (average or 0, d.ORANGE)):
+        if share > 0:
+            d.rounded(slide, bar_left, bar_top, max(int(bar_width * min(share, 1.0)), Inches(0.04)), bar_height,
+                      colour, radius=0.5)
+
+
 def slide_hypothesis(deck, estate, apps, scaling, results, source):
     month = estate["month"]
     aks_min, aca_min, lines = minimum_costs(month, read_prices(results))
@@ -396,19 +420,18 @@ def slide_hypothesis(deck, estate, apps, scaling, results, source):
     small = sum(0 < int(row["microservices"] or 0) <= 15 for row in apps)
     slide = d.base_slide(deck, "Hipótesis: un cluster AKS por aplicación paga más de lo que usa", source)
     d.heading(slide, Inches(0.6), Inches(1.3), Inches(7.2), "Indicios", size=14)
-    def average_and_peak(used, peak, total):
-        return f"{d.percent(d.share_of(used, total))} | {d.percent(d.share_of(peak, total))}"
-    tiles = [(average_and_peak(estate["cpu_used"], estate["cpu_peak"], estate["cpu_total"]),
-              "de la CPU usada: promedio en oficina | pico del mes"),
-             (average_and_peak(estate["mem_used"], estate["mem_peak"], estate["mem_total"]),
-              "de la memoria usada: promedio en oficina | pico del mes"),
-             (d.percent(d.share_of(scaling["over_3_months"], scaling["dated"])) if scaling["dated"] else "-",
+    for index, (title, used, peak, total) in enumerate((
+            ("CPU usada", estate["cpu_used"], estate["cpu_peak"], estate["cpu_total"]),
+            ("Memoria usada", estate["mem_used"], estate["mem_peak"], estate["mem_total"]))):
+        usage_tile(slide, Inches(0.6) + index * Inches(3.65), Inches(1.75), Inches(3.5), Inches(1.3), title,
+                   d.share_of(used, total), d.share_of(peak, total))
+    tiles = [(d.percent(d.share_of(scaling["over_3_months"], scaling["dated"])) if scaling["dated"] else "-",
               "de los autoescalados no cambia de tamaño hace más de 3 meses"),
              (f"{d.number(small)} de {d.number(len(apps))}",
               "aplicaciones tienen 15 microservicios o menos y aun así un cluster propio")]
     for index, (value, label) in enumerate(tiles):
-        d.kpi(slide, Inches(0.6) + (index % 2) * Inches(3.65), Inches(1.75) + (index // 2) * Inches(1.45), Inches(3.5),
-              Inches(1.3), value, label, value_size=26, label_size=11)
+        d.kpi(slide, Inches(0.6) + index * Inches(3.65), Inches(3.2), Inches(3.5), Inches(1.3), value, label,
+              value_size=26, label_size=11)
     d.heading(slide, Inches(8.1), Inches(1.3), Inches(4.6), "Motivación", size=14)
     d.callout(slide, Inches(8.1), Inches(1.75), Inches(4.6), Inches(1.2),
               "Económica: pagar por uso, no por servidores encendidos 24/7", size=15, fill=d.RUST)
