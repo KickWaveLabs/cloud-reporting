@@ -12,7 +12,8 @@ APIM (per API, 5-minute points):
   Requests (Total), split by ApiId. The 5-minute buckets give the off-hours wake-ups that Container
   Apps would bill: each run of buckets with traffic, plus the scale-to-zero cooldown.
   By default the APIM of the layers in aa_common.TRAFFIC_LAYERS (BS; UX, Open Banking, Yape and Core only stand in
-  for applications without BS traffic), in --environments; --apim-layers picks other layers and --apim-names picks services by name.
+  for applications without BS traffic), in --apim-environments (PROD; DESA requests are test traffic, for a one-off
+  check); --apim-layers picks other layers and --apim-names picks services by name.
   Every APIM row carries apim_layer.
 
 Outputs (in --output-dir):
@@ -242,13 +243,16 @@ def main():
     parser.add_argument("--clusters", default="", help="Comma-separated cluster names. Default: every cluster in --environments")
     parser.add_argument("--apim-names", default="",
                         help="Comma-separated APIM name fragments; overrides --apim-layers")
+    parser.add_argument("--apim-environments", default="PROD",
+                        help="Environments of the APIM services measured. DESA requests are test traffic: a one-off "
+                             "check of activity, never added to PROD. Default: %(default)s")
     parser.add_argument("--apim-layers", default=",".join(aa.TRAFFIC_LAYERS),
                         help="Comma-separated APIM layers to measure (BS, UX, CORE, OPEN_BANKING, YAPE). Default: %(default)s")
     parser.add_argument("--skip-aks", action="store_true")
     parser.add_argument("--skip-apim", action="store_true")
     parser.add_argument("--chunk-days", type=int, default=31, help="Days per AKS metrics call (hourly points)")
     parser.add_argument("--apim-chunk-days", type=int, default=2, help="Days per APIM metrics call (5-minute points)")
-    parser.add_argument("--top", type=int, default=1000, help="Max APIs per APIM metrics call")
+    parser.add_argument("--top", type=int, default=2000, help="Max APIs per APIM metrics call")
     parser.add_argument("--cooldown", type=int, default=300,
                         help="Seconds a Container App replica stays up after the last request (scale rule cooldown)")
     parser.set_defaults(arm_rps=2.0, workers=2)
@@ -270,10 +274,11 @@ def main():
                 or (not wanted_clusters and (environments is None or row["environment"] in environments))]
     names = [name.strip().lower() for name in args.apim_names.split(",") if name.strip()]
     layers = {layer.strip().upper() for layer in args.apim_layers.split(",") if layer.strip()}
+    apim_environments = {item.strip().upper() for item in args.apim_environments.split(",") if item.strip()} or None
     layer_of = {row["name"]: row.get("apim_layer") or aa.apim_layer(row["name"], row.get("custom_domains")) for row in services}
     services = [row for row in services
                 if (names and any(name in row["name"].lower() for name in names))
-                or (not names and (environments is None or row["environment"] in environments)
+                or (not names and (apim_environments is None or row["environment"] in apim_environments)
                     and layer_of[row["name"]] in layers)]
 
     ctx = azure.AzureContext(args)

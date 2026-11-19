@@ -117,7 +117,10 @@ python aks-aca/src/aa_deck_exec.py
    Open Banking (`apimeu2opbk*`) and Yape (`apimeu2yape*`) run their own. `aa_metrics.py` measures all five by
    default. Each application's traffic comes from one layer, the first with traffic in this order: BS, UX, Open
    Banking, Yape, Core. Layers are never added, since a call goes on from one gateway to the next; Core is internal
-   and only stands in for applications with traffic nowhere else. `--apim-names` still picks services
+   and only stands in for applications with traffic nowhere else. An application without PROD traffic is
+   `INSUFFICIENT_DATA`, out of the migration list; its reason says whether DESA runs microservices that PROD does not
+   have yet (from the export). `--apim-environments PROD,DESA` on both scripts adds DESA test requests as a one-off
+   check; it is not part of the monthly run (~3,600 more APIs). `--apim-names` still picks services
    by name for a smoke test.
 3. `aa_metrics.py` next: platform metrics are kept for 93 days, so the last full month is always
    available. Windows that return more than 8 MB are split automatically.

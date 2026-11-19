@@ -444,7 +444,7 @@ def build_apim(ctx, services, args, known_codes, resource_codes):
                         "id": row["id"]})
         service_rows.append(service)
     names = {item.strip().lower() for item in args.apim_names.split(",") if item.strip()}
-    environments = aa.wanted_environments(args)
+    environments = {item.strip().upper() for item in args.apim_environments.split(",") if item.strip()} or None
     selected = [row for row in service_rows
                 if (names and any(name in row["name"].lower() for name in names))
                 or (not names and (environments is None or row["environment"] in environments))]
@@ -481,7 +481,10 @@ def main():
     aa.add_common_arguments(parser)
     parser.add_argument("--apim-names", default="",
                         help="Comma-separated name fragments of the APIM services whose APIs are listed "
-                             "(for example 'bs,core'). Default: every APIM in --environments")
+                             "(for example 'bs,core'). Default: every APIM in --apim-environments")
+    parser.add_argument("--apim-environments", default="PROD",
+                        help="Environments of the APIM services whose APIs are listed (DESA for a one-off check of "
+                             "test activity). Default: %(default)s")
     parser.add_argument("--include-poc", action="store_true",
                         help="Keep resources in POC subscriptions (left out by default)")
     parser.add_argument("--measurement-month", default="",

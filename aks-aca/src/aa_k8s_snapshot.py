@@ -51,7 +51,10 @@ One APIM layer per application (traffic_layer): the first of BS, UX, Open Bankin
 month; layers are never added, since a call goes on from one gateway to the next. traffic_status says why an
 application has no traffic: ZERO_IN_MONTH (APIs on a measured APIM, no requests), LAYER_NOT_MEASURED (APIs only on
 layers the metrics did not cover) or NO_APIM_API; traffic_note adds what the data shows (new cluster, only event
-consumers, own ingress load balancer, no microservice running).
+consumers, own ingress load balancer, no microservice running). An application without PROD traffic gets adt_runtime
+INSUFFICIENT_DATA, whose reason adds its DESA microservices (export) and, when the DESA APIM was measured
+(--apim-environments PROD,DESA in aa_inventory.py and aa_metrics.py, a one-off check), desa_requests_month: test
+traffic, never added to PROD.
 peak_tps_upper_bound adds each API's 5-minute peak, so it is an upper bound;
 busiest_hour_tps adds the APIs hour by hour (average weekday or weekend profile of the month) and is what the
 100 TPS rule uses. busiest_hour says which hour it is (day type and Lima hour); busiest_office_hour_tps and
@@ -593,14 +596,23 @@ def app_traffic(apis, monthly, profile, by_namespace):
     AKS-backed APIs, and the layers the metrics cover, for traffic_status."""
     if apis and "apim_layer" not in apis[0]:
         raise SystemExit("apim_apis.csv has no apim_layer column: run aa_inventory.py again")
+    aks_apis = [row for row in apis if (row.get("backend_platform") or aa.backend_platform(row.get("backend_host"))) == "AKS"]
     api_info = {(row["apim"], row["api_id"]): (api_code(row, by_namespace), row["apim_layer"])
-                for row in apis if (row.get("backend_platform") or aa.backend_platform(row.get("backend_host"))) == "AKS"}
+                for row in aks_apis if row.get("apim_environment", "PROD") == "PROD"}
+    desa_codes = {(row["apim"], row["api_id"]): row.get("backend_cod_app") or ""
+                  for row in aks_apis if row.get("apim_environment") == "DESA"}
     presence = defaultdict(set)
     for code, layer in api_info.values():
         if code:
             presence[code].add(layer)
     measured_layers = {api_info[key][1] for key in ((row["apim"], row["api_id"]) for row in monthly) if key in api_info}
     last = max((row["month"] for row in monthly), default="")
+    desa_requests = defaultdict(float)
+    for row in monthly:
+        code = desa_codes.get((row["apim"], row["api_id"]))
+        if code and row["month"] == last:
+            desa_requests[code] += to_float(row.get("requests")) or 0
+    desa_measured = any((row["apim"], row["api_id"]) in desa_codes for row in monthly)
     traffic = defaultdict(lambda: {"apis": 0, "requests": 0.0, "office": 0.0, "peak_5min": 0.0, "offhours_active": 0.0})
     for row in monthly:
         code, layer = api_info.get((row["apim"], row["api_id"]), ("", ""))
@@ -633,7 +645,8 @@ def app_traffic(apis, monthly, profile, by_namespace):
         if not entry["requests"]:
             continue
         out[code] = dict(traffic_fields(code, entry, hourly), month=last, traffic_layer=layer)
-    return out, {"presence": presence, "measured_layers": measured_layers}
+    return out, {"presence": presence, "measured_layers": measured_layers, "desa_measured": desa_measured,
+                 "desa_requests": {code: int(value) for code, value in desa_requests.items()}}
 
 
 def traffic_fields(code, entry, hourly):
@@ -679,7 +692,12 @@ def app_cost(cost, application_ids):
 
 
 def adt_runtime(app):
-    """Runtime the ADT_019 tree gives an application, with the reasons; see docs/adt-019-runtime.md."""
+    """Runtime the ADT_019 tree gives an application, with the reasons; see docs/adt-019-runtime.md.
+
+    An application without PROD traffic in the month is INSUFFICIENT_DATA: nothing measured to decide on, so it stays
+    out of the migration list (new cluster, still in development, or not integrated yet) until it has traffic."""
+    if app["traffic_status"] != "MEASURED":
+        return "INSUFFICIENT_DATA", insufficient_reason(app)
     if app["busiest_hour_tps"] != "" and app["busiest_hour_tps"] > ADT_MAX_TPS:
         return "AKS", f"Busiest hour above {ADT_MAX_TPS} TPS"
     expected = max(app["microservices"], app["microservices_projected"] or 0)
@@ -719,6 +737,20 @@ def microservice_names(deployments, cluster_table, environment):
         if code and row["environment"] == environment and row["microservice"] == "YES":
             out[code].add(base_name(row["deployment"]))
     return out
+
+
+def insufficient_reason(app):
+    reasons = [f"No PROD traffic in the month ({app['traffic_status']})"]
+    if app["traffic_note"]:
+        reasons.append(app["traffic_note"])
+    if app["microservices_new_in_desa"]:
+        reasons.append(f"DESA runs {app['microservices_desa']} microservices, {app['microservices_new_in_desa']} not in "
+                       "PROD yet: in development")
+    elif app["microservices_desa"] == 0:
+        reasons.append("No microservices in DESA either")
+    if app["desa_requests_month"] not in ("", 0):
+        reasons.append(f"{app['desa_requests_month']:,} test requests in DESA")
+    return "; ".join(reasons)
 
 
 NEW_CLUSTER_DAYS = 120
@@ -799,6 +831,7 @@ def application_rows(cluster_table, hpas, deployments, traffic, coverage, cost_b
                "possible_monolith": yes(sum(row["microservices"] for row in rows) == 1),
                **projection(prod_names.get(code, set()), desa_names.get(code)),
                "traffic_status": traffic_status(code, traffic, coverage),
+               "desa_requests_month": coverage["desa_requests"].get(code, 0) if coverage["desa_measured"] else "",
                "traffic_note": "" if code in traffic else note_of(notes.get(code, []), traffic_status(code, traffic, coverage),
                                                                   sum(row["microservices"] for row in rows)),
                **{field: traffic.get(code, {}).get(field, "") for field in (
