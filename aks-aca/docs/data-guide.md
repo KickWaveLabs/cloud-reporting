@@ -35,11 +35,11 @@ external backends. Pivot by `cod_app` to see one application across clusters, co
 
 | CSV | One row is | Main columns |
 |---|---|---|
-| `aks_clusters.csv` | A cluster | `name`, `environment` (from the tag, else the name suffix), `kubernetes_version`, `system_nodes` and `user_nodes` (nodes at the time of the run, not the minimum), `vm_sizes`, `upgrade_channel` (`none` = manual upgrades), `service_mesh`, `gitops_flux`, `container_insights`, plus one column per configuration property |
+| `aks_clusters.csv` | A cluster | `name`, `environment` (from the tag, else the name suffix), `created_at`, `measurement_month`, `existed_at_measurement` (YES = existed the whole month, PARTIAL = created during it, NO = created after it; the same three columns are on every runtime CSV below), `kubernetes_version`, `system_nodes` and `user_nodes` (nodes at the time of the run, not the minimum), `vm_sizes`, `upgrade_channel` (`none` = manual upgrades), `service_mesh`, `gitops_flux`, `container_insights`, plus one column per configuration property |
 | `aks_node_pools.csv` | A node pool | `cluster`, `mode` (System/User), `vm_size`, `count` (now), `autoscaling`, `min_count`, `max_count`, `zones`, `max_pods` |
 | `aca_environments.csv`, `aca_apps.csv` | A Container Apps environment or app | plan, workload profiles, min and max replicas, CPU and memory per replica |
-| `apim_services.csv` | An APIM instance | `sku`, `capacity`, `custom_domains` (tells BS from Core) |
-| `apim_apis.csv` | An API | `api_id`, `path`, `backend_host`, `backend_cod_app` (app code of the AKS ingress behind it) |
+| `apim_services.csv` | An APIM instance | `sku`, `capacity`, `custom_domains`, `apim_layer` (BS, CORE, UX, OPEN_BANKING, YAPE, OTHER; from the custom domain) |
+| `apim_apis.csv` | An API | `apim_layer`, `api_id`, `path`, `backend_host`, `backend_platform` (AKS, APP_SERVICE, CONTAINER_APPS, OPENSHIFT, APIM, OTHER, NONE), `backend_cod_app` (the owning application) and `cod_app_source` (HOST, HOST_NORMALIZED, K8S_NAMESPACE, BACKEND_RESOURCE, NAMING; rules in `aa_common.resolve_api_cod_app`) |
 | `app_service_plans.csv` | An App Service plan | `sku`, `tier`, `workers`, `os`, `sites`, `runtime` (`FUNCTIONS` for a Consumption, Premium or Flex Consumption plan, or one whose sites are all function apps; else `APP_SERVICE`) |
 | `app_services.csv` | A web app or function app | `type` (`WEB`/`FUNCTION`), `container` (`YES` = Docker image), `state`, `plan`, `plan_sku`, `plan_id` |
 
@@ -108,7 +108,7 @@ Insights (the period). Every row carries `cluster_id` and `cod_app`; clusters ar
 | `deployment_snapshot.csv` | A deployment | `microservice` (`YES` = an application deployment), `platform_component`, `layer`, `bia`, `capabilities`, `cpu_request_vcpu`, `mem_request_gib`, `has_hpa`, `ci_replicas_avg_office`, `ci_cpu_used_per_replica`, `ci_request_minus_export_vcpu`, `node_vcpu`, `node_mem_gib`, `pod_too_big_for_node`, `fits_aca_by_request` (request within 4 vCPU / 8 GiB; empty when the export has no request) |
 | `hpa_snapshot.csv` | An HPA | `microservice`, `hpa_min`, `hpa_max`, `replicas_now` (export day), `last_scale_time`, `days_since_last_scale`, `last_scale_bucket`, `ci_replicas_avg_office`, `ci_replicas_max_office`, `office_max_reached_hpa_max`, `behaviour_ci`, `no_scale_cause`, `replicas_needed_by_cpu`, `min_above_need` |
 | `capability_domains.csv` | A capability keyword | `namespaces_prod` (domains), `deployments_prod`, both in APPLICATION clusters |
-| `application_snapshot.csv` | A PROD application (app code of APPLICATION clusters) | `clusters`, `cost_month_usd`, `bia`, `microservices`, `hpas_not_scaling_share`, `apis_with_traffic`, `requests_month`, `office_share`, `peak_tps_upper_bound`, `busiest_hour_tps`, `busiest_hour` (day type and Lima hour), `busiest_hour_in_office`, `busiest_office_hour_tps`, `busiest_offhours_hour_tps`, `weekday_hours_with_traffic`, `offhours_active_share`, `batch_jobs`, `statefulsets`, `microservices_over_aca_size`, `possible_monolith`, `adt_runtime`, `adt_reason` |
+| `application_snapshot.csv` | A PROD application (app code of APPLICATION clusters) | `clusters`, `cost_month_usd`, `bia`, `microservices`, `microservices_desa`, `microservices_new_in_desa` and `microservices_projected` (PROD plus the DESA microservices not in PROD yet, compared by name without the version suffix; empty when the export has no DESA cluster for the application), `hpas_not_scaling_share`, `traffic_status` (MEASURED, ZERO_IN_MONTH, LAYER_NOT_MEASURED, NO_APIM_API), `traffic_layer` (BS or UX), `apis_with_traffic`, `requests_month`, `office_share`, `peak_tps_upper_bound`, `busiest_hour_tps`, `busiest_hour` (day type and Lima hour), `busiest_hour_in_office`, `busiest_office_hour_tps`, `busiest_offhours_hour_tps`, `weekday_hours_with_traffic`, `offhours_active_share`, `batch_jobs`, `statefulsets`, `microservices_over_aca_size`, `possible_monolith`, `adt_runtime`, `adt_reason` |
 
 #### Definitions
 
@@ -140,11 +140,15 @@ Only APPLICATION clusters enter the analysis. `cluster_overrides.csv` in the inp
 
 | `adt_runtime` | Rule |
 |---|---|
-| `AKS` | Busiest hour above 100 TPS; or traffic more than 10 weekday hours and more than 15 microservices; or traffic in more than 50% of the off-hours time (`offhours_active_share`: cannot scale to zero, and ADT_019 never keeps Container Apps warm 24/7); or a microservice requests more than 4 vCPU / 8 GiB |
-| `ACA_WITH_REVIEW` | Within the thresholds but with BIA ALTA or MUY ALTA, or no APIM traffic mapped. StatefulSets and batch jobs are listed in their columns but are not a criterion for now |
+| `AKS` | Busiest hour above 100 TPS; or traffic more than 10 weekday hours and more than 15 microservices (PROD or projected with DESA); or traffic in more than 50% of the off-hours time (`offhours_active_share`: cannot scale to zero, and ADT_019 never keeps Container Apps warm 24/7); or a microservice requests more than 4 vCPU / 8 GiB |
+| `ACA_WITH_REVIEW` | Within the thresholds but with BIA ALTA or MUY ALTA, no APIM traffic mapped, or 15 microservices or fewer in PROD and more once DESA is added (ADT_019 asks to review AKS when a Container Apps application passes 15). StatefulSets and batch jobs are listed in their columns but are not a criterion for now |
 | `ACA` | Within every threshold |
 
-- Traffic: each API maps to an app code through the AKS ingress host of its backend. `busiest_hour_tps` adds
+- Traffic: each API maps to an app code through its backend (`backend_cod_app`); a self-hosted gateway backend
+  (`<service>.<namespace>.svc.cluster.local`) takes the code of the PROD cluster that runs that namespace. Only
+  AKS backends count. One layer per application (`traffic_layer`): BS, or UX when the application has no BS
+  traffic in the month; never both, since a UX call goes on to BS. Core, Open Banking and Yape are not used.
+  `traffic_status` says why an application has no traffic. `busiest_hour_tps` adds
   the application's APIs hour by hour (average weekday or weekend profile of the month); `peak_tps_upper_bound`
   adds each API's 5-minute peak, so it overstates the real peak.
 - An hour has traffic when it carries at least 10% of the busiest hour; `weekday_hours_with_traffic` counts them.

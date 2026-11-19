@@ -8,8 +8,18 @@ fields (aadProfile, identity, servicePrincipalProfile, linuxProfile, windowsProf
 are never projected.
 
 App code (cod_app): the codApp tag first, then the naming convention (aksveu2coaap01 -> COAA);
-cod_app_evidence says which (TAG, NAME, or ENVIRONMENT for a Container App without either). An API's
-backend_cod_app comes from its AKS ingress host (azingressscrmeu2... -> SCRM).
+cod_app_evidence says which (TAG, NAME, or ENVIRONMENT for a Container App without either).
+
+APIs: apim_layer is the APIM's place in the north-south chain (BS, CORE, UX, OPEN_BANKING, YAPE, OTHER; from its
+custom domain). backend_platform says where the backend runs (AKS, APP_SERVICE, CONTAINER_APPS, OPENSHIFT, APIM,
+OTHER, NONE). backend_cod_app is the owning application and cod_app_source how it was found (HOST, HOST_NORMALIZED,
+K8S_NAMESPACE, BACKEND_RESOURCE, NAMING; see aa_common.resolve_api_cod_app). Only AKS backends count as AKS traffic.
+
+Runtimes (AKS clusters, Container Apps environments and apps, App Service plans and sites, including function apps)
+carry created_at (Lima date, from ARM createdTime: Resource Graph has no creation date for AKS or App Service),
+measurement_month (the month cost and metrics cover; --measurement-month, by default the last full month) and
+existed_at_measurement: YES (created before that month), PARTIAL (created during it), NO (created after it) or
+UNKNOWN. The inventory is current while cost and metrics are a past month: filter on this column.
 
 Outputs (in --output-dir):
   aks_clusters.csv       one row per cluster: version, tier, size, add-ons and the configuration
@@ -17,8 +27,8 @@ Outputs (in --output-dir):
   aks_node_pools.csv     one row per node pool: mode, VM size, count, autoscaling, zones, OS disk
   aca_environments.csv   Container Apps environments: workload profiles, VNet, zone redundancy
   aca_apps.csv           one row per app: environment, profile, min/max replicas, CPU/memory, scale rules
-  apim_services.csv      API Management services: SKU, capacity, region, custom domains (to tell BS from Core)
-  apim_apis.csv          APIs of the selected APIM services: id, path, backend host and its app code
+  apim_services.csv      API Management services: SKU, capacity, region, custom domains and layer
+  apim_apis.csv          APIs of the selected APIM services: id, path, layer, backend host, platform and app code
   app_service_plans.csv  App Service plans: SKU, tier, workers, OS, number of sites, runtime (APP_SERVICE
                          or FUNCTIONS: the deck card and cost owner type the plan counts under)
   app_services.csv       web and function apps: type, container or code, state, plan, its SKU and id
@@ -27,12 +37,17 @@ Outputs (in --output-dir):
 """
 
 from collections import Counter
+from datetime import datetime, timedelta
 from urllib.parse import urlparse
 
 import aa_common as aa
 
 azure = aa.azure
 APIM_API = "2022-08-01"
+RESOURCES_API = "2021-04-01"
+# Runtime types whose creation date is read; one ARM list per subscription covers all of them.
+RUNTIME_TYPES = ("Microsoft.ContainerService/managedClusters", "Microsoft.App/managedEnvironments",
+                 "Microsoft.App/containerApps", "Microsoft.App/jobs", "Microsoft.Web/serverFarms", "Microsoft.Web/sites")
 # App Service plan tiers that only host function apps: Consumption, Premium (Elastic) and Flex Consumption.
 FUNCTION_TIERS = ("Dynamic", "ElasticPremium", "FlexConsumption")
 
@@ -356,7 +371,67 @@ def plan_runtime(plan, site_types):
     return "APP_SERVICE"
 
 
-def build_apim(ctx, services, args):
+def created_times(ctx, subscription_ids):
+    """Resource id (lower case) -> createdTime (ISO, UTC) of every runtime, one ARM list per subscription."""
+    type_filter = " or ".join(f"resourceType eq '{kind}'" for kind in RUNTIME_TYPES)
+
+    def fetch(subscription_id):
+        items = ctx.try_arm("created-time", subscription_id, ctx.arm_list, f"/subscriptions/{subscription_id}/resources",
+                            RESOURCES_API, {"$filter": type_filter, "$expand": "createdTime"})
+        return {item["id"].lower(): item.get("createdTime", "") for item in items or []}
+
+    out = {}
+    for result in ctx.parallel(fetch, sorted(subscription_ids), label="created-time"):
+        out.update(result or {})
+    return out
+
+
+def measurement_window(month):
+    """(first day, last day) of a YYYY-MM month, or of the last full month when empty."""
+    if not month:
+        return aa.last_full_month()
+    first = datetime.strptime(month, "%Y-%m").date()
+    following = (first.replace(day=28) + timedelta(days=4)).replace(day=1)
+    return first, following - timedelta(days=1)
+
+
+def with_created(rows, created, window):
+    """Add created_at, measurement_month and existed_at_measurement right before the id column."""
+    first, last = window
+    month = first.strftime("%Y-%m")
+
+    def created_day(row):
+        value = created.get(row["id"].lower(), "")
+        if not value:
+            return None
+        moment = datetime.fromisoformat(value[:19] + "+00:00")
+        return moment.astimezone(aa.LIMA).date()
+
+    def existed(day):
+        if day is None:
+            return "UNKNOWN"
+        if day < first:
+            return "YES"
+        return "PARTIAL" if day <= last else "NO"
+
+    out = []
+    for row in rows:
+        day = created_day(row)
+        copy = {key: value for key, value in row.items() if key != "id"}
+        copy.update(created_at=day.isoformat() if day else "", measurement_month=month, existed_at_measurement=existed(day),
+                    id=row["id"])
+        out.append(copy)
+    return out
+
+
+def api_code_lookups(clusters, environments, apps, plans, sites):
+    """App codes of the inventory, and resource name -> code for App Service sites and Container Apps."""
+    known = {row["cod_app"].upper() for row in clusters + environments + apps + plans + sites if row.get("cod_app")}
+    resources = {row["name"].lower(): row["cod_app"] for row in sites + apps if row.get("cod_app")}
+    return known, resources
+
+
+def build_apim(ctx, services, args, known_codes, resource_codes):
     service_rows = []
     for row in services:
         service = base_row(ctx, row)
@@ -364,6 +439,7 @@ def build_apim(ctx, services, args):
                             if item.get("hostName") and not str(item.get("hostName", "")).endswith(".azure-api.net")})
         service.update({"sku": row.get("sku", ""), "capacity": row.get("capacity", ""),
                         "custom_domains": ";".join(hostnames),
+                        "apim_layer": aa.apim_layer(row["name"], ";".join(hostnames)),
                         "vnet_type": row.get("vnetType", ""), "additional_locations": row.get("additionalLocations") or 0,
                         "id": row["id"]})
         service_rows.append(service)
@@ -383,10 +459,13 @@ def build_apim(ctx, services, args):
         for api in apis or []:
             properties = api.get("properties", {})
             host = backend_host(properties.get("serviceUrl"))
+            code, source = aa.resolve_api_cod_app(host, api.get("name", ""), known_codes, resource_codes)
             rows.append({
-                "apim": service["name"], "apim_environment": service["environment"], "api_id": api.get("name", ""),
+                "apim": service["name"], "apim_environment": service["environment"], "apim_layer": service["apim_layer"],
+                "api_id": api.get("name", ""),
                 "display_name": properties.get("displayName", ""), "path": properties.get("path", ""),
-                "backend_host": host, "backend_cod_app": aa.backend_cod_app(host),
+                "backend_host": host, "backend_platform": aa.backend_platform(host),
+                "backend_cod_app": code, "cod_app_source": source,
                 "api_type": properties.get("type", "") or properties.get("apiType", ""),
                 "is_current": text(properties.get("isCurrent")), "apim_id": service["id"],
             })
@@ -405,6 +484,8 @@ def main():
                              "(for example 'bs,core'). Default: every APIM in --environments")
     parser.add_argument("--include-poc", action="store_true",
                         help="Keep resources in POC subscriptions (left out by default)")
+    parser.add_argument("--measurement-month", default="",
+                        help="Month cost and metrics cover (YYYY-MM), for existed_at_measurement. Default: last full month")
     args = parser.parse_args()
     azure.setup_logging(args.verbose)
 
@@ -424,8 +505,13 @@ def main():
             results[key] = kept
     clusters, pools = build_clusters(ctx, results["aks"], results["extensions"])
     environments, apps = build_aca(ctx, results["aca_environments"], results["aca_apps"])
-    services, apis = build_apim(ctx, results["apim"], args)
     plans, sites = build_app_service(ctx, results["app_service_plans"], results["app_services"])
+    services, apis = build_apim(ctx, results["apim"], args, *api_code_lookups(clusters, environments, apps, plans, sites))
+    window = measurement_window(args.measurement_month)
+    runtimes = clusters + environments + apps + plans + sites
+    created = {} if args.skip_arm else created_times(ctx, {row["subscription_id"] for row in runtimes})
+    clusters, environments, apps, plans, sites = (with_created(rows, created, window)
+                                                  for rows in (clusters, environments, apps, plans, sites))
 
     output = azure.Output(args.output_dir, args.delimiter)
     output.csv("aks_clusters.csv", clusters)
@@ -447,6 +533,13 @@ def main():
                            "custom_domains": row["custom_domains"]} for row in services],
         "apim_apis": dict(Counter(row["apim"] for row in apis)),
         "apim_apis_with_cod_app": sum(1 for row in apis if row["backend_cod_app"]),
+        "apim_apis_by_layer_and_platform": azure.count_by(apis, "apim_layer", "backend_platform"),
+        "apim_apis_by_cod_app_source": dict(Counter(row["cod_app_source"] or "NONE" for row in apis)),
+        "measurement_month": window[0].strftime("%Y-%m"),
+        "existed_at_measurement": {name: dict(Counter(row["existed_at_measurement"] for row in rows))
+                                   for name, rows in (("aks_clusters", clusters), ("aca_environments", environments),
+                                                      ("aca_apps", apps), ("app_service_plans", plans),
+                                                      ("app_services", sites))},
         "app_service_sites_by_environment": azure.count_by(sites, "environment", "type"),
         "cod_app_evidence": dict(Counter(row["cod_app_evidence"] for row in clusters + sites)),
         "excluded_poc_subscriptions": sorted(poc),

@@ -86,7 +86,7 @@ month (Lima), the same as Cost Management's "last month"; the scripts need no da
 
 ```bash
 python aks-aca/src/aa_inventory.py
-python aks-aca/src/aa_metrics.py --apim-names apigp01,apigp03,apigp05
+python aks-aca/src/aa_metrics.py
 python aks-aca/src/aa_container_insights.py
 python aks-aca/src/aa_cost.py
 python aks-aca/src/aa_prices.py
@@ -100,8 +100,8 @@ python aks-aca/src/aa_deck_exec.py
 
 | Step | Scope by default | Time on 2026-11-10 | Check |
 |---|---|---|---|
-| `aa_inventory.py` | Every visible subscription | 20 s | `inventory_errors.csv`; APIM `custom_domains` in `apim_services.csv` |
-| `aa_metrics.py` | PROD clusters; the APIM in `--apim-names` | ~60 min (AKS 15, APIM 45) | `metrics_errors.csv` |
+| `aa_inventory.py` | Every visible subscription; one ARM list per subscription with runtimes (creation date) | 40 s (2026-11-18) | `inventory_errors.csv`; `apim_layer` in `apim_services.csv`; `existed_at_measurement` and `apim_apis_by_cod_app_source` in `inventory_summary.json` |
+| `aa_metrics.py` | PROD clusters; the PROD APIM of the BS and UX layers (`--apim-layers`) | ~70 min (AKS 15, APIM BS 45, UX ~10 on 2026-11-18) | `metrics_errors.csv`; `apim_layers` in `metrics_summary.json` |
 | `aa_container_insights.py` | PROD clusters with the add-on | ~80 min | `ci_errors.csv`, `ci_coverage.csv` |
 | `aa_cost.py` | Every environment for AKS and ACA; PROD for App Service and Functions; `AmortizedCost` | ~10 min, plus one query per PROD subscription with App Service | `cost_errors.csv`; `app_service_subscriptions_queried` in `cost_summary.json` |
 | `aa_prices.py` | VM sizes in the inventory; eastus2, centralus | < 1 min | `queries_without_rows` in `prices_summary.json` |
@@ -111,9 +111,13 @@ python aks-aca/src/aa_deck_exec.py
 | `aa_workbook.py` | Everything above | ~30 s | Open in Excel and save once |
 
 1. `aa_inventory.py` first: the other scripts read its CSVs.
-2. Pick the APIM fragments from `custom_domains` in `apim_services.csv`: BS is `apibs.lima.bcp.com.pe`
-   (`apimeu2apigp01` and `apimeu2apigp05`, which took over BS traffic in October 2026), Core is
-   `apicr.lima.bcp.com.pe` (`apimeu2apigp03`). `apimeu2apigp02` is the UX layer and stays out.
+2. `apim_layer` in `apim_services.csv` places each APIM in the north-south chain (UX -> BS -> Core -> mainframe)
+   from its custom domain: BS is `apibs.lima.bcp.com.pe` (`apimeu2apigp01` and `apimeu2apigp05`, which took over
+   BS traffic in October 2026), UX is `apiux`/`apisux` (`apimeu2apigp02`), Core is `apicr` (`apimeu2apigp03`);
+   Open Banking (`apimeu2opbk*`) and Yape (`apimeu2yape*`) run their own. `aa_metrics.py` measures BS and UX by
+   default. Each application's traffic comes from BS, or from UX when it has no BS traffic; the two are never
+   added, since a UX call goes on to BS. Core is internal and is not measured. `--apim-names` still picks services
+   by name for a smoke test.
 3. `aa_metrics.py` next: platform metrics are kept for 93 days, so the last full month is always
    available. Windows that return more than 8 MB are split automatically.
 4. After the inventory, `aa_metrics.py`, `aa_container_insights.py`, `aa_cost.py` and `aa_prices.py` can
@@ -203,8 +207,12 @@ Container Insights; one stopped PROD cluster without metrics.
 - The free grant (180,000 vCPU-s, 360,000 GiB-s, 2 million requests) is per subscription and month,
   for the Consumption plan. Learn does not say whether it covers the Consumption profile of a
   workload-profiles environment.
-- Requests per microservice come from APIM per API. The API → microservice mapping uses the backend
-  host and is approximate.
+- Requests per microservice come from APIM per API. The API → application mapping uses the backend host
+  (`backend_cod_app` and `cod_app_source` in `apim_apis.csv`); only APIs whose `backend_platform` is AKS count as
+  AKS traffic, so APIs served by OpenShift or App Service are not added to an AKS application.
+- The inventory is current while cost and metrics cover a past month: `existed_at_measurement` on every runtime
+  (AKS, Container Apps, App Service, Functions) says whether it existed for the whole month (YES), part of it
+  (PARTIAL) or not yet (NO).
 - Off-hours wake-ups are estimated from 5-minute buckets: a request inside a bucket counts the whole
   bucket as active, plus a 300 s cooldown per run.
 - Office hours do not exclude public holidays.

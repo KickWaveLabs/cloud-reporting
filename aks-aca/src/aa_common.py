@@ -89,6 +89,107 @@ def backend_cod_app(host):
     return match.group(1).upper() if match else ""
 
 
+# APIM layers of the north-south chain: a user call enters UX, UX calls BS, BS calls Core, Core calls the mainframe.
+# Open Banking and Yape run their own APIM. The layer comes from the gateway's custom domain (apibs.lima.bcp.com.pe).
+APIM_LAYER_DOMAINS = (("apibs", "BS"), ("apicr", "CORE"), ("apiux", "UX"), ("apisux", "UX"))
+# Layers that measure an application's traffic, in order of preference. BS is the business transaction; UX only
+# stands in for applications without BS traffic and is never added to BS, since a UX call goes on to BS and would
+# count twice. Core is internal (BS -> Core) and is not measured.
+TRAFFIC_LAYERS = ("BS", "UX")
+APP_SERVICE_SUFFIX, CONTAINER_APPS_SUFFIX = ".azurewebsites.net", ".azurecontainerapps.io"
+
+
+def apim_layer(name, custom_domains):
+    """BS, CORE, UX, OPEN_BANKING, YAPE or OTHER for an APIM service."""
+    domains = [domain for domain in str(custom_domains or "").lower().split(";") if domain]
+    for prefix, layer in APIM_LAYER_DOMAINS:
+        if any(domain.split(".")[0].startswith(prefix) for domain in domains):
+            return layer
+    text = str(name or "").lower() + ";" + ";".join(domains)
+    if "opbk" in text or "apisbcp" in text or "openbanking" in text:
+        return "OPEN_BANKING"
+    return "YAPE" if "yape" in text else "OTHER"
+
+
+def backend_platform(host):
+    """Where the backend of an API runs, from its host."""
+    host = str(host or "").lower()
+    if not host:
+        return "NONE"
+    if host.startswith("azingress") or host.endswith(".svc.cluster.local"):
+        return "AKS"
+    if host.endswith(APP_SERVICE_SUFFIX):
+        return "APP_SERVICE"
+    if host.endswith(CONTAINER_APPS_SUFFIX):
+        return "CONTAINER_APPS"
+    if ".apps.ocp" in host:
+        return "OPENSHIFT"
+    # A gateway calling another gateway (UX -> apibs.lima.bcp.com.pe): the traffic is counted on that APIM.
+    if host.endswith(".azure-api.net") or host.split(".")[0].startswith(tuple(prefix for prefix, _ in APIM_LAYER_DOMAINS)):
+        return "APIM"
+    return "OTHER"
+
+
+NAMING_COD_APP = re.compile(r"^(?:bs-|cr-|ux-|business-)?([a-z0-9]{4})-")
+
+
+def resolve_api_cod_app(host, api_id, known_codes, resource_codes):
+    """(code, cod_app_source) of an API, from its backend host first and its name last.
+
+    HOST             the ingress regex of backend_cod_app (azingressscrmeu2... -> SCRM)
+    HOST_NORMALIZED  an ingress host whose code starts like a region or follows one (azingresscb2ceu201 -> CB2C,
+                     azingresseu2yape -> YAPE); accepted only for an app code of the inventory
+    K8S_NAMESPACE    <service>.<namespace>.svc.cluster.local, the namespace being an app code of the inventory. A
+                     namespace that is a domain (mbbk, nhbk run in BADI clusters) stays empty here; aa_k8s_snapshot.py
+                     maps it to its cluster through Container Insights
+    BACKEND_RESOURCE the App Service or Container App the host names, with that resource's own code
+    NAMING           bs-srec-..., business-ntlc-... in the API id or the host's first label; an app code of the
+                     inventory, used only when the host gives nothing and never for an AKS backend (bs-auth-... is
+                     BSEG's API, channel-mfcc-...mbbk.svc.cluster.local runs in a BADI cluster)
+    known_codes: app codes of the inventory (upper case). resource_codes: resource name (lower case) -> code.
+    """
+    host = str(host or "").lower()
+    steps = (("HOST", lambda: backend_cod_app(host)),
+             ("HOST_NORMALIZED", lambda: normalized_ingress_code(host, known_codes)),
+             ("K8S_NAMESPACE", lambda: namespace_code(host, known_codes)),
+             ("BACKEND_RESOURCE", lambda: backend_resource_code(host, resource_codes)),
+             ("NAMING", lambda: "" if backend_platform(host) == "AKS"
+              else naming_code((api_id, host.split(".")[0]), known_codes)))
+    for source, step in steps:
+        code = step()
+        if code:
+            return code, source
+    return "", ""
+
+
+def normalized_ingress_code(host, known_codes):
+    if not host.startswith("azingress"):
+        return ""
+    rest = host[len("azingress"):]
+    candidates = [rest[:4]] + ([rest[3:7]] if re.match(r"[a-z]{2}\d", rest) else [])
+    return next((value.upper() for value in candidates if value.upper() in known_codes), "")
+
+
+def namespace_code(host, known_codes):
+    match = re.match(r"^[a-z0-9-]+\.([a-z0-9-]+)\.svc\.cluster\.local$", host)
+    return match.group(1).upper() if match and match.group(1).upper() in known_codes else ""
+
+
+def backend_resource_code(host, resource_codes):
+    name = host.split(".")[0]
+    if host.endswith(APP_SERVICE_SUFFIX):
+        return resource_codes.get(name) or azure.cod_app_from_name(name)
+    return resource_codes.get(name, "") if host.endswith(CONTAINER_APPS_SUFFIX) else ""
+
+
+def naming_code(texts, known_codes):
+    for text in texts:
+        match = NAMING_COD_APP.match(str(text or "").lower())
+        if match and match.group(1).upper() in known_codes:
+            return match.group(1).upper()
+    return ""
+
+
 def cluster_ids_by_name(clusters):
     """Cluster name (lowercase) -> list of resource ids (lowercase), from aks_clusters.csv rows.
 
@@ -173,13 +274,19 @@ def cod_app_by_api(apis):
 
 def with_cod_app(rows, after, code_of):
     """Copy rows adding a cod_app column right after column `after`; code_of(row) returns the code."""
+    return insert_column(rows, after, "cod_app", code_of)
+
+
+def insert_column(rows, after, name, value_of):
+    """Copy rows adding column `name` right after column `after` (at the end if absent); value_of(row) gives it."""
     result = []
     for row in rows:
         copy = {}
         for key, value in row.items():
             copy[key] = value
             if key == after:
-                copy["cod_app"] = code_of(row)
+                copy[name] = value_of(row)
+        copy.setdefault(name, value_of(row))
         result.append(copy)
     return result
 

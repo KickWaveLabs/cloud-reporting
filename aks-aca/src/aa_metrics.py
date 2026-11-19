@@ -11,6 +11,9 @@ AKS (per cluster and node pool, hourly points):
 APIM (per API, 5-minute points):
   Requests (Total), split by ApiId. The 5-minute buckets give the off-hours wake-ups that Container
   Apps would bill: each run of buckets with traffic, plus the scale-to-zero cooldown.
+  By default only the APIM of the layers in aa_common.TRAFFIC_LAYERS (BS, then UX for applications without BS
+  traffic), in --environments; --apim-layers picks other layers and --apim-names picks services by name.
+  Every APIM row carries apim_layer.
 
 Outputs (in --output-dir):
   aks_usage_monthly.csv   cluster x pool x month: nodes, allocatable, used (office avg, off-hours avg,
@@ -237,7 +240,10 @@ def main():
     parser.add_argument("--start", default=None, help="First day (YYYY-MM-DD, Lima). Default: first day of last month")
     parser.add_argument("--end", default=None, help="Last day (YYYY-MM-DD, Lima). Default: last day of last month")
     parser.add_argument("--clusters", default="", help="Comma-separated cluster names. Default: every cluster in --environments")
-    parser.add_argument("--apim-names", default="", help="Comma-separated APIM name fragments. Default: APIM in --environments")
+    parser.add_argument("--apim-names", default="",
+                        help="Comma-separated APIM name fragments; overrides --apim-layers")
+    parser.add_argument("--apim-layers", default=",".join(aa.TRAFFIC_LAYERS),
+                        help="Comma-separated APIM layers to measure (BS, UX, CORE, OPEN_BANKING, YAPE). Default: %(default)s")
     parser.add_argument("--skip-aks", action="store_true")
     parser.add_argument("--skip-apim", action="store_true")
     parser.add_argument("--chunk-days", type=int, default=31, help="Days per AKS metrics call (hourly points)")
@@ -263,9 +269,12 @@ def main():
                 if (wanted_clusters and row["name"].lower() in wanted_clusters)
                 or (not wanted_clusters and (environments is None or row["environment"] in environments))]
     names = [name.strip().lower() for name in args.apim_names.split(",") if name.strip()]
+    layers = {layer.strip().upper() for layer in args.apim_layers.split(",") if layer.strip()}
+    layer_of = {row["name"]: row.get("apim_layer") or aa.apim_layer(row["name"], row.get("custom_domains")) for row in services}
     services = [row for row in services
                 if (names and any(name in row["name"].lower() for name in names))
-                or (not names and (environments is None or row["environment"] in environments))]
+                or (not names and (environments is None or row["environment"] in environments)
+                    and layer_of[row["name"]] in layers)]
 
     ctx = azure.AzureContext(args)
     azure.LOG.info("Window %s to %s (UTC); %d clusters, %d APIM", aa.iso_z(start), aa.iso_z(end), len(clusters), len(services))
@@ -290,8 +299,11 @@ def main():
                 api_rows.extend(state.rows(service["name"], api_id, calendar))
                 profile_rows.extend(state.profile_rows(service["name"], api_id, days))
         api_code = lambda row: api_codes.get((row["apim"], row["api_id"]), "")
-        output.csv("apim_api_monthly.csv", aa.with_cod_app(api_rows, "api_id", api_code))
-        output.csv("apim_hourly_profile.csv", aa.with_cod_app(profile_rows, "api_id", api_code))
+        layer = lambda row: layer_of.get(row["apim"], "")
+        output.csv("apim_api_monthly.csv", aa.with_cod_app(aa.insert_column(api_rows, "apim", "apim_layer", layer),
+                                                           "api_id", api_code))
+        output.csv("apim_hourly_profile.csv", aa.with_cod_app(aa.insert_column(profile_rows, "apim", "apim_layer", layer),
+                                                              "api_id", api_code))
 
     output.csv("metrics_errors.csv", ctx.errors.rows, azure.ErrorLog.FIELDS)
     output.json("metrics_summary.json", azure.run_metadata(ctx, {
@@ -300,6 +312,7 @@ def main():
         "cooldown_seconds": args.cooldown,
         "clusters": [row["name"] for row in clusters],
         "apim": [row["name"] for row in services],
+        "apim_layers": {row["name"]: layer_of[row["name"]] for row in services},
         "aks_rows": len(usage_rows), "apim_api_rows": len(api_rows),
     }))
     print(json.dumps({"aks_rows": len(usage_rows), "apim_api_rows": len(api_rows), "errors": len(ctx.errors.rows)}))

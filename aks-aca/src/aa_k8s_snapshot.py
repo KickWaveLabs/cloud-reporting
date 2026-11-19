@@ -44,8 +44,13 @@ Time without scaling: days from lastScaleTime to the export day. With min = max 
 set, not a scaling event, so no_scale_cause separates FIXED_MIN_MAX from MIN_ABOVE_NEED (the minimum exceeds
 what the CPU needs) and LOAD_BELOW_TARGET (the load never reaches the HPA target).
 
-Traffic per application: each APIM API maps to an app code through the AKS ingress host of its backend
-(aa_common.backend_cod_app). peak_tps_upper_bound adds each API's 5-minute peak, so it is an upper bound;
+Traffic per application: each APIM API maps to an app code through its backend (backend_cod_app in apim_apis.csv,
+see aa_inventory.py); a <service>.<namespace>.svc.cluster.local backend (self-hosted gateway) takes the code of the
+PROD cluster that runs that namespace in Container Insights. Only APIs whose backend runs on AKS count. One APIM layer per application: BS when it has BS
+traffic in the month, else UX (traffic_layer); the two are never added, since a UX call goes on to BS. Core, Open
+Banking and Yape are not used. traffic_status says why an application has no traffic: ZERO_IN_MONTH (APIs on BS or UX,
+no requests), LAYER_NOT_MEASURED (APIs only on other layers, or on a layer the metrics did not cover) or NO_APIM_API.
+peak_tps_upper_bound adds each API's 5-minute peak, so it is an upper bound;
 busiest_hour_tps adds the APIs hour by hour (average weekday or weekend profile of the month) and is what the
 100 TPS rule uses. busiest_hour says which hour it is (day type and Lima hour); busiest_office_hour_tps and
 busiest_offhours_hour_tps split it between the ADT_019 office window (weekdays 8:00-19:59) and the rest.
@@ -60,9 +65,11 @@ Outputs (in --output-dir):
   cluster_snapshot.csv     one row per cluster (inventory and export): category, microservices, namespaces, HPAs
   capability_domains.csv   per capability keyword (notification, token, login...): PROD namespaces and
                            deployments of APPLICATION clusters whose name carries it
-  application_snapshot.csv one row per PROD application (app code of APPLICATION clusters): microservices, cost of
-                           the last month, APIM traffic (TPS, hours with traffic), HPAs that do not scale, and the
-                           runtime the ADT_019 tree gives it (AKS, ACA, ACA_WITH_REVIEW) with the reason
+  application_snapshot.csv one row per PROD application (app code of APPLICATION clusters): microservices (and the
+                           projection with DESA: PROD plus the DESA microservices not in PROD yet, by name without
+                           version; it feeds the more-than-15 rules), cost of the last month, APIM traffic (layer, TPS, hours with traffic), HPAs
+                           that do not scale, and the runtime the ADT_019 tree gives it (AKS, ACA, ACA_WITH_REVIEW)
+                           with the reason
   snapshot_summary.json    input files, snapshot date, categories, rows without a match and counts per flag (PROD)
 and, in --history-dir (results/aa-history, never cleared), export_history.csv: one row per export day with the
 PROD clusters by category and the PROD microservices of APPLICATION clusters.
@@ -74,6 +81,7 @@ import glob
 import io
 import math
 import os
+import re
 import statistics
 from calendar import monthrange
 from collections import Counter, defaultdict
@@ -551,18 +559,52 @@ def cluster_rows(deployments, hpas, inventory, workloads, ids_by_name, clusters_
                                           value["cluster"]))
 
 
-def app_traffic(apis, monthly, profile):
-    """Per app code, last month: APIs with traffic, requests, office share, peak TPS (sum of each API's 5-minute
-    peak, an upper bound), busiest-hour TPS (the APIs added hour by hour) and weekday hours with traffic."""
-    codes = {(row["apim"], row["api_id"]): row.get("backend_cod_app") or aa.backend_cod_app(row.get("backend_host"))
-             for row in apis}
+def namespace_codes(workloads, inventory, ids_by_name):
+    """PROD namespace -> app code of the clusters that run it (Container Insights), when they share one code."""
+    codes = defaultdict(set)
+    for row in workloads:
+        if row["environment"] != "PROD" or aa.is_platform_namespace(row["namespace"]):
+            continue
+        cluster = inventory.get(aa.cluster_id_of(row, ids_by_name), {})
+        codes[row["namespace"].lower()].add(cluster.get("cod_app") or azure.cod_app_from_name(row["cluster"]))
+    return {namespace: next(iter(values)) for namespace, values in codes.items() if len(values) == 1 and "" not in values}
+
+
+def api_code(row, by_namespace):
+    """App code of an API: the cluster that runs the namespace of a .svc.cluster.local backend, else the inventory's."""
+    host = str(row.get("backend_host") or "").lower()
+    if host.endswith(".svc.cluster.local"):
+        namespace = host.split(".")[1]
+        if by_namespace.get(namespace):
+            return by_namespace[namespace]
+    return row.get("backend_cod_app") or ""
+
+
+def app_traffic(apis, monthly, profile, by_namespace):
+    """Per app code, last month, from one APIM layer: BS when the app has BS traffic that month, else UX
+    (aa_common.TRAFFIC_LAYERS). UX is never added to BS: a UX call goes on to BS and would count twice. Core, Open
+    Banking and Yape are not used, and only APIs whose backend runs on AKS count.
+
+    Returns (traffic, presence): traffic per app code with traffic (APIs with traffic, requests, office share, peak TPS
+    as the sum of each API's 5-minute peak (an upper bound), busiest-hour TPS (the APIs added hour by hour), weekday
+    hours with traffic, off-hours active share and the layer used); presence is app code -> layers where it has
+    AKS-backed APIs, and the layers the metrics cover, for traffic_status."""
+    if apis and "apim_layer" not in apis[0]:
+        raise SystemExit("apim_apis.csv has no apim_layer column: run aa_inventory.py again")
+    api_info = {(row["apim"], row["api_id"]): (api_code(row, by_namespace), row["apim_layer"])
+                for row in apis if (row.get("backend_platform") or aa.backend_platform(row.get("backend_host"))) == "AKS"}
+    presence = defaultdict(set)
+    for code, layer in api_info.values():
+        if code:
+            presence[code].add(layer)
+    measured_layers = {api_info[key][1] for key in ((row["apim"], row["api_id"]) for row in monthly) if key in api_info}
     last = max((row["month"] for row in monthly), default="")
     traffic = defaultdict(lambda: {"apis": 0, "requests": 0.0, "office": 0.0, "peak_5min": 0.0, "offhours_active": 0.0})
     for row in monthly:
-        code = codes.get((row["apim"], row["api_id"]))
-        if row["month"] != last or not code:
+        code, layer = api_info.get((row["apim"], row["api_id"]), ("", ""))
+        if row["month"] != last or not code or layer not in aa.TRAFFIC_LAYERS:
             continue
-        entry = traffic[code]
+        entry = traffic[(code, layer)]
         entry["apis"] += 1
         entry["requests"] += to_float(row.get("requests")) or 0
         entry["office"] += to_float(row.get("office_requests")) or 0
@@ -574,32 +616,54 @@ def app_traffic(apis, monthly, profile):
         if offhours_buckets > 0:
             entry["offhours_active"] = max(entry["offhours_active"],
                                            (to_float(row.get("offhours_active_buckets")) or 0) / offhours_buckets)
+    chosen = {}
+    for code in {code for code, _ in traffic}:
+        chosen[code] = next(layer for layer in aa.TRAFFIC_LAYERS
+                            if layer == aa.TRAFFIC_LAYERS[-1] or traffic.get((code, layer), {}).get("requests"))
     hourly = defaultdict(float)
     for row in profile:
-        code = codes.get((row["apim"], row["api_id"]))
-        if code:
+        code, layer = api_info.get((row["apim"], row["api_id"]), ("", ""))
+        if code and chosen.get(code) == layer:
             hourly[(code, row["day_type"], int(row["hour"]))] += to_float(row.get("avg_requests_per_hour")) or 0
     out = {}
-    for code, entry in traffic.items():
-        weekday = [hourly.get((code, "weekday", hour), 0.0) for hour in range(24)]
-        busiest = max(weekday + [hourly.get((code, "weekend", hour), 0.0) for hour in range(24)])
-        office = {("weekday", hour): weekday[hour] for hour in range(aa.OFFICE_START_HOUR, aa.OFFICE_END_HOUR)}
-        offhours = {(day_type, hour): hourly.get((code, day_type, hour), 0.0)
-                    for day_type in ("weekday", "weekend") for hour in range(24)
-                    if (day_type, hour) not in office}
-        top = max({**office, **offhours}.items(), key=lambda item: item[1])[0]
-        out[code] = {"month": last, "apis_with_traffic": entry["apis"], "requests_month": int(entry["requests"]),
-                     "office_share": round(entry["office"] / entry["requests"], 3) if entry["requests"] else "",
-                     "peak_tps_upper_bound": round(entry["peak_5min"] / 300, 1),
-                     "busiest_hour_tps": round(busiest / 3600, 3),
-                     "busiest_hour": f"{top[0]} {top[1]:02d}:00" if busiest else "",
-                     "busiest_hour_in_office": ("YES" if top in office else "NO") if busiest else "",
-                     "busiest_office_hour_tps": round(max(office.values()) / 3600, 3),
-                     "busiest_offhours_hour_tps": round(max(offhours.values()) / 3600, 3),
-                     "weekday_hours_with_traffic": sum(value >= ACTIVE_HOUR_SHARE * busiest for value in weekday)
-                     if busiest else 0,
-                     "offhours_active_share": round(entry["offhours_active"], 3)}
-    return out
+    for code, layer in chosen.items():
+        entry = traffic[(code, layer)]
+        if not entry["requests"]:
+            continue
+        out[code] = dict(traffic_fields(code, entry, hourly), month=last, traffic_layer=layer)
+    return out, {"presence": presence, "measured_layers": measured_layers}
+
+
+def traffic_fields(code, entry, hourly):
+    weekday = [hourly.get((code, "weekday", hour), 0.0) for hour in range(24)]
+    busiest = max(weekday + [hourly.get((code, "weekend", hour), 0.0) for hour in range(24)])
+    office = {("weekday", hour): weekday[hour] for hour in range(aa.OFFICE_START_HOUR, aa.OFFICE_END_HOUR)}
+    offhours = {(day_type, hour): hourly.get((code, day_type, hour), 0.0)
+                for day_type in ("weekday", "weekend") for hour in range(24)
+                if (day_type, hour) not in office}
+    top = max({**office, **offhours}.items(), key=lambda item: item[1])[0]
+    return {"apis_with_traffic": entry["apis"], "requests_month": int(entry["requests"]),
+            "office_share": round(entry["office"] / entry["requests"], 3) if entry["requests"] else "",
+            "peak_tps_upper_bound": round(entry["peak_5min"] / 300, 1),
+            "busiest_hour_tps": round(busiest / 3600, 3),
+            "busiest_hour": f"{top[0]} {top[1]:02d}:00" if busiest else "",
+            "busiest_hour_in_office": ("YES" if top in office else "NO") if busiest else "",
+            "busiest_office_hour_tps": round(max(office.values()) / 3600, 3),
+            "busiest_offhours_hour_tps": round(max(offhours.values()) / 3600, 3),
+            "weekday_hours_with_traffic": sum(value >= ACTIVE_HOUR_SHARE * busiest for value in weekday)
+            if busiest else 0,
+            "offhours_active_share": round(entry["offhours_active"], 3)}
+
+
+def traffic_status(code, traffic, coverage):
+    """MEASURED; ZERO_IN_MONTH (APIs on a measured BS or UX APIM, no requests); LAYER_NOT_MEASURED (APIs only on
+    layers not used or not measured: Core, Open Banking, Yape); NO_APIM_API (no AKS-backed API on any APIM)."""
+    if code in traffic:
+        return "MEASURED"
+    layers = coverage["presence"].get(code, set())
+    if layers & coverage["measured_layers"] & set(aa.TRAFFIC_LAYERS):
+        return "ZERO_IN_MONTH"
+    return "LAYER_NOT_MEASURED" if layers else "NO_APIM_API"
 
 
 def app_cost(cost, application_ids):
@@ -616,9 +680,12 @@ def adt_runtime(app):
     """Runtime the ADT_019 tree gives an application, with the reasons; see docs/adt-019-runtime.md."""
     if app["busiest_hour_tps"] != "" and app["busiest_hour_tps"] > ADT_MAX_TPS:
         return "AKS", f"Busiest hour above {ADT_MAX_TPS} TPS"
+    expected = max(app["microservices"], app["microservices_projected"] or 0)
     if (app["weekday_hours_with_traffic"] != "" and app["weekday_hours_with_traffic"] > ADT_MAX_ACTIVE_HOURS
-            and app["microservices"] > ADT_MAX_MICROSERVICES):
-        return "AKS", f"Traffic more than {ADT_MAX_ACTIVE_HOURS} h a day and more than {ADT_MAX_MICROSERVICES} microservices"
+            and expected > ADT_MAX_MICROSERVICES):
+        grows = "" if app["microservices"] > ADT_MAX_MICROSERVICES else f" (expected {expected} with DESA)"
+        return "AKS", (f"Traffic more than {ADT_MAX_ACTIVE_HOURS} h a day and more than {ADT_MAX_MICROSERVICES} "
+                       f"microservices{grows}")
     if app["offhours_active_share"] != "" and app["offhours_active_share"] > OFFHOURS_ACTIVE_MAX:
         return "AKS", (f"Traffic in {app['offhours_active_share']:.0%} of the off-hours time: cannot scale to zero "
                        "(never warm 24/7)")
@@ -630,15 +697,45 @@ def adt_runtime(app):
         reasons.append("Critical (BIA ALTA or MUY ALTA)")
     if app["busiest_hour_tps"] == "":
         reasons.append("No APIM traffic mapped to the application")
+    if expected > ADT_MAX_MICROSERVICES >= app["microservices"]:
+        reasons.append(f"Grows to {expected} microservices with DESA: review AKS")
     return ("ACA_WITH_REVIEW", "; ".join(reasons)) if reasons else ("ACA", "Within every ADT_019 threshold")
 
 
-def application_rows(cluster_table, hpas, traffic, cost_by_cluster):
+def base_name(deployment):
+    """Deployment name without its version suffix: channel-x-v1 and channel-x-v2 are one microservice."""
+    return re.sub(r"(-v\d+)+$", "", str(deployment or "").lower())
+
+
+def microservice_names(deployments, cluster_table, environment):
+    """App code -> base names of the microservices in that environment's non-infrastructure clusters of the export."""
+    code_of = {row["cluster_id"] or "name:" + row["cluster"].lower(): row["cod_app"] or row["cluster"]
+               for row in cluster_table if row["environment"] == environment and row["category"] != aa.INFRASTRUCTURE}
+    out = defaultdict(set)
+    for row in deployments:
+        code = code_of.get(cluster_key(row))
+        if code and row["environment"] == environment and row["microservice"] == "YES":
+            out[code].add(base_name(row["deployment"]))
+    return out
+
+
+def projection(prod, desa):
+    """DESA microservices and the projection for PROD: PROD plus the DESA microservices not in PROD yet (by base
+    name). Empty when the export has no DESA cluster for the application."""
+    if desa is None:
+        return {"microservices_desa": "", "microservices_new_in_desa": "", "microservices_projected": ""}
+    return {"microservices_desa": len(desa), "microservices_new_in_desa": len(desa - prod),
+            "microservices_projected": len(prod | desa)}
+
+
+def application_rows(cluster_table, hpas, deployments, traffic, coverage, cost_by_cluster):
     """One row per PROD application (app code with APPLICATION clusters)."""
     groups = defaultdict(list)
     for row in cluster_table:
         if row["environment"] == "PROD" and row["category"] == aa.APPLICATION:
             groups[row["cod_app"] or row["cluster"]].append(row)
+    prod_names = microservice_names(deployments, cluster_table, "PROD")
+    desa_names = microservice_names(deployments, cluster_table, "DESA")
     hpa_causes = defaultdict(list)
     for row in hpas:
         if row["environment"] == "PROD" and row["microservice"] == "YES":
@@ -655,8 +752,10 @@ def application_rows(cluster_table, hpas, traffic, cost_by_cluster):
                    "pods_too_big_for_node")},
                "hpas_not_scaling_share": round(sum(cause != "SCALES" for cause in causes) / len(causes), 3) if causes else "",
                "possible_monolith": yes(sum(row["microservices"] for row in rows) == 1),
+               **projection(prod_names.get(code, set()), desa_names.get(code)),
+               "traffic_status": traffic_status(code, traffic, coverage),
                **{field: traffic.get(code, {}).get(field, "") for field in (
-                   "apis_with_traffic", "requests_month", "office_share", "peak_tps_upper_bound", "busiest_hour_tps",
+                   "traffic_layer", "apis_with_traffic", "requests_month", "office_share", "peak_tps_upper_bound", "busiest_hour_tps",
                    "busiest_hour", "busiest_hour_in_office", "busiest_office_hour_tps", "busiest_offhours_hour_tps",
                    "weekday_hours_with_traffic", "offhours_active_share")}}
         app["adt_runtime"], app["adt_reason"] = adt_runtime(app)
@@ -766,11 +865,12 @@ def main():
     output.csv("deployment_snapshot.csv", with_cod_app(deployments, inventory))
     output.csv("cluster_snapshot.csv", cluster_table)
     output.csv("capability_domains.csv", capability_rows(deployments, application))
-    traffic = app_traffic(aa.read_csv(os.path.join(args.inventory, "apim_apis.csv")),
+    traffic, coverage = app_traffic(aa.read_csv(os.path.join(args.inventory, "apim_apis.csv")),
                           aa.read_csv(os.path.join(args.metrics, "apim_api_monthly.csv")),
-                          aa.read_csv(os.path.join(args.metrics, "apim_hourly_profile.csv")))
+                          aa.read_csv(os.path.join(args.metrics, "apim_hourly_profile.csv")),
+                          namespace_codes(workloads, inventory, ids_by_name))
     cost_month, cost_by_cluster = app_cost(aa.read_csv(os.path.join(args.cost, "cost_by_resource.csv")), application)
-    applications = application_rows(cluster_table, hpas, traffic, cost_by_cluster)
+    applications = application_rows(cluster_table, hpas, deployments, traffic, coverage, cost_by_cluster)
     output.csv("application_snapshot.csv", applications)
     prod_clusters = [row for row in cluster_table if row["environment"] == "PROD"]
     output.json("snapshot_summary.json", {
@@ -786,6 +886,12 @@ def main():
         "prod_clusters_by_category": counts(prod_clusters, "category"),
         "prod_applications": len(applications), "cost_month": cost_month,
         "prod_applications_by_adt_runtime": counts(applications, "adt_runtime"),
+        "prod_applications_by_traffic_status": counts(applications, "traffic_status"),
+        "prod_applications_by_traffic_layer": counts(applications, "traffic_layer"),
+        "prod_applications_with_desa": sum(row["microservices_desa"] != "" for row in applications),
+        "prod_applications_over_15_only_with_desa": sum(
+            row["microservices_projected"] != "" and row["microservices_projected"] > ADT_MAX_MICROSERVICES
+            >= row["microservices"] for row in applications),
         "clusters_not_in_inventory": sorted({row["cluster"] for row in hpas + deployments if row["in_inventory"] == "NO"}),
         "prod_application": {
             "microservices": len(app_deployments),
