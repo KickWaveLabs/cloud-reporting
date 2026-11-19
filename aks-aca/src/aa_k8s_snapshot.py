@@ -52,7 +52,8 @@ month, then the Event Hubs / Service Bus messages of an application with no API 
 application has no traffic: ZERO_IN_MONTH (APIs on a measured APIM, no requests), LAYER_NOT_MEASURED (APIs only on
 layers the metrics did not cover) or NO_APIM_API; traffic_note adds what the data shows (new cluster, only event
 consumers, own ingress load balancer, no microservice running). An application without PROD traffic gets adt_runtime
-INSUFFICIENT_DATA (no_traffic_reason: IN_DEVELOPMENT, EMPTY_CLUSTER or NOT_IN_USE), whose reason adds its DESA microservices (export) and, when the DESA APIM was measured
+INSUFFICIENT_DATA (no_traffic_reason: IN_DEVELOPMENT, EMPTY_CLUSTER, NOT_IN_USE or NOT_IN_USE_OVER_1_YEAR, by the
+age of its newest PROD cluster), whose reason adds its DESA microservices (export) and, when the DESA APIM was measured
 (--apim-environments PROD,DESA in aa_inventory.py and aa_metrics.py, a one-off check), desa_requests_month: test
 traffic, never added to PROD.
 peak_tps_upper_bound adds each API's 5-minute peak, so it is an upper bound;
@@ -756,7 +757,9 @@ def insufficient_reason(app):
     return "; ".join(reasons)
 
 
-NEW_CLUSTER_DAYS = 120
+# Age of an application's newest PROD cluster at the start of the month: under 6 months it is still being launched;
+# over a year without traffic something stopped it.
+NEW_CLUSTER_DAYS, STALE_CLUSTER_DAYS = 180, 365
 # Every application cluster has an ingress load balancer (APIM reaches it that way); it only explains the missing
 # traffic of an application without any API on APIM.
 BALANCER_NOTE = "Own ingress load balancer and no API on APIM: callers reach it directly"
@@ -767,12 +770,27 @@ DESA_ACTIVE_REQUESTS = 1000
 
 
 def no_traffic_reason(app):
-    """Why an INSUFFICIENT_DATA application has no traffic, for the decks: IN_DEVELOPMENT (new cluster, or DESA runs
-    microservices PROD does not have yet), EMPTY_CLUSTER (no microservice running) or NOT_IN_USE (deployed, no use)."""
+    """Why an INSUFFICIENT_DATA application has no traffic, for the decks: IN_DEVELOPMENT (PROD cluster under 6 months,
+    new microservices in DESA or active DESA tests), EMPTY_CLUSTER (no microservice running), NOT_IN_USE (deployed for
+    6 to 12 months, no use: ask the team) or NOT_IN_USE_OVER_1_YEAR (cluster over a year old: something stopped it)."""
     if app["traffic_note"].startswith(NEW_CLUSTER_NOTE.split("{")[0]) or app["microservices_new_in_desa"] or \
             (app["desa_requests_month"] or 0) >= DESA_ACTIVE_REQUESTS:
         return "IN_DEVELOPMENT"
-    return "EMPTY_CLUSTER" if not app["microservices"] else "NOT_IN_USE"
+    if not app["microservices"]:
+        return "EMPTY_CLUSTER"
+    age = app["prod_cluster_age_days"]
+    return "NOT_IN_USE_OVER_1_YEAR" if age != "" and age > STALE_CLUSTER_DAYS else "NOT_IN_USE"
+
+
+def newest_cluster(rows, inventory):
+    """(created_at, age in days at the start of the measurement month) of the newest PROD cluster of an application."""
+    dates = [(inventory.get(row["cluster_id"], {}).get("created_at", ""),
+              inventory.get(row["cluster_id"], {}).get("measurement_month", "")) for row in rows]
+    dates = [(created, month) for created, month in dates if created and month]
+    if not dates:
+        return "", ""
+    created, month = max(dates)
+    return created, (date.fromisoformat(month + "-01") - date.fromisoformat(created)).days
 
 
 def traffic_notes(cluster_table, inventory, services, prod_names):
@@ -846,6 +864,7 @@ def application_rows(cluster_table, hpas, deployments, traffic, coverage, cost_b
                "hpas_not_scaling_share": round(sum(cause != "SCALES" for cause in causes) / len(causes), 3) if causes else "",
                "possible_monolith": yes(sum(row["microservices"] for row in rows) == 1),
                **projection(prod_names.get(code, set()), desa_names.get(code)),
+               **dict(zip(("prod_cluster_created", "prod_cluster_age_days"), newest_cluster(rows, inventory))),
                "traffic_status": traffic_status(code, traffic, coverage),
                "desa_requests_month": coverage["desa_requests"].get(code, 0) if coverage["desa_measured"] else "",
                "traffic_note": "" if code in traffic else note_of(notes.get(code, []), traffic_status(code, traffic, coverage),

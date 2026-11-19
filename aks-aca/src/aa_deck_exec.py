@@ -39,7 +39,8 @@ MONTHS_ES = ("enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "ag
              "noviembre", "diciembre")
 RUNTIME_LABELS = {"AKS": "Se queda en AKS", "ACA": "Candidata a Container Apps",
                   "ACA_WITH_REVIEW": "Container Apps, con revisión", "INSUFFICIENT_DATA": "Sin tráfico en producción"}
-NO_TRAFFIC_LABELS = {"IN_DEVELOPMENT": "en desarrollo", "NOT_IN_USE": "desplegadas sin uso",
+NO_TRAFFIC_LABELS = {"IN_DEVELOPMENT": "en desarrollo", "NOT_IN_USE": "sin uso, desplegadas hace menos de un año",
+                     "NOT_IN_USE_OVER_1_YEAR": "sin uso, desplegadas hace más de un año",
                      "EMPTY_CLUSTER": "con el cluster vacío"}
 COUNT_WORDS = {3: "Tres", 4: "Cuatro", 5: "Cinco", 6: "Seis", 7: "Siete"}
 RUNTIME_COLORS = {"AKS": d.NAVY, "ACA": d.GREEN, "ACA_WITH_REVIEW": d.ORANGE, "INSUFFICIENT_DATA": d.GREY}
