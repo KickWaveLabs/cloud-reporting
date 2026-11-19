@@ -92,10 +92,11 @@ def backend_cod_app(host):
 # APIM layers of the north-south chain: a user call enters UX, UX calls BS, BS calls Core, Core calls the mainframe.
 # Open Banking and Yape run their own APIM. The layer comes from the gateway's custom domain (apibs.lima.bcp.com.pe).
 APIM_LAYER_DOMAINS = (("apibs", "BS"), ("apicr", "CORE"), ("apiux", "UX"), ("apisux", "UX"))
-# Layers that measure an application's traffic, in order of preference. BS is the business transaction; UX only
-# stands in for applications without BS traffic and is never added to BS, since a UX call goes on to BS and would
-# count twice. Core is internal (BS -> Core) and is not measured.
-TRAFFIC_LAYERS = ("BS", "UX")
+# Layers that measure an application's traffic, in order of preference: one layer per application, never added.
+# BS is the business transaction. UX (the channel), Open Banking and Yape (external entry points) stand in only for
+# applications without BS traffic, since their calls go on to BS and would count twice. Core is internal (BS ->
+# Core -> mainframe): last, only for applications that have traffic nowhere else.
+TRAFFIC_LAYERS = ("BS", "UX", "OPEN_BANKING", "YAPE", "CORE")
 APP_SERVICE_SUFFIX, CONTAINER_APPS_SUFFIX = ".azurewebsites.net", ".azurecontainerapps.io"
 
 

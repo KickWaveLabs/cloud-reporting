@@ -101,7 +101,7 @@ python aks-aca/src/aa_deck_exec.py
 | Step | Scope by default | Time on 2026-11-10 | Check |
 |---|---|---|---|
 | `aa_inventory.py` | Every visible subscription; one ARM list per subscription with runtimes (creation date) | 40 s (2026-11-18) | `inventory_errors.csv`; `apim_layer` in `apim_services.csv`; `existed_at_measurement` and `apim_apis_by_cod_app_source` in `inventory_summary.json` |
-| `aa_metrics.py` | PROD clusters; the PROD APIM of the BS and UX layers (`--apim-layers`) | ~70 min (AKS 15, APIM BS 45, UX ~10 on 2026-11-18) | `metrics_errors.csv`; `apim_layers` in `metrics_summary.json` |
+| `aa_metrics.py` | PROD clusters; the PROD APIM of every layer (`--apim-layers`) | ~75 min (AKS 15, APIM BS 45, UX ~10, Open Banking and Yape ~5 on 2026-11-18) | `metrics_errors.csv`; `apim_layers` in `metrics_summary.json` |
 | `aa_container_insights.py` | PROD clusters with the add-on | ~80 min | `ci_errors.csv`, `ci_coverage.csv` |
 | `aa_cost.py` | Every environment for AKS and ACA; PROD for App Service and Functions; `AmortizedCost` | ~10 min, plus one query per PROD subscription with App Service | `cost_errors.csv`; `app_service_subscriptions_queried` in `cost_summary.json` |
 | `aa_prices.py` | VM sizes in the inventory; eastus2, centralus | < 1 min | `queries_without_rows` in `prices_summary.json` |
@@ -114,9 +114,10 @@ python aks-aca/src/aa_deck_exec.py
 2. `apim_layer` in `apim_services.csv` places each APIM in the north-south chain (UX -> BS -> Core -> mainframe)
    from its custom domain: BS is `apibs.lima.bcp.com.pe` (`apimeu2apigp01` and `apimeu2apigp05`, which took over
    BS traffic in October 2026), UX is `apiux`/`apisux` (`apimeu2apigp02`), Core is `apicr` (`apimeu2apigp03`);
-   Open Banking (`apimeu2opbk*`) and Yape (`apimeu2yape*`) run their own. `aa_metrics.py` measures BS and UX by
-   default. Each application's traffic comes from BS, or from UX when it has no BS traffic; the two are never
-   added, since a UX call goes on to BS. Core is internal and is not measured. `--apim-names` still picks services
+   Open Banking (`apimeu2opbk*`) and Yape (`apimeu2yape*`) run their own. `aa_metrics.py` measures all five by
+   default. Each application's traffic comes from one layer, the first with traffic in this order: BS, UX, Open
+   Banking, Yape, Core. Layers are never added, since a call goes on from one gateway to the next; Core is internal
+   and only stands in for applications with traffic nowhere else. `--apim-names` still picks services
    by name for a smoke test.
 3. `aa_metrics.py` next: platform metrics are kept for 93 days, so the last full month is always
    available. Windows that return more than 8 MB are split automatically.

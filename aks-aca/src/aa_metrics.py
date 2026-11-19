@@ -11,8 +11,8 @@ AKS (per cluster and node pool, hourly points):
 APIM (per API, 5-minute points):
   Requests (Total), split by ApiId. The 5-minute buckets give the off-hours wake-ups that Container
   Apps would bill: each run of buckets with traffic, plus the scale-to-zero cooldown.
-  By default only the APIM of the layers in aa_common.TRAFFIC_LAYERS (BS, then UX for applications without BS
-  traffic), in --environments; --apim-layers picks other layers and --apim-names picks services by name.
+  By default the APIM of the layers in aa_common.TRAFFIC_LAYERS (BS; UX, Open Banking, Yape and Core only stand in
+  for applications without BS traffic), in --environments; --apim-layers picks other layers and --apim-names picks services by name.
   Every APIM row carries apim_layer.
 
 Outputs (in --output-dir):

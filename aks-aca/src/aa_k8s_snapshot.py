@@ -46,10 +46,12 @@ what the CPU needs) and LOAD_BELOW_TARGET (the load never reaches the HPA target
 
 Traffic per application: each APIM API maps to an app code through its backend (backend_cod_app in apim_apis.csv,
 see aa_inventory.py); a <service>.<namespace>.svc.cluster.local backend (self-hosted gateway) takes the code of the
-PROD cluster that runs that namespace in Container Insights. Only APIs whose backend runs on AKS count. One APIM layer per application: BS when it has BS
-traffic in the month, else UX (traffic_layer); the two are never added, since a UX call goes on to BS. Core, Open
-Banking and Yape are not used. traffic_status says why an application has no traffic: ZERO_IN_MONTH (APIs on BS or UX,
-no requests), LAYER_NOT_MEASURED (APIs only on other layers, or on a layer the metrics did not cover) or NO_APIM_API.
+PROD cluster that runs that namespace in Container Insights. Only APIs whose backend runs on AKS count.
+One APIM layer per application (traffic_layer): the first of BS, UX, Open Banking, Yape and Core with traffic in the
+month; layers are never added, since a call goes on from one gateway to the next. traffic_status says why an
+application has no traffic: ZERO_IN_MONTH (APIs on a measured APIM, no requests), LAYER_NOT_MEASURED (APIs only on
+layers the metrics did not cover) or NO_APIM_API; traffic_note adds what the data shows (new cluster, only event
+consumers, own ingress load balancer, no microservice running).
 peak_tps_upper_bound adds each API's 5-minute peak, so it is an upper bound;
 busiest_hour_tps adds the APIs hour by hour (average weekday or weekend profile of the month) and is what the
 100 TPS rule uses. busiest_hour says which hour it is (day type and Lima hour); busiest_office_hour_tps and
@@ -581,9 +583,9 @@ def api_code(row, by_namespace):
 
 
 def app_traffic(apis, monthly, profile, by_namespace):
-    """Per app code, last month, from one APIM layer: BS when the app has BS traffic that month, else UX
-    (aa_common.TRAFFIC_LAYERS). UX is never added to BS: a UX call goes on to BS and would count twice. Core, Open
-    Banking and Yape are not used, and only APIs whose backend runs on AKS count.
+    """Per app code, last month, from one APIM layer: the first of aa_common.TRAFFIC_LAYERS (BS, UX, Open Banking,
+    Yape, Core) with traffic that month. Layers are never added: a call goes on from one gateway to the next and
+    would count twice. Only APIs whose backend runs on AKS count.
 
     Returns (traffic, presence): traffic per app code with traffic (APIs with traffic, requests, office share, peak TPS
     as the sum of each API's 5-minute peak (an upper bound), busiest-hour TPS (the APIs added hour by hour), weekday
@@ -617,9 +619,9 @@ def app_traffic(apis, monthly, profile, by_namespace):
             entry["offhours_active"] = max(entry["offhours_active"],
                                            (to_float(row.get("offhours_active_buckets")) or 0) / offhours_buckets)
     chosen = {}
-    for code in {code for code, _ in traffic}:
-        chosen[code] = next(layer for layer in aa.TRAFFIC_LAYERS
-                            if layer == aa.TRAFFIC_LAYERS[-1] or traffic.get((code, layer), {}).get("requests"))
+    for code, layer in sorted(traffic, key=lambda key: aa.TRAFFIC_LAYERS.index(key[1])):
+        if code not in chosen and traffic[(code, layer)]["requests"]:
+            chosen[code] = layer
     hourly = defaultdict(float)
     for row in profile:
         code, layer = api_info.get((row["apim"], row["api_id"]), ("", ""))
@@ -656,8 +658,8 @@ def traffic_fields(code, entry, hourly):
 
 
 def traffic_status(code, traffic, coverage):
-    """MEASURED; ZERO_IN_MONTH (APIs on a measured BS or UX APIM, no requests); LAYER_NOT_MEASURED (APIs only on
-    layers not used or not measured: Core, Open Banking, Yape); NO_APIM_API (no AKS-backed API on any APIM)."""
+    """MEASURED; ZERO_IN_MONTH (APIs on a measured APIM, no requests); LAYER_NOT_MEASURED (APIs only on layers the
+    metrics did not cover); NO_APIM_API (no AKS-backed API on any APIM)."""
     if code in traffic:
         return "MEASURED"
     layers = coverage["presence"].get(code, set())
@@ -719,6 +721,48 @@ def microservice_names(deployments, cluster_table, environment):
     return out
 
 
+NEW_CLUSTER_DAYS = 120
+# Every application cluster has an ingress load balancer (APIM reaches it that way); it only explains the missing
+# traffic of an application without any API on APIM.
+BALANCER_NOTE = "Own ingress load balancer and no API on APIM: callers reach it directly"
+
+
+def traffic_notes(cluster_table, inventory, services, prod_names):
+    """App code -> what the data shows about a PROD application without traffic: a new cluster, only event
+    consumers, its own ingress load balancer (callers reach it without APIM), or no microservice running."""
+    balancers = {key for key, kinds in services.items() if "LoadBalancer" in kinds}
+    notes = defaultdict(list)
+    for row in cluster_table:
+        if row["environment"] != "PROD" or row["category"] != aa.APPLICATION:
+            continue
+        code = row["cod_app"] or row["cluster"]
+        cluster = inventory.get(row["cluster_id"], {})
+        created, month = cluster.get("created_at", ""), cluster.get("measurement_month", "")
+        if created and month and (date.fromisoformat(month + "-01") - date.fromisoformat(created)).days < NEW_CLUSTER_DAYS:
+            notes[code].append(f"New cluster (created {created})")
+        if row["cluster_id"] in balancers:
+            notes[code].append(BALANCER_NOTE)
+    for code, names in prod_names.items():
+        if names and all(name.startswith("async") for name in names):
+            notes[code].append("Only event consumers (async-*): load comes from queues, not APIM")
+    return notes
+
+
+def note_of(notes, status, microservices):
+    kept = [note for note in notes if note != BALANCER_NOTE or status == "NO_APIM_API"]
+    if not microservices:
+        kept.append("No microservice running")
+    return "; ".join(dict.fromkeys(kept))
+
+
+def services_by_cluster(rows, ids_by_name):
+    """Cluster id -> service types seen in Container Insights (aks_services.csv)."""
+    out = defaultdict(set)
+    for row in rows:
+        out[aa.cluster_id_of(row, ids_by_name)].add(row.get("service_type", ""))
+    return out
+
+
 def projection(prod, desa):
     """DESA microservices and the projection for PROD: PROD plus the DESA microservices not in PROD yet (by base
     name). Empty when the export has no DESA cluster for the application."""
@@ -728,7 +772,7 @@ def projection(prod, desa):
             "microservices_projected": len(prod | desa)}
 
 
-def application_rows(cluster_table, hpas, deployments, traffic, coverage, cost_by_cluster):
+def application_rows(cluster_table, hpas, deployments, traffic, coverage, cost_by_cluster, inventory, services):
     """One row per PROD application (app code with APPLICATION clusters)."""
     groups = defaultdict(list)
     for row in cluster_table:
@@ -736,6 +780,7 @@ def application_rows(cluster_table, hpas, deployments, traffic, coverage, cost_b
             groups[row["cod_app"] or row["cluster"]].append(row)
     prod_names = microservice_names(deployments, cluster_table, "PROD")
     desa_names = microservice_names(deployments, cluster_table, "DESA")
+    notes = traffic_notes(cluster_table, inventory, services, prod_names)
     hpa_causes = defaultdict(list)
     for row in hpas:
         if row["environment"] == "PROD" and row["microservice"] == "YES":
@@ -754,6 +799,8 @@ def application_rows(cluster_table, hpas, deployments, traffic, coverage, cost_b
                "possible_monolith": yes(sum(row["microservices"] for row in rows) == 1),
                **projection(prod_names.get(code, set()), desa_names.get(code)),
                "traffic_status": traffic_status(code, traffic, coverage),
+               "traffic_note": "" if code in traffic else note_of(notes.get(code, []), traffic_status(code, traffic, coverage),
+                                                                  sum(row["microservices"] for row in rows)),
                **{field: traffic.get(code, {}).get(field, "") for field in (
                    "traffic_layer", "apis_with_traffic", "requests_month", "office_share", "peak_tps_upper_bound", "busiest_hour_tps",
                    "busiest_hour", "busiest_hour_in_office", "busiest_office_hour_tps", "busiest_offhours_hour_tps",
@@ -870,7 +917,9 @@ def main():
                           aa.read_csv(os.path.join(args.metrics, "apim_hourly_profile.csv")),
                           namespace_codes(workloads, inventory, ids_by_name))
     cost_month, cost_by_cluster = app_cost(aa.read_csv(os.path.join(args.cost, "cost_by_resource.csv")), application)
-    applications = application_rows(cluster_table, hpas, deployments, traffic, coverage, cost_by_cluster)
+    services = services_by_cluster(aa.read_csv(os.path.join(args.container_insights, "aks_services.csv")), ids_by_name)
+    applications = application_rows(cluster_table, hpas, deployments, traffic, coverage, cost_by_cluster, inventory,
+                                    services)
     output.csv("application_snapshot.csv", applications)
     prod_clusters = [row for row in cluster_table if row["environment"] == "PROD"]
     output.json("snapshot_summary.json", {
