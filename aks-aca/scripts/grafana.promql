@@ -18,6 +18,34 @@
 
 
 # -----------------------------------------------------------------------------------------------------
+# MINIMUM SET FOR THE AKS vs CONTAINER APPS REPORT (run these first; the rest of the file is optional)
+# -----------------------------------------------------------------------------------------------------
+# Only what Azure Monitor, APIM and Container Insights cannot give:
+#   M1 traffic of applications reached without APIM (self-hosted gateway, own load balancer), per hour;
+#   M2/M3 the exact replicas each HPA kept (Container Insights counts the pods replaced by rollouts).
+# Period: the measured month (October 2026). Explore time zone America/Lima, range 2026-10-01 00:00 to
+# 2026-10-31 23:59. Export each result with Inspect > Data > Download CSV.
+# Before M1: check retention reaches 2026-10-01 and that `count by (cluster) (up)` lists the clusters.
+# If retention is shorter, use the last 30 days and say so: the figures then cover another period.
+
+# M1. Requests per second entering each cluster, hourly average. Query type Range, Min step 1h.
+# Entry = calls from the ingress gateway, a self-hosted gateway or outside the mesh (source "unknown");
+# calls between microservices of the same application are left out, as APIM only sees the entry.
+sum by (cluster, destination_workload_namespace) (rate(istio_requests_total{reporter="destination", source_workload=~"unknown|.*gateway.*"}[1h]))
+
+# M2. Average replicas of each HPA in office hours over the month. Query type Instant (at the range end).
+avg_over_time((kube_horizontalpodautoscaler_status_current_replicas
+  and on() (hour(vector(time() - 18000)) >= 8 < 20) and on() (day_of_week(vector(time() - 18000)) >= 1 <= 5))[31d:5m])
+
+# M3. Highest replicas of each HPA in office hours over the month. Query type Instant.
+max_over_time((kube_horizontalpodautoscaler_status_current_replicas
+  and on() (hour(vector(time() - 18000)) >= 8 < 20) and on() (day_of_week(vector(time() - 18000)) >= 1 <= 5))[31d:5m])
+
+# M4 (optional). p95 latency per microservice over the month, ms, to weigh a cold start. Query type Instant.
+histogram_quantile(0.95, sum by (le, cluster, destination_workload) (increase(istio_request_duration_milliseconds_bucket{reporter="destination"}[31d])))
+
+
+# -----------------------------------------------------------------------------------------------------
 # 0. WHAT EXISTS
 # -----------------------------------------------------------------------------------------------------
 
