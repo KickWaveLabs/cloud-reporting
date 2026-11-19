@@ -242,10 +242,10 @@ def slide_context(deck, apps, source):
               ["Una sola aplicación, ordenada en módulos por negocio.", "Se despliega y escala completa."],
               "App Service", d.SKY),
              ("Miniservicios", lambda sl, le, to, wi, ac: draw_pieces(sl, le, to, wi, ac, 2, 1, Inches(0.95)),
-              ["Pocas piezas medianas: cada una agrupa funciones de un mismo negocio."],
+              ["Pocos servicios medianos: cada uno agrupa funciones de un mismo negocio."],
               "Container Apps o AKS", d.GREEN),
              ("Microservicios", lambda sl, le, to, wi, ac: draw_pieces(sl, le, to, wi, ac, 4, 3, Inches(0.33)),
-              ["Muchas piezas pequeñas: cada una se despliega y escala sola."],
+              ["Muchos servicios pequeños: cada uno se despliega y escala solo."],
               "AKS o Container Apps, según la carga", d.ORANGE),
              ("Procesos asíncronos", draw_async,
               ["Atienden mensajes o eventos que esperan en una cola: nadie espera la respuesta."],
@@ -345,7 +345,7 @@ def slide_estate(deck, estate, apps, source):
     d.table(slide, Inches(0.6), Inches(5.0), Inches(7.9), rows, [0.6, 0.15, 0.25], highlight_column=None,
             row_height=0.32, size=11)
     d.note_box(slide, Inches(8.85), Inches(5.0), Inches(3.85), Inches(1.3),
-               "Microservicios = piezas de aplicación desplegadas en AKS.", size=11)
+               "Microservicios = servicios de una aplicación desplegados en AKS.", size=11)
 
 
 def minimum_costs(month, prices, aks_ratio, aca_ratio=1 - BANK_DISCOUNT, region="eastus2"):
@@ -407,16 +407,17 @@ def expected_microservices(row):
 ACA_CONDITIONS = [
     ("Tráfico moderado", "Tráfico moderado", "Menos de 100 transacciones por segundo (TPS) en su hora más cargada.",
      lambda row: (to_float(row["busiest_hour_tps"]) or 0) <= 100),
-    ("Pocas piezas o por horas", "Pocas piezas o uso por horas",
-     "Hasta 15 microservicios (contando los que vienen de desarrollo), o menos de 10 horas de uso al día.",
+    ("Pequeña o de uso por horas", "Pequeña o de uso por horas",
+     "Solo va a AKS si tiene más de 15 servicios y además se usa más de 10 horas al día.",
      lambda row: not ((to_float(row["weekday_hours_with_traffic"]) or 0) > 10 and expected_microservices(row) > 15)),
-    ("Se apaga de noche", "Se puede apagar de noche", "Casi no se usa de noche ni los fines de semana.",
+    ("Se apaga fuera de horario", "Se puede apagar fuera de horario",
+     "En noches y fines de semana tiene tráfico menos de la mitad del tiempo.",
      lambda row: (to_float(row.get("offhours_active_share")) or 0) <= 0.5),
-    ("Piezas livianas", "Piezas livianas", "Cada pieza necesita hasta 4 vCPU y 8 GB de memoria.",
+    ("Servicios livianos", "Servicios livianos", "Cada servicio necesita hasta 4 vCPU y 8 GB de memoria.",
      lambda row: int(row["microservices_over_aca_size"] or 0) == 0),
 ]
 CHECKS_BEFORE_MOVING = ["Si es crítica para el banco, se valida con gobierno de arquitectura.",
-                        "Si va a pasar de 15 microservicios, se confirma que siga cumpliendo."]
+                        "Si va a pasar de 15 servicios (cuenta los nuevos que ya están en desarrollo), se confirma que siga cumpliendo."]
 
 
 def slide_criteria(deck, source):

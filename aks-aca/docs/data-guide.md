@@ -234,7 +234,7 @@ keep their samples) and ranks the top 20 app codes by growth from their first sa
 - Latency averages are per request over the whole month (metric interval `FULL`). The maximum is a
   single slow request; use the average to compare with a Container Apps cold start (up to ~30 s).
   The cold start only hits the first call after the replica scaled to zero (outside office hours under
-  ADT_019), so latency is a check on condition 3 ("can be turned off at night"), not a criterion of its own.
+  ADT_019), so latency is a check on condition 3 ("can be turned off outside office hours"), not a criterion of its own.
 
 ## Building your own workbooks
 
