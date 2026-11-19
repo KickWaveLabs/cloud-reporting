@@ -97,19 +97,27 @@ APIM_LAYER_DOMAINS = (("apibs", "BS"), ("apicr", "CORE"), ("apiux", "UX"), ("api
 # applications without BS traffic, since their calls go on to BS and would count twice. Core is internal (BS ->
 # Core -> mainframe): last, only for applications that have traffic nowhere else.
 TRAFFIC_LAYERS = ("BS", "UX", "OPEN_BANKING", "YAPE", "CORE")
-# Event-driven applications with no API on APIM: their load is the messages their namespace receives. Last in the
-# order, and only measured for applications without an AKS-backed PROD API (aa_metrics.py).
+# Entry points outside APIM: an application's own Application Gateway (AGIC routes straight to the pods, so neither
+# APIM nor the cluster load balancer sees that traffic) and, for event-driven applications with no API on APIM, the
+# messages of their Event Hubs / Service Bus namespace (aa_metrics.py).
+GATEWAY_LAYERS = ("APP_GATEWAY",)
 QUEUE_LAYERS = ("EVENT_HUB", "SERVICE_BUS")
-APPLICATION_TRAFFIC_ORDER = TRAFFIC_LAYERS + QUEUE_LAYERS
+APPLICATION_TRAFFIC_ORDER = TRAFFIC_LAYERS + GATEWAY_LAYERS + QUEUE_LAYERS
+# BS first; an application without BS traffic takes the busiest of the other layers (never their sum). "First with
+# traffic" would keep a residue: UX served through a self-hosted gateway reports almost nothing to Azure Monitor.
+PRIMARY_LAYER = TRAFFIC_LAYERS[0]
+FALLBACK_LAYERS = APPLICATION_TRAFFIC_ORDER[1:]
 APP_SERVICE_SUFFIX, CONTAINER_APPS_SUFFIX = ".azurewebsites.net", ".azurecontainerapps.io"
 
 
 def apim_layer(name, custom_domains):
-    """BS, CORE, UX, OPEN_BANKING, YAPE or OTHER for an APIM service."""
+    """BS, CORE, UX, OPEN_BANKING, YAPE, SANDBOX or OTHER for an APIM service."""
     domains = [domain for domain in str(custom_domains or "").lower().split(";") if domain]
     for prefix, layer in APIM_LAYER_DOMAINS:
         if any(domain.split(".")[0].startswith(prefix) for domain in domains):
             return layer
+    if domains and all(domain.startswith("sandbox.") for domain in domains):
+        return "SANDBOX"  # a sandbox for third parties: test traffic, never measured
     text = str(name or "").lower() + ";" + ";".join(domains)
     if "opbk" in text or "apisbcp" in text or "openbanking" in text:
         return "OPEN_BANKING"

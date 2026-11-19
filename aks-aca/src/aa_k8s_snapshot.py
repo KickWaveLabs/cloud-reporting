@@ -47,13 +47,15 @@ what the CPU needs) and LOAD_BELOW_TARGET (the load never reaches the HPA target
 Traffic per application: each APIM API maps to an app code through its backend (backend_cod_app in apim_apis.csv,
 see aa_inventory.py); a <service>.<namespace>.svc.cluster.local backend (self-hosted gateway) takes the code of the
 PROD cluster that runs that namespace in Container Insights. Only APIs whose backend runs on AKS count.
-One layer per application (traffic_layer): the first of BS, UX, Open Banking, Yape and Core with traffic in the
-month, then the Event Hubs / Service Bus messages of an application with no API on APIM (queue_monthly.csv); layers are never added, since a call goes on from one gateway to the next. traffic_status says why an
+One layer per application (traffic_layer): BS when it has BS traffic in the month, else the busiest of UX, Open
+Banking, Yape, Core, its Application Gateway and the Event Hubs / Service Bus messages of an application with no API
+on APIM (entry_points_monthly.csv); layers are never added, since a call goes on from one gateway to the next. traffic_status says why an
 application has no traffic: ZERO_IN_MONTH (APIs on a measured APIM, no requests), LAYER_NOT_MEASURED (APIs only on
 layers the metrics did not cover) or NO_APIM_API; traffic_note adds what the data shows (new cluster, only event
 consumers, own ingress load balancer, no microservice running). An application without PROD traffic gets adt_runtime
-INSUFFICIENT_DATA (no_traffic_reason: IN_DEVELOPMENT, EMPTY_CLUSTER, NOT_IN_USE or NOT_IN_USE_OVER_1_YEAR, by the
-age of its newest PROD cluster), whose reason adds its DESA microservices (export) and, when the DESA APIM was measured
+INSUFFICIENT_DATA (no_traffic_reason: IN_USE_NOT_MEASURED when its microservices use at least 0.5 vCPU in office
+hours, else IN_DEVELOPMENT, EMPTY_CLUSTER, NOT_IN_USE or NOT_IN_USE_OVER_1_YEAR by the age of its newest PROD cluster),
+whose reason adds its DESA microservices (export) and, when the DESA APIM was measured
 (--apim-environments PROD,DESA in aa_inventory.py and aa_metrics.py, a one-off check), desa_requests_month: test
 traffic, never added to PROD.
 peak_tps_upper_bound adds each API's 5-minute peak, so it is an upper bound;
@@ -587,9 +589,10 @@ def api_code(row, by_namespace):
 
 
 def app_traffic(apis, monthly, profile, by_namespace):
-    """Per app code, last month, from one APIM layer: the first of aa_common.TRAFFIC_LAYERS (BS, UX, Open Banking,
-    Yape, Core) with traffic that month. Layers are never added: a call goes on from one gateway to the next and
-    would count twice. Only APIs whose backend runs on AKS count.
+    """Per app code, last month, from one layer: BS when the app has BS traffic that month, else the busiest of UX, Open
+    Banking, Yape, Core, its Application Gateway and its Event Hubs / Service Bus namespace (aa_common.FALLBACK_LAYERS).
+    Layers are never added: a call goes on from one gateway to the next and would count twice. Only APIs whose
+    backend runs on AKS count.
 
     Returns (traffic, presence): traffic per app code with traffic (APIs with traffic, requests, office share, peak TPS
     as the sum of each API's 5-minute peak (an upper bound), busiest-hour TPS (the APIs added hour by hour), weekday
@@ -602,8 +605,8 @@ def app_traffic(apis, monthly, profile, by_namespace):
                 for row in aks_apis if row.get("apim_environment", "PROD") == "PROD"}
     desa_codes = {(row["apim"], row["api_id"]): row.get("backend_cod_app") or ""
                   for row in aks_apis if row.get("apim_environment") == "DESA"}
-    for row in monthly:  # Event Hubs / Service Bus namespaces of event-driven applications (queue_monthly.csv)
-        if row.get("apim_layer") in aa.QUEUE_LAYERS:
+    for row in monthly:  # Application Gateways and Event Hubs / Service Bus namespaces (entry_points_monthly.csv)
+        if row.get("apim_layer") in aa.GATEWAY_LAYERS + aa.QUEUE_LAYERS:
             api_info[(row["apim"], row["api_id"])] = (row.get("cod_app") or "", row["apim_layer"])
     presence = defaultdict(set)
     for code, layer in list(api_info.values()):
@@ -635,9 +638,13 @@ def app_traffic(apis, monthly, profile, by_namespace):
             entry["offhours_active"] = max(entry["offhours_active"],
                                            (to_float(row.get("offhours_active_buckets")) or 0) / offhours_buckets)
     chosen = {}
-    for code, layer in sorted(traffic, key=lambda key: aa.APPLICATION_TRAFFIC_ORDER.index(key[1])):
-        if code not in chosen and traffic[(code, layer)]["requests"]:
-            chosen[code] = layer
+    for code in {code for code, _ in traffic}:
+        if traffic.get((code, aa.PRIMARY_LAYER), {}).get("requests"):
+            chosen[code] = aa.PRIMARY_LAYER
+            continue
+        busiest = max(aa.FALLBACK_LAYERS, key=lambda layer: traffic.get((code, layer), {}).get("requests", 0))
+        if traffic.get((code, busiest), {}).get("requests"):
+            chosen[code] = busiest
     hourly = defaultdict(float)
     for row in profile:
         code, layer = api_info.get((row["apim"], row["api_id"]), ("", ""))
@@ -769,10 +776,31 @@ NEW_CLUSTER_NOTE = "New cluster (created {})"
 DESA_ACTIVE_REQUESTS = 1000
 
 
+# Office-hours CPU used by an application's PROD microservices from which it counts as in use even without measured
+# traffic (its entry is not measurable, for example a self-hosted gateway); idle deployments stay near 0.
+IN_USE_VCPU = 0.5
+
+
+def office_cpu_by_app(cluster_table, workloads, ids_by_name):
+    """App code -> average office-hours vCPU used by its PROD microservices in the last month (Container Insights)."""
+    code_of = {row["cluster_id"] or "name:" + row["cluster"].lower(): row["cod_app"] or row["cluster"]
+               for row in cluster_table if row["environment"] == "PROD" and row["category"] == aa.APPLICATION}
+    last = max((row["month"] for row in workloads), default="")
+    out = defaultdict(float)
+    for row in workloads:
+        code = code_of.get(cluster_key(dict(row, cluster_id=aa.cluster_id_of(row, ids_by_name))))
+        if code and row["month"] == last and row["period"] == "OFFICE" and aa.is_microservice(row["namespace"], row["workload"]):
+            out[code] += to_float(row.get("cpu_used_avg")) or 0
+    return {code: round(value, 3) for code, value in out.items()}
+
+
 def no_traffic_reason(app):
-    """Why an INSUFFICIENT_DATA application has no traffic, for the decks: IN_DEVELOPMENT (PROD cluster under 6 months,
+    """Why an INSUFFICIENT_DATA application has no traffic, for the decks: IN_USE_NOT_MEASURED (its microservices use
+    CPU, so traffic enters where nothing measures it, such as a self-hosted gateway), IN_DEVELOPMENT (PROD cluster under 6 months,
     new microservices in DESA or active DESA tests), EMPTY_CLUSTER (no microservice running), NOT_IN_USE (deployed for
     6 to 12 months, no use: ask the team) or NOT_IN_USE_OVER_1_YEAR (cluster over a year old: something stopped it)."""
+    if (app["office_vcpu_used"] or 0) >= IN_USE_VCPU:
+        return "IN_USE_NOT_MEASURED"
     if app["traffic_note"].startswith(NEW_CLUSTER_NOTE.split("{")[0]) or app["microservices_new_in_desa"] or \
             (app["desa_requests_month"] or 0) >= DESA_ACTIVE_REQUESTS:
         return "IN_DEVELOPMENT"
@@ -838,7 +866,7 @@ def projection(prod, desa):
             "microservices_projected": len(prod | desa)}
 
 
-def application_rows(cluster_table, hpas, deployments, traffic, coverage, cost_by_cluster, inventory, services):
+def application_rows(cluster_table, hpas, deployments, traffic, coverage, cost_by_cluster, inventory, services, cpu):
     """One row per PROD application (app code with APPLICATION clusters)."""
     groups = defaultdict(list)
     for row in cluster_table:
@@ -865,6 +893,7 @@ def application_rows(cluster_table, hpas, deployments, traffic, coverage, cost_b
                "possible_monolith": yes(sum(row["microservices"] for row in rows) == 1),
                **projection(prod_names.get(code, set()), desa_names.get(code)),
                **dict(zip(("prod_cluster_created", "prod_cluster_age_days"), newest_cluster(rows, inventory))),
+               "office_vcpu_used": cpu.get(code, ""),
                "traffic_status": traffic_status(code, traffic, coverage),
                "desa_requests_month": coverage["desa_requests"].get(code, 0) if coverage["desa_measured"] else "",
                "traffic_note": "" if code in traffic else note_of(notes.get(code, []), traffic_status(code, traffic, coverage),
@@ -983,14 +1012,14 @@ def main():
     output.csv("capability_domains.csv", capability_rows(deployments, application))
     traffic, coverage = app_traffic(aa.read_csv(os.path.join(args.inventory, "apim_apis.csv")),
                           aa.read_csv(os.path.join(args.metrics, "apim_api_monthly.csv"))
-                          + aa.read_csv(os.path.join(args.metrics, "queue_monthly.csv")),
+                          + aa.read_csv(os.path.join(args.metrics, "entry_points_monthly.csv")),
                           aa.read_csv(os.path.join(args.metrics, "apim_hourly_profile.csv"))
-                          + aa.read_csv(os.path.join(args.metrics, "queue_hourly_profile.csv")),
+                          + aa.read_csv(os.path.join(args.metrics, "entry_points_hourly_profile.csv")),
                           namespace_codes(workloads, inventory, ids_by_name))
     cost_month, cost_by_cluster = app_cost(aa.read_csv(os.path.join(args.cost, "cost_by_resource.csv")), application)
     services = services_by_cluster(aa.read_csv(os.path.join(args.container_insights, "aks_services.csv")), ids_by_name)
     applications = application_rows(cluster_table, hpas, deployments, traffic, coverage, cost_by_cluster, inventory,
-                                    services)
+                                    services, office_cpu_by_app(cluster_table, workloads, ids_by_name))
     output.csv("application_snapshot.csv", applications)
     prod_clusters = [row for row in cluster_table if row["environment"] == "PROD"]
     output.json("snapshot_summary.json", {

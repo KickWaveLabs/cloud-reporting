@@ -114,15 +114,18 @@ python aks-aca/src/aa_deck_exec.py
 2. `apim_layer` in `apim_services.csv` places each APIM in the north-south chain (UX -> BS -> Core -> mainframe)
    from its custom domain: BS is `apibs.lima.bcp.com.pe` (`apimeu2apigp01` and `apimeu2apigp05`, which took over
    BS traffic in October 2026), UX is `apiux`/`apisux` (`apimeu2apigp02`), Core is `apicr` (`apimeu2apigp03`);
-   Open Banking (`apimeu2opbk*`) and Yape (`apimeu2yape*`) run their own. `aa_metrics.py` measures all five by
-   default. Each application's traffic comes from one layer, the first with traffic in this order: BS, UX, Open
-   Banking, Yape, Core. Layers are never added, since a call goes on from one gateway to the next; Core is internal
-   and only stands in for applications with traffic nowhere else. An application without PROD traffic is
-   `INSUFFICIENT_DATA`, out of the migration list (shown apart on the corporate deck as "Sin tráfico en producción");
-   an event-driven application with no API on APIM is measured by the messages of its Event Hubs or Service Bus
-   namespace (`queue_monthly.csv`, `--skip-queues` to leave it out); its reason says whether DESA runs microservices that PROD does not
-   have yet (from the export). `--apim-environments PROD,DESA` on both scripts adds DESA test requests as a one-off
-   check; it is not part of the monthly run (~3,600 more APIs). `--apim-names` still picks services
+   Open Banking (`apimeu2opbk*`) and Yape (`apimeu2yape*`) run their own; the Open Banking sandbox
+   (`sandbox.apisbcp.com`) is `SANDBOX` and never measured. `aa_metrics.py` measures the five layers by default, plus
+   two entry points outside APIM (`entry_points_monthly.csv`, `--skip-entry-points` to leave them out): every
+   Application Gateway of an AKS application (AGIC sends to the pods, past APIM and the cluster load balancer) and
+   the Event Hubs / Service Bus namespaces of applications with no API on APIM. Each application's traffic comes from
+   one layer: BS when it has BS traffic, else the busiest of the others. Layers are never added, since a call goes on
+   from one gateway to the next. Self-hosted gateways do not report to Azure Monitor, so traffic that only enters
+   through one is not measured. An application without measured PROD traffic is `INSUFFICIENT_DATA`, out of the
+   migration list ("Sin tráfico medido" on the corporate deck); `no_traffic_reason` says whether it is in use
+   (CPU without a measurable entry), in development, an empty cluster or deployed without use. `--apim-environments
+   PROD,DESA` on both scripts adds DESA test requests as a one-off check; it is not part of the monthly run
+   (~3,600 more APIs). `--apim-names` still picks services
    by name for a smoke test.
 3. `aa_metrics.py` next: platform metrics are kept for 93 days, so the last full month is always
    available. Windows that return more than 8 MB are split automatically.

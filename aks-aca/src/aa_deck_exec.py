@@ -38,8 +38,8 @@ import aa_deck as d
 MONTHS_ES = ("enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre",
              "noviembre", "diciembre")
 RUNTIME_LABELS = {"AKS": "Se queda en AKS", "ACA": "Candidata a Container Apps",
-                  "ACA_WITH_REVIEW": "Container Apps, con revisión", "INSUFFICIENT_DATA": "Sin tráfico en producción"}
-NO_TRAFFIC_LABELS = {"IN_DEVELOPMENT": "en desarrollo", "NOT_IN_USE": "sin uso, desplegadas hace menos de un año",
+                  "ACA_WITH_REVIEW": "Container Apps, con revisión", "INSUFFICIENT_DATA": "Sin tráfico medido"}
+NO_TRAFFIC_LABELS = {"IN_USE_NOT_MEASURED": "en uso sin medición de tráfico", "IN_DEVELOPMENT": "en desarrollo", "NOT_IN_USE": "sin uso, desplegadas hace menos de un año",
                      "NOT_IN_USE_OVER_1_YEAR": "sin uso, desplegadas hace más de un año",
                      "EMPTY_CLUSTER": "con el cluster vacío"}
 COUNT_WORDS = {3: "Tres", 4: "Cuatro", 5: "Cinco", 6: "Seis", 7: "Siete"}
@@ -294,13 +294,17 @@ def slide_distribution(deck, apps, estate, source):
     reasons = Counter(row.get("no_traffic_reason") for row in apps if row["adt_runtime"] == "INSUFFICIENT_DATA")
     no_traffic = ", ".join(f"{d.number(count)} {NO_TRAFFIC_LABELS.get(reason, 'sin dato')}"
                            for reason, count in reasons.most_common())
+    outside_bs = sum(row.get("traffic_layer") not in ("", "BS", None) for row in apps)
     notes = []
     if groups["ACA_WITH_REVIEW"]["apps"]:
         notes.append("\"Con revisión\": criticidad alta (BIA ALTA o MUY ALTA) o crecerá a más de 15 microservicios.")
     if reasons:
-        notes.append(f"\"Sin tráfico en producción\" ({no_traffic}): quedan fuera de la migración hasta que tengan uso.")
+        notes.append(f"\"Sin tráfico medido\" ({no_traffic}): fuera de la migración hasta tener una medición.")
+    if outside_bs:
+        notes.append(f"{d.number(outside_bs)} aplicaciones sin tráfico en BS se midieron en otra capa (UX, Application "
+                     "Gateway, Open Banking, Yape, Core o colas).")
     if notes:
-        d.note_box(slide, Inches(7.0), Inches(4.8), Inches(5.8), Inches(1.0), " ".join(notes), size=11)
+        d.note_box(slide, Inches(7.0), Inches(4.75), Inches(5.8), Inches(1.45), " ".join(notes), size=10)
 
 
 def office_seconds(month):
@@ -408,7 +412,7 @@ def main():
     scaling = read_scaling(args.results)
     period = month_label(estate["month"])
     measured = f"Fuente: inventario de Azure, Cost Management (costo amortizado, {period}) y métricas de {period}."
-    criteria = (f"Fuente: lineamiento ADT_019; tráfico de APIM y Event Hubs, Container Insights y configuración de autoescalado, "
+    criteria = (f"Fuente: lineamiento ADT_019; tráfico de APIM, Application Gateway y Event Hubs, Container Insights y configuración de autoescalado, "
                 f"{period}.")
 
     deck = Presentation()

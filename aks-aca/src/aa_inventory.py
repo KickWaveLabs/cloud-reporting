@@ -32,6 +32,8 @@ Outputs (in --output-dir):
   app_service_plans.csv  App Service plans: SKU, tier, workers, OS, number of sites, runtime (APP_SERVICE
                          or FUNCTIONS: the deck card and cost owner type the plan counts under)
   app_services.csv       web and function apps: type, container or code, state, plan, its SKU and id
+  app_gateways.csv       Application Gateways: SKU and app code (traffic that reaches a cluster through AGIC, outside
+                         APIM)
   messaging_namespaces.csv Event Hubs and Service Bus namespaces: kind, SKU, app code (the load of event-driven
                          applications with no API on APIM)
   inventory_errors.csv
@@ -141,6 +143,13 @@ QUERIES = {
         # Only hostName is read from each entry; certificate fields are ignored.
         " hostnameConfigurations = properties.hostnameConfigurations,"
         " additionalLocations = array_length(properties.additionalLocations)"
+    ),
+    # Application Gateways: name and SKU only (no listeners, certificates or backend settings).
+    "app_gateways": (
+        "resources"
+        " | where type =~ 'microsoft.network/applicationgateways'"
+        " | project id, name, resourceGroup, subscriptionId, location, tags,"
+        " sku = tostring(properties.sku.name), capacity = toint(properties.sku.capacity)"
     ),
     # Event Hubs and Service Bus namespaces: name and size only (no keys, no entities).
     "messaging": (
@@ -342,6 +351,15 @@ def backend_host(service_url):
 
 
 
+def build_app_gateways(ctx, rows):
+    out = []
+    for row in rows:
+        gateway = base_row(ctx, row)
+        gateway.update({"sku": row.get("sku", ""), "capacity": row.get("capacity", ""), "id": row["id"]})
+        out.append(gateway)
+    return out
+
+
 def build_messaging(ctx, rows):
     out = []
     for row in rows:
@@ -529,6 +547,7 @@ def main():
     environments, apps = build_aca(ctx, results["aca_environments"], results["aca_apps"])
     plans, sites = build_app_service(ctx, results["app_service_plans"], results["app_services"])
     messaging = build_messaging(ctx, results["messaging"])
+    gateways = build_app_gateways(ctx, results["app_gateways"])
     services, apis = build_apim(ctx, results["apim"], args, *api_code_lookups(clusters, environments, apps, plans, sites))
     window = measurement_window(args.measurement_month)
     runtimes = clusters + environments + apps + plans + sites
@@ -546,6 +565,7 @@ def main():
     output.csv("app_service_plans.csv", plans)
     output.csv("app_services.csv", sites)
     output.csv("messaging_namespaces.csv", messaging)
+    output.csv("app_gateways.csv", gateways)
     output.csv("inventory_errors.csv", ctx.errors.rows, azure.ErrorLog.FIELDS)
     output.json("inventory_summary.json", azure.run_metadata(ctx, {
         "aks_by_environment": dict(Counter(row["environment"] for row in clusters)),
@@ -566,6 +586,7 @@ def main():
                                                       ("app_services", sites))},
         "app_service_sites_by_environment": azure.count_by(sites, "environment", "type"),
         "messaging_namespaces_by_environment": azure.count_by(messaging, "environment", "kind"),
+        "app_gateways_by_environment": dict(Counter(row["environment"] for row in gateways)),
         "cod_app_evidence": dict(Counter(row["cod_app_evidence"] for row in clusters + sites)),
         "excluded_poc_subscriptions": sorted(poc),
     }))
