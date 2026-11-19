@@ -256,8 +256,14 @@ def find_input(folder, prefix):
 
 def read_rows(path):
     if path.lower().endswith(".xlsx"):
+        from zipfile import BadZipFile
         from openpyxl import load_workbook
-        sheet = load_workbook(path, read_only=True, data_only=True).worksheets[0]
+        try:
+            sheet = load_workbook(path, read_only=True, data_only=True).worksheets[0]
+        except BadZipFile:
+            raise SystemExit(f"{path} is not a readable .xlsx: it is protected (sensitivity label or password), not "
+                             "fully downloaded (OneDrive) or not an Excel file. Open it in Excel and save it as CSV in "
+                             "the same folder; the newest file is used.") from None
         rows = sheet.iter_rows(values_only=True)
         header = [str(cell or "").strip() for cell in next(rows)]
         return [dict(zip(header, ["" if cell is None else cell for cell in row])) for row in rows if any(row)]
