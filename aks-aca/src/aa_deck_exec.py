@@ -405,7 +405,7 @@ def expected_microservices(row):
 # The ADT_019 tree read the other way round: an application goes to Container Apps when it meets all four
 # conditions (the same as meeting none of the AKS ones). (short label, condition, plain meaning, test on a row).
 ACA_CONDITIONS = [
-    ("Tráfico moderado", "Tráfico moderado", "Menos de 100 pedidos por segundo en su hora más cargada.",
+    ("Tráfico moderado", "Tráfico moderado", "Menos de 100 transacciones por segundo (TPS) en su hora más cargada.",
      lambda row: (to_float(row["busiest_hour_tps"]) or 0) <= 100),
     ("Pocas piezas o por horas", "Pocas piezas o uso por horas",
      "Hasta 15 microservicios (contando los que vienen de desarrollo), o menos de 10 horas de uso al día.",
@@ -647,7 +647,7 @@ def slide_cost(deck, apps, estate, results, source, ratio):
     d.table(slide, Inches(0.6), Inches(1.4), Inches(12.1), rows, [0.3, 0.17, 0.19, 0.17, 0.17], highlight_column=3,
             row_height=0.5, size=13)
     rows = [["Cómo se paga", "AKS", "Container Apps"],
-            ["Cobro", "Nodos completos (VM) las 24 horas", "vCPU-segundo y GB-segundo en uso, y peticiones"],
+            ["Cobro", "Nodos completos (VM) las 24 horas", "vCPU-segundo y GB-segundo en uso, y transacciones"],
             ["Fuera de horario", "Se paga igual", "Escala a cero (ADT_019: instancias calientes de 8 a 20 h)"],
             ["Descuento", f"Con reservas: se paga {d.percent(ratio)} del precio de lista de las VM",
              f"{d.percent(BANK_DISCOUNT)} del banco (sin reservas)"]]

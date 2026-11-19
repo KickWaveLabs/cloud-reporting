@@ -92,7 +92,7 @@ labelled as information only.
 | 6 | La configuración se fragmenta y mantenerla cuesta horas-hombre: [N] clusters difieren en [M] propiedades, [Z]% no cumple la LBS | Top differing properties; LBS level from the guidelines team; upgrades manual in [N] PROD (qualitative, no amounts) | Config_AKS; Technical_criteria; guidelines team |
 | 7 | Cómo decidimos si un AKS puede pasar a Container Apps | The seven decision rules of ADT_019 with today's PROD figure next to each; the full criteria table (what favours each platform, limits, sources) stays in the workbook | Technical_criteria; Summary (BIA) |
 | 8 | Con los mínimos de AKS del banco, ACA cuesta menos en infraestructura; AKS gana si el cluster se comparte o el servicio está activo más del ~60% del tiempo | ADT_019 model (1 replica 8–20, scale to zero); line chart AKS vs ACA | Assumptions; Model; Break_even |
-| 9 | Peticiones y umbrales del ADT_019 no cambian la decisión hasta [X] M peticiones/mes | Heat map microservices × requests; table rule, threshold, model result | Map; Break_even |
+| 9 | Transacciones y umbrales del ADT_019 no cambian la decisión hasta [X] M transacciones/mes | Heat map microservices × requests; table rule, threshold, model result | Map; Break_even |
 | 10 | Hoja de ruta y decisiones | Quick wins (consolidate small clusters, right-size HPA minimums and requests), ACA where it wins, guidelines baseline; approvals with owner and date | Patterns; Config_K8s; ACA_by_cluster |
 
 Annex, outside the count: where each figure comes from (Sources, Queries, Assumptions). The manager

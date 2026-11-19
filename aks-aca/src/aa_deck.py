@@ -118,7 +118,7 @@ SOURCE_TEXT = {
     "Inventory of clusters, node pools and add-ons": "Inventario de clusters, node pools y add-ons",
     "Container Apps apps and environments": "Apps y ambientes de Container Apps",
     "APIM APIs and their backend": "APIs de APIM y su backend",
-    "Node CPU and memory use": "Uso de CPU y memoria de nodos", "Requests per API": "Peticiones por API",
+    "Node CPU and memory use": "Uso de CPU y memoria de nodos", "Requests per API": "Transacciones por API",
     "Wake-ups and active seconds outside office hours": "Despertares y segundos activos fuera de horario",
     "Replicas, requests and use per workload": "Réplicas, requests y uso por workload",
     "Actual cost of AKS and Container Apps": "Costo real de AKS y Container Apps",
@@ -1149,7 +1149,7 @@ def slide_configuration(deck, measured_summary, properties, criteria, source):
 # Short wording for the figure of each criterion, keyed by the start of the measure in Technical_criteria.
 MEASURE_LABELS = [("Clusters with 15 microservices", "clusters con ≤15 microservicios"),
                   ("APIs with a peak above 100 tps", "APIs con pico de más de 100 tps"),
-                  ("Requests outside office hours", "de las peticiones llega fuera de oficina"),
+                  ("Requests outside office hours", "de las transacciones llega fuera de oficina"),
                   ("HPAs that do not scale", "HPA no escala"),
                   ("Microservices that fit", "microservicios caben en una réplica de ACA"),
                   ("StatefulSet workloads", "workloads son StatefulSet"),
@@ -1158,7 +1158,7 @@ MEASURE_LABELS = [("Clusters with 15 microservices", "clusters con ≤15 microse
 
 
 def figure_text(measure, value, total):
-    """'75% · 99 de 132 clusters con ≤15 microservicios', or '44% de las peticiones ...' for a share."""
+    """'75% · 99 de 132 clusters con ≤15 microservicios', or '44% de las transacciones ...' for a share."""
     label = next((short for start, short in MEASURE_LABELS if measure.startswith(start)), measure)
     if is_number(value) and is_number(total) and total:
         return f"{percent(value / total)} · {number(value)} de {number(total)} {label}"
@@ -1441,10 +1441,10 @@ def slide_traffic(deck, classes, settings, source):
     office_window = f"{settings.get('Office: start hour (Monday to Friday)', 8)}–{settings.get('Office: end hour', 20)}"
     extended_window = f"{settings.get('Extended: start hour (every day)', 6)}–{settings.get('Extended: end hour', 22)}"
     threshold = percent(settings.get("Classification threshold", 0.9))
-    rows = [["Clase", "Regla", "APIs", "% peticiones"],
+    rows = [["Clase", "Regla", "APIs", "% transacciones"],
             ["OFFICE", f"≥ {threshold} lun–vie {office_window}"],
             ["EXTENDED", f"≥ {threshold} entre {extended_window}, todos los días"],
-            ["24x7", "Repartido en el día y la noche"], ["NO_TRAFFIC", "Sin peticiones"]]
+            ["24x7", "Repartido en el día y la noche"], ["NO_TRAFFIC", "Sin transacciones"]]
     by_name = {item[0]: item for item in classes}
     for row in rows[1:]:
         item = by_name.get(row[0], (row[0], None, None))
