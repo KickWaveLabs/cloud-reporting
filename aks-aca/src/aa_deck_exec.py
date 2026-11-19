@@ -26,7 +26,8 @@ An eighth slide (effort and migration estimate) is the architecture team's and i
 Runtime counts only take resources that existed in the measured month (existed_at_measurement in the inventory):
 run the scripts after the month ends and the deck shows that month, whatever day it is built.
 
-Output: aks_aca_corporate.pptx in the newest reports/<date>-aks-aca folder (or --output). Every figure is a draft to check against
+Output: aks_aca_corporate.pptx in the newest reports/<date>-aks-aca folder (or --output), and next to it
+aca_estimate_by_app.csv: the Container Apps cost of each application with every input and step (aca_breakdown). Every figure is a draft to check against
 the workbook and the CSVs before presenting.
 """
 
@@ -55,8 +56,8 @@ MONEY_NOTE = "Montos en soles con IGV (18 %); tipo de cambio S/ 3,41333 por US$.
 # Smallest PROD AKS cluster (architecture team: 2 system + 2 user nodes of 8 vCPU / 32 GB) and the Container Apps
 # microservice of the ADT_019 model (0.5 vCPU / 1 GiB warm in office hours, 5 million requests a month).
 MIN_AKS_NODES, MIN_AKS_VM, HOURS_MONTH = 4, "Standard_D8s_v4", 730
-# The bank's discount on Azure list prices for the minimum comparison (the measured node discount includes
-# reservations that a new, small cluster would not have).
+# The bank's discount on Azure list prices: for the minimum comparison and for Container Apps, which has no
+# reservations (the measured node discount includes them).
 BANK_DISCOUNT = 0.30
 ACA_VCPU, ACA_GIB, ACA_REQUESTS_MILLION = 0.5, 1.0, 5
 
@@ -554,16 +555,31 @@ def measured_discount(results, month, prices):
     return min(1.0, paid / listed) if listed and paid else 1.0
 
 
-def aca_estimate(results, apps, month, prices, region="eastus2"):
-    """Monthly Container Apps cost per app code at list price, with the ADT_019 model: the replicas Container
-    Insights measured in office hours, warm from 8:00 to 20:00 on weekdays and at zero otherwise; each replica sized
-    to the smallest Consumption allocation that covers its request; plus requests and one environment per app."""
+# Headroom on the requests each application received in the month, so the saving is not overstated.
+REQUESTS_BUFFER = 1.25
+# Container Apps environments per application: each one bills its management and private endpoint hours.
+ENVIRONMENTS_PER_APP = 1
+
+
+def aca_breakdown(results, apps, month, prices, ratio, region="eastus2"):
+    """One row per application: the inputs of its monthly Container Apps cost and every step of the formula, so it
+    can be rebuilt by hand or in the Azure pricing calculator.
+
+    Per microservice: replicas = office-hours average in Container Insights (else the HPA minimum, at least 1);
+    allocation = smallest Consumption size that covers its request (0.25 vCPU steps, 2 GiB per vCPU); warm in office
+    hours only (ADT_019: Monday to Friday 8:00-20:00, zero otherwise). Then:
+        vcpu_s = replicas x vCPU x office seconds          gib_s = replicas x GiB x office seconds
+        requests = requests of the month x REQUESTS_BUFFER
+        list = vcpu_s x vCPU-s price + gib_s x GiB-s price + requests / 1e6 x price per million
+               + ENVIRONMENTS_PER_APP x 730 h x (management + private endpoint hour price)
+        with discount = list x ratio
+    Every second is billed at the active rate and the free grant is left out (one per subscription)."""
     price = lambda key: prices.get((key, region), 0)
     seconds = office_seconds(month)
-    per_replica = defaultdict(float)
     application = {row["cluster_id"]: row["cod_app"]
                    for row in results_csv(results, "aa-k8s-snapshot", "cluster_snapshot.csv")
                    if row["category"] == aa.APPLICATION and row["environment"] == "PROD"}
+    per_app = defaultdict(lambda: {"microservices": 0, "replicas": 0.0, "vcpu_s": 0.0, "gib_s": 0.0})
     for row in results_csv(results, "aa-k8s-snapshot", "deployment_snapshot.csv"):
         code = application.get(row["cluster_id"])
         if not code or row["microservice"] != "YES":
@@ -571,10 +587,42 @@ def aca_estimate(results, apps, month, prices, region="eastus2"):
         cpu, mem = to_float(row["cpu_request_vcpu"]) or 0, to_float(row["mem_request_gib"]) or 0
         vcpu = math.ceil(max(cpu, mem / 2, 0.25) * 4 - 1e-9) / 4
         replicas = max(1.0, to_float(row["ci_replicas_avg_office"]) or to_float(row["hpa_min"]) or 1)
-        per_replica[code] += replicas * seconds * (vcpu * price("aca_vcpu_active_s") + 2 * vcpu * price("aca_mem_active_gib_s"))
-    environment = 730 * (price("aca_env_management_hour") + price("aca_env_private_endpoint_hour"))
-    return {row["cod_app"]: per_replica.get(row["cod_app"], 0) + environment
-            + (to_float(row["requests_month"]) or 0) / 1e6 * price("aca_requests_million") for row in apps}
+        entry = per_app[code]
+        entry["microservices"] += 1
+        entry["replicas"] += replicas
+        entry["vcpu_s"] += replicas * vcpu * seconds
+        entry["gib_s"] += replicas * 2 * vcpu * seconds
+    environment_hour = price("aca_env_management_hour") + price("aca_env_private_endpoint_hour")
+    out = []
+    for app in apps:
+        entry = per_app[app["cod_app"]]
+        requests = (to_float(app["requests_month"]) or 0) * REQUESTS_BUFFER
+        compute_cost = entry["vcpu_s"] * price("aca_vcpu_active_s")
+        memory_cost = entry["gib_s"] * price("aca_mem_active_gib_s")
+        requests_cost = requests / 1e6 * price("aca_requests_million")
+        environment_cost = ENVIRONMENTS_PER_APP * HOURS_MONTH * environment_hour
+        total = compute_cost + memory_cost + requests_cost + environment_cost
+        out.append({"cod_app": app["cod_app"], "adt_runtime": app["adt_runtime"], "month": month,
+                    "microservices": entry["microservices"], "replicas_office": round(entry["replicas"], 2),
+                    "office_seconds": seconds, "vcpu_seconds": round(entry["vcpu_s"]),
+                    "gib_seconds": round(entry["gib_s"]),
+                    "requests_month": int(to_float(app["requests_month"]) or 0),
+                    "requests_with_buffer": int(requests), "price_vcpu_s": price("aca_vcpu_active_s"),
+                    "price_gib_s": price("aca_mem_active_gib_s"), "price_requests_million": price("aca_requests_million"),
+                    "price_environment_hour": environment_hour, "environments": ENVIRONMENTS_PER_APP,
+                    "compute_usd": round(compute_cost, 2), "memory_usd": round(memory_cost, 2),
+                    "requests_usd": round(requests_cost, 2), "environment_usd": round(environment_cost, 2),
+                    "aca_list_usd": round(total, 2), "discount_ratio": round(ratio, 4),
+                    "aca_with_discount_usd": round(total * ratio, 2),
+                    "aks_cost_usd": to_float(app["cost_month_usd"]) or 0,
+                    "aca_with_discount_pen_igv": round(total * ratio * EXCHANGE_RATE * (1 + IGV), 2),
+                    "aks_cost_pen_igv": round((to_float(app["cost_month_usd"]) or 0) * EXCHANGE_RATE * (1 + IGV), 2)})
+    return out
+
+
+def aca_estimate(results, apps, month, prices, region="eastus2"):
+    """Monthly Container Apps cost per app code at list price (aca_breakdown, without discount)."""
+    return {row["cod_app"]: row["aca_list_usd"] for row in aca_breakdown(results, apps, month, prices, 1.0, region)}
 
 
 def slide_cost(deck, apps, estate, results, source):
@@ -585,8 +633,10 @@ def slide_cost(deck, apps, estate, results, source):
     movable = [row for row in apps if row["adt_runtime"] in ("ACA", "ACA_WITH_REVIEW")]
     aks_paid = sum(to_float(row["cost_month_usd"]) or 0 for row in movable)
     aca_list = sum(aca[row["cod_app"]] for row in movable)
+    # AKS: what the bank paid (reservations included); Container Apps in consumption has no reservations, so only
+    # the bank's discount on list prices applies to it.
     scenarios = [("Precio de lista (sin descuento)", aks_paid / ratio, aca_list),
-                 ("Con el descuento del banco", aks_paid, aca_list * ratio)]
+                 ("Con el descuento del banco", aks_paid, aca_list * (1 - BANK_DISCOUNT))]
     saving = scenarios[1][1] - scenarios[1][2]
     slide = d.base_slide(deck, f"Mover las {len(movable)} aplicaciones candidatas ahorraría ~{soles(saving)} al mes "
                                f"({soles(saving * 12)} al año)", source)
@@ -599,8 +649,8 @@ def slide_cost(deck, apps, estate, results, source):
     rows = [["Cómo se paga", "AKS", "Container Apps"],
             ["Cobro", "Nodos completos (VM) las 24 horas", "vCPU-segundo y GB-segundo en uso, y peticiones"],
             ["Fuera de horario", "Se paga igual", "Escala a cero (ADT_019: instancias calientes de 8 a 20 h)"],
-            ["Descuento", f"Medido: se paga {d.percent(ratio)} del precio de lista de las VM",
-             "Se asume el mismo porcentaje"]]
+            ["Descuento", f"Medido: se paga {d.percent(ratio)} del precio de lista de las VM (con reservas)",
+             f"{d.percent(BANK_DISCOUNT)} del banco (sin reservas)"]]
     d.table(slide, Inches(0.6), Inches(3.25), Inches(12.1), rows, [0.2, 0.38, 0.42], row_height=0.45, size=12)
     d.note_box(slide, Inches(0.6), Inches(5.35), Inches(12.1), Inches(0.65),
                f"Estimado con las réplicas medidas en {month_label(month)}, cada una del tamaño que pide hoy. Incluye las "
@@ -648,6 +698,9 @@ def main():
     reports = sorted(glob.glob(os.path.join(aa.TOPIC_DIR, "reports", "*-aks-aca")))
     output = args.output or os.path.join(reports[-1] if reports else aa.TOPIC_DIR, "aks_aca_corporate.pptx")
     deck.save(output)
+    prices = read_prices(args.results)
+    breakdown = aca_breakdown(args.results, apps, estate["month"], prices, 1 - BANK_DISCOUNT)
+    aa.azure.Output(os.path.dirname(os.path.abspath(output)), ",").csv("aca_estimate_by_app.csv", breakdown)
     aa.azure.LOG.info("Wrote %s (%d slides)", output, len(deck.slides))
 
 

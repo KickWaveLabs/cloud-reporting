@@ -416,6 +416,35 @@ in `results/aa-prices/prices.csv`):
 - The `Assumptions` sheet keeps every input editable (`req_month`, `office_active_share`, `grant_apply`,
   `cpu_rep`, `mem_rep`).
 
+### 5. Container Apps cost per application (`aca_estimate_by_app.csv`)
+
+`aa_deck_exec.py` writes this CSV next to the corporate deck: one row per PROD application with every input and
+step of its monthly Container Apps cost, so the saving slide can be rebuilt by hand or in the
+[Azure pricing calculator](https://azure.microsoft.com/pricing/calculator/) (Container Apps, Consumption, East US 2).
+
+| Step | Column | Formula |
+|---|---|---|
+| Replicas | `replicas_office` | Per microservice: office-hours average in Container Insights (else the HPA minimum, at least 1), added up |
+| Size of each replica | (inside `vcpu_seconds`) | Smallest Consumption size that covers the request: 0.25 vCPU steps, 2 GiB per vCPU |
+| Time warm | `office_seconds` | Monday to Friday 8:00–20:00 of the month (ADT_019); zero replicas otherwise |
+| vCPU-seconds | `vcpu_seconds` | replicas × vCPU × office seconds |
+| GiB-seconds | `gib_seconds` | replicas × GiB × office seconds |
+| Requests | `requests_with_buffer` | requests of the month × 1.25 (headroom so the saving is not overstated) |
+| Compute | `compute_usd`, `memory_usd` | vCPU-s × 0.000024 + GiB-s × 0.000003 (active rate, list price) |
+| Requests | `requests_usd` | requests / 1,000,000 × 0.40 |
+| Environment | `environment_usd` | 1 environment × 730 h × (0.10 management + 0.10 private endpoint) = 146 |
+| List total | `aca_list_usd` | sum of the four lines above |
+| With discount | `aca_with_discount_usd` | list × 0.70 (the bank's 30%; Container Apps in consumption has no reservations) |
+| In soles | `aca_with_discount_pen_igv` | × 3.41333 × 1.18 |
+
+`aks_cost_usd` is what the application's clusters cost in the month (amortized, reservations included).
+
+- In the calculator, enter `vcpu_seconds` and `gib_seconds` as the active usage, `requests_with_buffer` as the
+  requests, and add the environment hours as a separate line; it subtracts the free grant, which the CSV leaves out.
+- Most of the cost is keeping replicas warm and the environment: on the October test run the requests were
+  about 0.1% of the candidates' Container Apps cost and the environments about 60%. Sharing one environment among
+  several applications lowers that line (`ENVIRONMENTS_PER_APP` in `aa_deck_exec.py`).
+
 ## Metrics not collected today
 
 Ready to add if a question needs them. Each one is a change to the script and a rerun.
