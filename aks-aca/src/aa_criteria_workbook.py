@@ -7,7 +7,8 @@ Seven sheets, plain Excel:
   Criteria    one row per application: its data (from the Data sheet, same row), the conditions, the decision, its
               off-hours replicas (1 by default, write 0 to let it scale to zero) and its monthly cost on AKS and ACA
   Calculator  one application's Container Apps and AKS cost, meter by meter (pick it in B2)
-  Services    one row per "micro"-service (Services query): application, cluster, size and office replicas
+  Services    one row per "micro"-service (Services query): application and its traffic layer, cluster, size, office
+              replicas, HPA and measured use
   Prices      the list prices of the model, with the links where they come from
   Variables   thresholds, discount, IGV, exchange rate and the hours of the month
   Data        the Apps Power Query query: reads the CSV files and joins each "micro"-service to its application
@@ -67,7 +68,7 @@ APPS_NUMBERS = ["clusters", "microservices", "microservices_projected", "busiest
                 "offhours_active_share", "requests_month", "cost_month_usd", "vcpu_office", "vcpu_one_replica_each"]
 PRICES_COLUMNS = ["name", "meter", "unit", "price"]
 # Columns of the Services query (sheet Services): one row per "micro"-service, in order.
-SERVICES_COLUMNS = ["cod_app", "cluster", "namespace", "deployment", "layer", "cpu_request_vcpu", "mem_request_gib",
+SERVICES_COLUMNS = ["cod_app", "traffic_layer", "cluster", "namespace", "deployment", "cpu_request_vcpu", "mem_request_gib",
                     "aca_vcpu", "aca_gib", "replicas_office", "hpa_min", "hpa_max", "replicas_max", "cpu_used_vcpu",
                     "mem_used_gib"]
 # Services columns read as they are from deployment_snapshot.csv (CSV name -> sheet name), all numbers.
@@ -111,7 +112,10 @@ def apps_rows(results):
 
 
 def services_rows(results):
-    """Each "micro"-service of a PROD cluster with applications, with its Container Apps size and office replicas."""
+    """Each "micro"-service of a PROD cluster with applications, with its application's traffic layer, its Container
+    Apps size and office replicas."""
+    layers = {row["cod_app"]: row.get("traffic_layer") or None
+              for row in deck.results_csv(results, "aa-k8s-snapshot", "application_snapshot.csv")}
     clusters = {row["cluster_id"]: row["cod_app"]
                 for row in deck.results_csv(results, "aa-k8s-snapshot", "cluster_snapshot.csv")
                 if row["environment"] == "PROD" and row["category"] == aa.APPLICATION}
@@ -119,11 +123,12 @@ def services_rows(results):
     for row in deck.results_csv(results, "aa-k8s-snapshot", "deployment_snapshot.csv"):
         if row["microservice"] == "YES" and row["cluster_id"] in clusters:
             vcpu, gib = deck.aca_size(row)
-            out.append([clusters[row["cluster_id"]], row["cluster"], row["namespace"], row["deployment"],
-                        row.get("layer") or None, number_or_none(row["cpu_request_vcpu"]),
+            code = clusters[row["cluster_id"]]
+            out.append([code, layers.get(code), row["cluster"], row["namespace"], row["deployment"],
+                        number_or_none(row["cpu_request_vcpu"]),
                         number_or_none(row["mem_request_gib"]), vcpu, gib, deck.office_replicas(row)]
                        + [number_or_none(row.get(source)) for source in SERVICES_MEASURED])
-    return sorted(out, key=lambda values: (values[0], values[1], values[3]))
+    return sorted(out, key=lambda values: (values[0], values[2], values[4]))
 
 
 def prices_rows(results):
@@ -189,7 +194,9 @@ def services_query(results_folder):
     return m[:m.index("    PerApplication =")] + f'''    AcaGib = Table.AddColumn(Replicas, "aca_gib", each [aca_vcpu] * 2, type number),
     // Measured in Container Insights per replica (used) and the HPA configuration of the export
     Renamed = Table.RenameColumns(AcaGib, {{{renames}}}),
-    Columns = Table.SelectColumns(Renamed, {{{columns}}}),
+    // The gateway where the application's traffic is measured (BS, UX, CORE, YAPE...), the same for all its services
+    WithLayer = Table.ExpandTableColumn(Table.NestedJoin(Renamed, {{"cod_app"}}, Table.SelectColumns(Applications, {{"cod_app", "traffic_layer"}}), {{"cod_app"}}, "application", JoinKind.LeftOuter), "application", {{"traffic_layer"}}),
+    Columns = Table.SelectColumns(WithLayer, {{{columns}}}),
     Blanks = Table.ReplaceValue(Columns, "", null, Replacer.ReplaceValue, {{{blanks}}}),
     Typed = Table.TransformColumnTypes(Blanks, {{{typed}}}, "en-US"),
     Sorted = Table.Sort(Typed, {{{{"cod_app", Order.Ascending}}, {{"cluster", Order.Ascending}}, {{"deployment", Order.Ascending}}}})
@@ -326,7 +333,7 @@ def write_data(sheet, rows):
 def write_services(sheet, rows):
     """The Services query's table: filter cod_app or cluster to see what each application or cluster runs."""
     add_table(sheet, "Services", SERVICES_COLUMNS, rows)
-    for column, width in zip("ABCDEFGHIJKLMNO", (10, 18, 22, 48, 10, 16, 16, 10, 10, 16, 9, 9, 13, 14, 13)):
+    for column, width in zip("ABCDEFGHIJKLMNO", (10, 13, 18, 22, 48, 16, 16, 10, 10, 16, 9, 9, 13, 14, 13)):
         sheet.column_dimensions[column].width = width
 
 
