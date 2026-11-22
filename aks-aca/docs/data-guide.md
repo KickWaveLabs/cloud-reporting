@@ -501,7 +501,8 @@ group         = if [decision] <> "NO_TRAFFIC" then [decision]
                 else if [no_traffic_reason] = "IN_USE_NOT_MEASURED" then "IN_USE" else "NOT_IN_USE"
 ```
 
-These are the columns of `aks_aca_criteria.xlsx` (sheet `Criteria`), already computed. Since 2026-11-22 the deck
+The same logic is in `aks_aca_criteria.xlsx`, sheet `Criteria` (`tps_ok`, `services_ok`, `critical`, `growing`,
+`decision`, `group`), already computed. Since 2026-11-22 the deck
 uses `decision`, not `adt_runtime` (the ADT_019 result, kept for reference).
 
 | Slide | Figure | Pivot or formula |
@@ -514,10 +515,10 @@ uses `decision`, not `adt_runtime` (the ADT_019 result, kept for reference).
 | 3 | Autoscalers without changing size | `hpa_snapshot`, PROD, `microservice` = YES, APPLICATION clusters, `last_scale_bucket` other than NO_DATA: (`3_TO_12_MONTHS` + `OVER_1_YEAR`) / count |
 | 3 | Applications with 15 microservices or fewer | `application_snapshot`: count with `microservices` between 1 and 15, out of the total |
 | 3 | Minimum AKS vs one Container Apps "micro"-service | Computed from `prices.csv` (Retail Prices API, the same list prices as the Azure pricing calculator, East US 2) and logged line by line to compare with the calculator. AKS: tier Standard, 4 × D8s v4 Linux, 730 h, 3-year reservation = 4 × 730 × 3,835 / 26,280 = 426.11 US$ of nodes, plus 4 managed OS disks P10 (4 × 17.92 = 71.68) and the Standard tier (730 × 0.10 = 73.00); disks and tier × 0.70 (the bank's 30%), nodes as they are: 527.39 US$ = S/ 2,124. Container Apps: 1 replica of 0.5 vCPU / 1 GiB for 730 h (31.54 + 7.88) plus 5 million requests (2.00) = 41.42 US$ × 0.70 = S/ 117. Cross-check (log only): the median October bill of the 11 PROD clusters with exactly 4 D8s v4 nodes all month was 514.75 US$ (S/ 2,073), within 3% |
-| 4 | The two conditions and the off-hours rule | Text only. Each condition is a column of `aks_aca_criteria.xlsx` (`c1_peak_hour_tps_ok`, `c2_microservices_ok`); the off-hours rule changes the cost, not the decision |
-| 5 | Result per group (chart and table) | `aks_aca_criteria.xlsx`, sheet `Results` (same groups, ✗ counts, cost today and new, editable chart); or sheet `Criteria`: pivot rows `decision`; NO_TRAFFIC splits by `no_traffic_reason` as `group` below (leave `IN_DEVELOPMENT` out of the chart; it is the second bullet); count of `cod_app` and sum of `cost_month_usd`, in soles |
+| 4 | The two conditions and the off-hours rule | Text only. Each condition is a column of `aks_aca_criteria.xlsx` (`tps_ok`, `services_ok`); the off-hours rule changes the cost, not the decision |
+| 5 | Result per group (chart and table) | `aks_aca_criteria.xlsx`, sheet `Results` (same groups, failed conditions, cost today and with ACA, editable chart); or sheet `Criteria`: pivot rows `decision`; NO_TRAFFIC splits by `no_traffic_reason` as `group` below (leave `IN_DEVELOPMENT` out of the chart; it is the second bullet); count of `cod_app` and sum of `cost_month_usd`, in soles |
 | 5 | Single microservice | Count of `possible_monolith` = YES |
-| 6 | Saving | `aks_aca_criteria.xlsx`, sheet `Summary`; or `aca_estimate_by_app`, filter `decision` in (ACA, ACA_WITH_REVIEW). With discount: sum `aks_cost_pen_igv` − sum `aca_with_discount_pen_igv` per month; × 12 per year. List price: sum `aks_cost_usd` / measured discount − sum `aca_list_usd`, in soles |
+| 6 | Saving | `aks_aca_criteria.xlsx`, sheet `Results` (total row); or `aca_estimate_by_app`, filter `decision` in (ACA, ACA_WITH_REVIEW). With discount: sum `aks_cost_pen_igv` − sum `aca_with_discount_pen_igv` per month; × 12 per year. List price: sum `aks_cost_usd` / measured discount − sum `aca_list_usd`, in soles |
 
 - The measured discount is what PROD node VMs cost in the month (amortized, reservations included) divided by
   their node-hours at list price; the script logs it and prints it on slides 3 and 7. To check it in the portal:

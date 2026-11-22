@@ -191,16 +191,13 @@ python aks-aca/src/aa_criteria_workbook.py
     month. It reads only `results/` (including `application_snapshot.csv`), so it needs no saved workbook. AKS
     takes the discount measured on its node VMs (reservations included); `--aks-discount 0.60` fixes it by hand.
     Container Apps takes the bank's 30%.
-14. `aa_criteria_workbook.py` writes `aks_aca_criteria.xlsx` next to the deck: one row per PROD application with
-    the conditions it meets (one column each), its decision and its Container Apps cost and saving, all as Excel
-    formulas over the CSV data (sheets `Criteria`, `Services`, `Prices`) and the yellow cells (`Assumptions`).
-    `OffhoursReplicas` sets, per application, the replicas each "micro"-service keeps on at night (empty = 1, as
-    the deck; 0 = scale to zero). `Results` is the result slide with an editable chart and `Summary` the funnel and the saving; with the defaults
-    both give the deck's figures. `Calculator` shows one application's cost (pick it in C3) in the format of the
-    team's ACA/AKS calculators (units × cost per unit × seconds = gross; − discount; + IGV; in soles), and
-    `Minimums` rebuilds the slide 3 minimums the same way.
-    `aks_aca_criteria.pq`, next to it, holds the same three data tables as Power Query queries over the CSV files
-    (the join of deployments to applications through `cluster_snapshot.csv` included).
+14. `aa_criteria_workbook.py` writes `aks_aca_criteria.xlsx` next to the deck, plain Excel in five sheets: `Results`
+    (one row per destination, as the result slide, and an editable chart), `Criteria` (one row per application:
+    data, conditions, decision, night replicas — 1 by default, write 0 to let one scale to zero — and its monthly
+    cost on AKS and Container Apps in soles), `Calculator` (one application meter by meter, in the format of the
+    team's calculator), `Prices` (with links to the sources) and `Variables`. With the defaults it gives the deck's
+    figures. `aks_aca_criteria.pq`, next to it, holds the three Power Query queries (Services as a connection only,
+    Apps and Prices loaded into their sheets) and how to add them in Excel.
 
 Smoke tests before a full run: `aa_metrics.py --clusters <one-cluster> --skip-apim --start <day>
 --end <day>` and `aa_container_insights.py --clusters <one-cluster> --start <day> --end <day>`, each
