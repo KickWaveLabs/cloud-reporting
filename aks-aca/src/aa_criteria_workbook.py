@@ -26,6 +26,8 @@ from collections import defaultdict
 from openpyxl import Workbook
 from openpyxl.chart import BarChart, Reference
 from openpyxl.chart.label import DataLabelList
+from openpyxl.chart.legend import Legend
+from openpyxl.chart.marker import DataPoint
 from openpyxl.styles import Font
 from openpyxl.utils import get_column_letter
 from openpyxl.workbook.defined_name import DefinedName
@@ -305,6 +307,10 @@ GROUPS = [("AKS", "Stays on AKS", "AKS"), ("ACA_WITH_REVIEW", "ACA, with review"
           ("NOT_IN_USE", "Not in use", "AKS")]
 
 
+GROUP_COLORS = {"AKS": "1E3A78", "ACA_WITH_REVIEW": "F2A15A", "ACA": "4CB07A", "IN_USE": "4A8FB8",
+                "NOT_IN_USE": "5B6770"}
+
+
 def write_results(sheet):
     sheet["A1"] = "Result per destination"
     sheet["A1"].font = Font(bold=True, size=14)
@@ -329,13 +335,21 @@ def write_results(sheet):
     sheet.cell(row=total + 1, column=1,
                value='=COUNTIFS(Criteria[group],"IN_DEVELOPMENT")&" apps in development are not counted."')
     chart = BarChart()
-    chart.type, chart.style, chart.legend, chart.title = "col", 10, None, "Applications per destination"
+    chart.type, chart.style, chart.title = "col", 10, "Applications per destination"
+    chart.legend = Legend()
+    chart.legend.position = "b"
+    chart.varyColors = True
     chart.add_data(Reference(sheet, min_col=2, min_row=3, max_row=3 + len(GROUPS)), titles_from_data=True)
     chart.set_categories(Reference(sheet, min_col=1, min_row=4, max_row=3 + len(GROUPS)))
     chart.dataLabels = DataLabelList()
     chart.dataLabels.showVal = True
     chart.dataLabels.showCatName = chart.dataLabels.showSerName = chart.dataLabels.showLegendKey = False
-    chart.height, chart.width = 8, 16
+    # One colour per destination, as the deck, so the legend at the bottom names each bar.
+    for index, (group, _, _) in enumerate(GROUPS):
+        point = DataPoint(idx=index)
+        point.graphicalProperties.solidFill = GROUP_COLORS[group]
+        chart.series[0].dPt.append(point)
+    chart.height, chart.width = 9, 16
     sheet.add_chart(chart, f"A{total + 3}")
     for column, width in zip("ABCDEFGH", (22, 8, 10, 13, 10, 16, 16, 16)):
         sheet.column_dimensions[column].width = width
