@@ -881,6 +881,15 @@ def application_rows(cluster_table, hpas, deployments, traffic, coverage, cost_b
     prod_names = microservice_names(deployments, cluster_table, "PROD")
     desa_names = microservice_names(deployments, cluster_table, "DESA")
     notes = traffic_notes(cluster_table, inventory, services, prod_names)
+    # A "micro"-service deployed with the same name in two clusters of the application (a migration between clusters,
+    # or both active) is one service: microservices counts distinct deployment names, microservices_deployed adds the
+    # clusters up (what runs, and what the cost is made of).
+    app_of = {row["cluster_id"] or "name:" + row["cluster"].lower(): code for code, rows in groups.items() for row in rows}
+    distinct = defaultdict(set)
+    for row in deployments:
+        code = app_of.get(cluster_key(row))
+        if code and row["microservice"] == "YES":
+            distinct[code].add(str(row["deployment"]).lower())
     hpa_causes = defaultdict(list)
     for row in hpas:
         if row["environment"] == "PROD" and row["microservice"] == "YES":
@@ -908,6 +917,8 @@ def application_rows(cluster_table, hpas, deployments, traffic, coverage, cost_b
                    "traffic_layer", "apis_with_traffic", "requests_month", "office_share", "peak_tps_upper_bound", "busiest_hour_tps",
                    "busiest_hour", "busiest_hour_in_office", "busiest_office_hour_tps", "busiest_offhours_hour_tps",
                    "weekday_hours_with_traffic", "offhours_active_share")}}
+        app["microservices_deployed"] = app["microservices"]
+        app["microservices"] = len(distinct[code]) if code in distinct else app["microservices"]
         # One microservice in PROD and no more in DESA: a single deployment that is not growing.
         app["possible_monolith"] = yes(app["microservices"] == 1 and app["microservices_projected"] in ("", 0, 1))
         app["adt_runtime"], app["adt_reason"] = adt_runtime(app)
