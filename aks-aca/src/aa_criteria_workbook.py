@@ -60,14 +60,19 @@ PRICES = [("price_vcpu", "aca_vcpu_active_s"), ("price_vcpu_idle", "aca_vcpu_idl
 
 # Columns of the Apps query (sheet Criteria), in order; the last two come from the Services query.
 APPS_COLUMNS = ["cod_app", "cluster_names", "clusters", "bia", "microservices", "microservices_projected", "traffic_status",
+                "traffic_layer",
                 "busiest_hour_tps", "busiest_offhours_hour_tps", "offhours_active_share", "requests_month",
                 "cost_month_usd", "no_traffic_reason", "vcpu_office", "vcpu_one_replica_each"]
 APPS_NUMBERS = ["clusters", "microservices", "microservices_projected", "busiest_hour_tps", "busiest_offhours_hour_tps",
                 "offhours_active_share", "requests_month", "cost_month_usd", "vcpu_office", "vcpu_one_replica_each"]
 PRICES_COLUMNS = ["name", "meter", "unit", "price"]
 # Columns of the Services query (sheet Services): one row per "micro"-service, in order.
-SERVICES_COLUMNS = ["cod_app", "cluster", "namespace", "deployment", "cpu_request_vcpu", "mem_request_gib", "aca_vcpu",
-                    "aca_gib", "replicas_office"]
+SERVICES_COLUMNS = ["cod_app", "cluster", "namespace", "deployment", "layer", "cpu_request_vcpu", "mem_request_gib",
+                    "aca_vcpu", "aca_gib", "replicas_office", "hpa_min", "hpa_max", "replicas_max", "cpu_used_vcpu",
+                    "mem_used_gib"]
+# Services columns read as they are from deployment_snapshot.csv (CSV name -> sheet name), all numbers.
+SERVICES_MEASURED = {"hpa_min": "hpa_min", "hpa_max": "hpa_max", "ci_replicas_max": "replicas_max",
+                     "ci_cpu_used_per_replica": "cpu_used_vcpu", "ci_mem_used_gib_per_replica": "mem_used_gib"}
 
 
 # ---------------------------------------------------------------------------
@@ -115,8 +120,9 @@ def services_rows(results):
         if row["microservice"] == "YES" and row["cluster_id"] in clusters:
             vcpu, gib = deck.aca_size(row)
             out.append([clusters[row["cluster_id"]], row["cluster"], row["namespace"], row["deployment"],
-                        number_or_none(row["cpu_request_vcpu"]), number_or_none(row["mem_request_gib"]), vcpu, gib,
-                        deck.office_replicas(row)])
+                        row.get("layer") or None, number_or_none(row["cpu_request_vcpu"]),
+                        number_or_none(row["mem_request_gib"]), vcpu, gib, deck.office_replicas(row)]
+                       + [number_or_none(row.get(source)) for source in SERVICES_MEASURED])
     return sorted(out, key=lambda values: (values[0], values[1], values[3]))
 
 
@@ -175,11 +181,17 @@ in
 def services_query(results_folder):
     """M code of the Services query: the same steps as the Apps query up to each "micro"-service's size and replicas."""
     m = apps_query(results_folder)
+    renames = ", ".join(f'{{"{source}", "{name}"}}' for source, name in SERVICES_MEASURED.items() if source != name)
     columns = ", ".join(f'"{c}"' for c in SERVICES_COLUMNS)
+    numbers = ["cpu_request_vcpu", "mem_request_gib"] + list(SERVICES_MEASURED.values())
+    blanks = ", ".join(f'"{c}"' for c in numbers)
+    typed = ", ".join(f'{{"{c}", type number}}' for c in numbers)
     return m[:m.index("    PerApplication =")] + f'''    AcaGib = Table.AddColumn(Replicas, "aca_gib", each [aca_vcpu] * 2, type number),
-    Columns = Table.SelectColumns(AcaGib, {{{columns}}}),
-    Blanks = Table.ReplaceValue(Columns, "", null, Replacer.ReplaceValue, {{"cpu_request_vcpu", "mem_request_gib"}}),
-    Typed = Table.TransformColumnTypes(Blanks, {{{{"cpu_request_vcpu", type number}}, {{"mem_request_gib", type number}}}}, "en-US"),
+    // Measured in Container Insights per replica (used) and the HPA configuration of the export
+    Renamed = Table.RenameColumns(AcaGib, {{{renames}}}),
+    Columns = Table.SelectColumns(Renamed, {{{columns}}}),
+    Blanks = Table.ReplaceValue(Columns, "", null, Replacer.ReplaceValue, {{{blanks}}}),
+    Typed = Table.TransformColumnTypes(Blanks, {{{typed}}}, "en-US"),
     Sorted = Table.Sort(Typed, {{{{"cod_app", Order.Ascending}}, {{"cluster", Order.Ascending}}, {{"deployment", Order.Ascending}}}})
 in
     Sorted'''
@@ -314,7 +326,7 @@ def write_data(sheet, rows):
 def write_services(sheet, rows):
     """The Services query's table: filter cod_app or cluster to see what each application or cluster runs."""
     add_table(sheet, "Services", SERVICES_COLUMNS, rows)
-    for column, width in zip("ABCDEFGHI", (10, 18, 22, 48, 16, 16, 10, 10, 16)):
+    for column, width in zip("ABCDEFGHIJKLMNO", (10, 18, 22, 48, 10, 16, 16, 10, 10, 16, 9, 9, 13, 14, 13)):
         sheet.column_dimensions[column].width = width
 
 
