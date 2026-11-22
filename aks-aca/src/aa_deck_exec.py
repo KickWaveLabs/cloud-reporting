@@ -531,10 +531,9 @@ ACA_CONDITIONS = [
     ("Hasta 100 TPS", "Tráfico moderado", "Hasta 100 transacciones por segundo (TPS) en su hora pico.", "tps_ok"),
     (f"Hasta 15 {MICRO}", f"Hasta 15 {MICRO}", "Si tiene más, se queda en AKS.", "size_ok"),
 ]
-OFFHOURS_RULE = ("Tiende a cero fuera de horario (de 20 a 8 h y fines de semana)",
-                 ["Se puede apagar: la primera transacción la despierta en hasta ~30 s. Validar el timeout de quien la "
-                  "llama.",
-                  f"En el costo se cuenta 1 réplica encendida las 24 horas por {MICRO_ONE}."])
+OFFHOURS_RULE = ("Tiende a cero fuera de horario (20 a 8 h y fines de semana)",
+                 [f"Se costea con 1 réplica mínima encendida por {MICRO_ONE}.",
+                  "Si se apaga, la primera transacción espera ~30 s."])
 CHECKS_BEFORE_MOVING = ["Si es crítica para el banco, se valida con gobierno de arquitectura.",
                         f"Si está creciendo y pronto pasará de 15 {MICRO}, se confirma antes de mover."]
 
@@ -552,7 +551,7 @@ def condition_card(slide, left, top, width, height, badge, colour, title, lines,
 
 
 def slide_criteria(deck, source):
-    slide = d.base_slide(deck, "Para pasar a Container Apps: dos condiciones y una regla para la noche", source)
+    slide = d.base_slide(deck, "Para pasar a Container Apps: dos condiciones y una regla fuera de horario", source)
     width, height, gap = Inches(5.9), Inches(1.35), Inches(0.3)
     for index, (_, title, meaning, _) in enumerate(ACA_CONDITIONS):
         condition_card(slide, Inches(0.6) + index * (width + gap), Inches(1.35), width, height, str(index + 1), d.GREEN,
