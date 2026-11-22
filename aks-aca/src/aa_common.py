@@ -44,7 +44,10 @@ PLATFORM_NAMESPACE_PREFIXES = ("aks-istio", "istio-", "calico", "tigera", "gatek
 TOOL_WORKLOAD_PREFIXES = ("pod-restart-cronjob", "agic-ingress", "otel-", "opentelemetry", "shgw", "chaos",
                           "arc-", "actions-runner", "github-runner", "tfc-agent", "sonarqube", "demo-sonarqube",
                           "connectivity-toolbox", "grafana", "alloy", "elasticsearch", "kibana", "logstash", "memcached",
-                          "envoy-rw", "apollo-router", "orca-", "thanos-", "irontap")
+                          "envoy-rw", "apollo-router", "orca-", "thanos-", "irontap", "nginx")
+# Workloads that are not services of the application wherever the word appears in the name: mocks and dummies left
+# in PROD, and metric exporters.
+TOOL_WORKLOAD_PARTS = ("mock", "dummy", "-exporter", "dynatrace")
 # Applications whose clusters only run infrastructure tools: excluded from every application figure.
 INFRASTRUCTURE_APPS = {
     "COAA": "GitHub Actions runners", "VSDP": "GitHub Actions runners", "HTFC": "Terraform Cloud agents",
@@ -66,7 +69,8 @@ APP_GATEWAY_PREFIXES = ("shgw", "agic-ingress", "otel-", "opentelemetry")
 
 
 def is_tool_workload(name):
-    return str(name or "").lower().startswith(TOOL_WORKLOAD_PREFIXES)
+    name = str(name or "").lower()
+    return name.startswith(TOOL_WORKLOAD_PREFIXES) or any(part in name for part in TOOL_WORKLOAD_PARTS)
 
 
 def is_app_gateway(name):

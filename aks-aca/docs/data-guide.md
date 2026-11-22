@@ -121,7 +121,7 @@ Insights (the period). Every row carries `cluster_id` and `cod_app`; clusters ar
 | Term | Definition |
 |---|---|
 | Application | An app code (`cod_app`) with at least one APPLICATION cluster |
-| Microservice | A deployment outside platform namespaces and not a known tool (`aa_common.is_microservice`) |
+| Microservice | A deployment outside platform namespaces (system, Istio, any with "ingress", `default`, `monitoring`, GitOps, KEDA...) and not a known tool: name starting with a tool prefix (`otel-`, `shgw`, `agic-ingress`, runners, `nginx`...) or containing `mock`, `dummy`, `-exporter` or `dynatrace` (`aa_common.is_microservice`) |
 | Domain | A namespace with at least one microservice |
 | Deployment | Any row of the export, unfiltered |
 
