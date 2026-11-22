@@ -104,6 +104,12 @@ def month_label(month):
         return month or "el mes"
 
 
+def deployed_microservices(apps):
+    """"Micro"-services running in the clusters: each cluster counts its own, so one deployed in two clusters of an
+    application counts twice (microservices_deployed). The 15 rule uses microservices: distinct per application."""
+    return sum(int(to_float(row.get("microservices_deployed") or row.get("microservices")) or 0) for row in apps)
+
+
 def results_csv(results, folder, name):
     return aa.read_csv(os.path.join(results, folder, name))
 
@@ -293,7 +299,7 @@ def slide_context(deck, apps, source):
     width = int((Inches(12.15) - gap * (len(cards) - 1)) / len(cards))
     for index, (title, drawing, lines, runtime, accent) in enumerate(cards):
         type_card(slide, Inches(0.6) + index * (width + gap), width, title, drawing, lines, runtime, accent)
-    microservices = sum(int(row["microservices"] or 0) for row in apps)
+    microservices = deployed_microservices(apps)
     d.callout(slide, Inches(0.6), Inches(5.9), Inches(12.15), Inches(0.75),
               f"Hoy casi todo corre en AKS: {d.number(sum(int(to_float(row.get('clusters')) or 1) for row in apps))} "
               f"clusters y {d.number(microservices)} {MICRO}, "
@@ -320,7 +326,7 @@ def slide_estate(deck, estate, apps, source):
     category = estate["by_category"]
     prod = estate["prod"]
     prod_cost, nonprod_cost = estate["prod_cost"]["AKS"], estate["nonprod_cost"]
-    microservices = sum(int(row["microservices"] or 0) for row in apps)
+    microservices = deployed_microservices(apps)
     slide = d.base_slide(deck, f"Producción: {prod['aks']} clusters AKS concentran los {MICRO}", source)
     left, top, width, height = Inches(0.6), Inches(1.3), Inches(3.4), Inches(3.45)
     d.rounded(slide, left, top, width, height, d.CARD)

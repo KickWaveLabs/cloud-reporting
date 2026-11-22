@@ -507,7 +507,7 @@ uses `decision`, not `adt_runtime` (the ADT_019 result, kept for reference).
 
 | Slide | Figure | Pivot or formula |
 |---|---|---|
-| 1 | Clusters and microservices on AKS | `application_snapshot`: sum of `clusters`; sum of `microservices` |
+| 1 | Clusters and microservices on AKS | `application_snapshot`: sum of `clusters`; sum of `microservices_deployed` (each cluster counts its own; the 15 rule uses `microservices`, distinct per application) |
 | 2 | Runtimes in PROD (cards) | Inventory CSVs, filter `environment` = PROD and `existed_at_measurement` other than NO: `aks_clusters` (count `id`), `aca_apps`, `aca_environments`, `app_services` with `type` = WEB, `app_service_plans` with `runtime` = APP_SERVICE. Functions are left out for now (`SHOW_FUNCTIONS` in `aa_deck_exec.py`) |
 | 2 | Cost per runtime | `cost_by_resource`, measured month, `environment` = PROD; rows `owner_type`; sum `cost_usd`, in soles |
 | 2 | Clusters by category (table) | `cluster_snapshot`, PROD, `in_inventory` = YES, cluster existed in the month; rows `category`; count and cost (lookup of `owner_id` in `cost_by_resource`) |
