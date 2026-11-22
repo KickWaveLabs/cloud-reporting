@@ -192,8 +192,8 @@ python aks-aca/src/aa_criteria_workbook.py
     takes the discount measured on its node VMs (reservations included); `--aks-discount 0.60` fixes it by hand.
     Container Apps takes the bank's 30%.
 14. `aa_criteria_workbook.py` writes `aks_aca_criteria.xlsx` next to the deck, plain Excel in six sheets: `Results`
-    (one row per destination, as the result slide, and an editable chart), `Criteria` (one row per application:
-    data, conditions, decision, night replicas — 1 by default, write 0 to let one scale to zero — and its monthly
+    (one row per destination in clusters and applications, as the result slide, and an editable chart), `Criteria` (one row per application:
+    data, conditions, decision, off-hours replicas (nights and weekends) — 1 by default, write 0 to let one scale to zero — and its monthly
     cost on AKS and Container Apps in soles), `Calculator` (one application meter by meter, in the format of the
     team's calculator), `Prices` (with links to the sources), `Variables` and `Data`. `Data` is a Power Query
     connection (query `Apps`): it reads the snapshot CSVs and joins each "micro"-service to its application.

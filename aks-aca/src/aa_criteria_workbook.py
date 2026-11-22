@@ -5,7 +5,7 @@ would save, from the CSV files in results/.
 Six sheets, plain Excel:
   Results     one row per destination (as the result slide) and a chart that can be edited
   Criteria    one row per application: its data (from the Data sheet, same row), the conditions, the decision, its
-              night replicas (1 by default, write 0 to let it scale to zero) and its monthly cost on AKS and ACA
+              off-hours replicas (1 by default, write 0 to let it scale to zero) and its monthly cost on AKS and ACA
   Calculator  one application's Container Apps and AKS cost, meter by meter (pick it in B2)
   Prices      the list prices of the model, with the links where they come from
   Variables   thresholds, discount, IGV, exchange rate and the hours of the month
@@ -57,10 +57,10 @@ PRICES = [("price_vcpu", "aca_vcpu_active_s"), ("price_vcpu_idle", "aca_vcpu_idl
           ("price_lb_gb", "lb_standard_data_gb")]
 
 # Columns of the Apps query (sheet Criteria), in order; the last two come from the Services query.
-APPS_COLUMNS = ["cod_app", "cluster_names", "bia", "microservices", "microservices_projected", "traffic_status",
+APPS_COLUMNS = ["cod_app", "cluster_names", "clusters", "bia", "microservices", "microservices_projected", "traffic_status",
                 "busiest_hour_tps", "busiest_offhours_hour_tps", "offhours_active_share", "requests_month",
                 "cost_month_usd", "no_traffic_reason", "vcpu_office", "vcpu_one_replica_each"]
-APPS_NUMBERS = ["microservices", "microservices_projected", "busiest_hour_tps", "busiest_offhours_hour_tps",
+APPS_NUMBERS = ["clusters", "microservices", "microservices_projected", "busiest_hour_tps", "busiest_offhours_hour_tps",
                 "offhours_active_share", "requests_month", "cost_month_usd", "vcpu_office", "vcpu_one_replica_each"]
 PRICES_COLUMNS = ["name", "meter", "unit", "price"]
 
@@ -192,9 +192,9 @@ def write_variables(book, sheet, month):
     blocks = [
         ("Conditions", [("max_tps", deck.MAX_TPS, "Peak hour traffic up to this TPS"),
                         ("max_services", deck.MAX_MICROSERVICES, "Up to this many \"micro\"-services in PROD")]),
-        ("Container Apps", [("night_replicas", deck.OFFHOURS_REPLICAS,
-                             "Replicas each \"micro\"-service keeps on at night (change it per app in Criteria)"),
-                            ("night_rate", "ACTIVE", "ACTIVE or IDLE (idle: replica without requests)"),
+        ("Container Apps", [("offhours_replicas", deck.OFFHOURS_REPLICAS,
+                             "Replicas each \"micro\"-service keeps on outside office hours, weekends included (change it per app in Criteria)"),
+                            ("offhours_rate", "ACTIVE", "ACTIVE or IDLE (idle: replica without requests)"),
                             ("requests_buffer", deck.REQUESTS_BUFFER, "Extra on the requests of the month"),
                             ("environments_per_app", deck.ENVIRONMENTS_PER_APP, "One load balancer each"),
                             ("gib_per_vcpu", 2, "Container Apps gives 2 GiB per vCPU")]),
@@ -205,7 +205,7 @@ def write_variables(book, sheet, month):
                   ("office_seconds", "=NETWORKDAYS(DATE(LEFT(data_month,4),RIGHT(data_month,2),1),EOMONTH(DATE(LEFT(data_month,4),"
                                      f"RIGHT(data_month,2),1),0))*{aa.OFFICE_END_HOUR - aa.OFFICE_START_HOUR}*3600",
                    f"Monday to Friday, {aa.OFFICE_START_HOUR}:00 to {aa.OFFICE_END_HOUR}:00"),
-                  ("night_seconds", "=DAY(EOMONTH(DATE(LEFT(data_month,4),RIGHT(data_month,2),1),0))*86400-office_seconds",
+                  ("offhours_seconds", "=DAY(EOMONTH(DATE(LEFT(data_month,4),RIGHT(data_month,2),1),0))*86400-office_seconds",
                    "The rest of the month"),
                   ("hours_month", deck.HOURS_MONTH, "Hours billed for the load balancer")]),
     ]
@@ -246,8 +246,8 @@ def write_prices(book, sheet, rows):
 
 def criteria_formulas():
     r = lambda column: f"Criteria[[#This Row],[{column}]]"
-    night_vcpu = 'IF(night_rate="IDLE",price_vcpu_idle,price_vcpu)'
-    night_gib = 'IF(night_rate="IDLE",price_gib_idle,price_gib)'
+    offhours_vcpu = 'IF(offhours_rate="IDLE",price_vcpu_idle,price_vcpu)'
+    offhours_gib = 'IF(offhours_rate="IDLE",price_gib_idle,price_gib)'
     return [
         ("has_traffic", f'IF(AND({r("traffic_status")}="MEASURED",ISNUMBER({r("busiest_hour_tps")})),"YES","NO")'),
         ("tps_ok", f'IF({r("has_traffic")}="NO","-",IF({r("busiest_hour_tps")}<=max_tps,"YES","NO"))'),
@@ -259,10 +259,10 @@ def criteria_formulas():
                      f'"AKS",IF(OR({r("critical")}="YES",{r("growing")}="YES"),"ACA_WITH_REVIEW","ACA")))'),
         ("group", f'IF({r("decision")}<>"NO_TRAFFIC",{r("decision")},IF({r("no_traffic_reason")}="IN_DEVELOPMENT",'
                   f'"IN_DEVELOPMENT",IF({r("no_traffic_reason")}="IN_USE_NOT_MEASURED","IN_USE","NOT_IN_USE")))'),
-        ("night_replicas", "night_replicas"),
+        ("offhours_replicas", "offhours_replicas"),
         ("aca_list_usd", f"N({r('vcpu_office')})*office_seconds*(price_vcpu+gib_per_vcpu*price_gib)"
-                         f"+{r('night_replicas')}*N({r('vcpu_one_replica_each')})*night_seconds*({night_vcpu}"
-                         f"+gib_per_vcpu*{night_gib})+N({r('requests_month')})*requests_buffer/1000000*price_requests"
+                         f"+{r('offhours_replicas')}*N({r('vcpu_one_replica_each')})*offhours_seconds*({offhours_vcpu}"
+                         f"+gib_per_vcpu*{offhours_gib})+N({r('requests_month')})*requests_buffer/1000000*price_requests"
                          "+environments_per_app*hours_month*price_lb_hour"),
         ("aca_month_pen", f"{r('aca_list_usd')}*(1-bank_discount)*(1+igv)*exchange_rate"),
         ("aks_month_pen", f"N({r('cost_month_usd')})*(1+igv)*exchange_rate"),
@@ -280,7 +280,7 @@ def write_data(sheet, rows):
 
 def write_criteria(sheet, rows):
     """One row per application: each data column comes from the same row of the Data sheet (the Apps query), then
-    the conditions, the decision, the night replicas (a value that can be changed) and the costs."""
+    the conditions, the decision, the off-hours replicas (a value that can be changed) and the costs."""
     def pull(column):
         value = f"INDEX(Apps[{column}],ROW()-1)"
         return f'IF(ISBLANK({value}),"",{value})'
@@ -293,8 +293,9 @@ def write_criteria(sheet, rows):
         if number_format:
             for row in range(2, len(rows) + 2):
                 sheet.cell(row=row, column=index).number_format = number_format
-    # Night replicas are a value, not a formula: 1 for every application, 0 where it may scale to zero at night.
-    column = [header for header, _ in formulas].index("night_replicas") + 1
+    # Off-hours replicas are a value, not a formula: 1 for every application, 0 where it may scale to zero outside
+    # office hours.
+    column = [header for header, _ in formulas].index("offhours_replicas") + 1
     for row in range(2, len(rows) + 2):
         sheet.cell(row=row, column=column, value=deck.OFFHOURS_REPLICAS)
     table = sheet.tables["Criteria"]
@@ -312,30 +313,32 @@ GROUP_COLORS = {"AKS": "1E3A78", "ACA_WITH_REVIEW": "F2A15A", "ACA": "4CB07A", "
 
 
 def write_results(sheet):
-    sheet["A1"] = "Result per destination"
+    sheet["A1"] = "Result per destination (clusters; the decision is taken per application)"
     sheet["A1"].font = Font(bold=True, size=14)
-    headers = ["Destination", "Apps", "Fail TPS", "Fail services", "Goes to", "AKS today (S/)", "With ACA (S/)",
-               "Saving (S/)"]
+    headers = ["Destination", "Clusters", "Apps", "Fail TPS", "Fail services", "Goes to", "AKS today (S/)",
+               "With ACA (S/)", "Saving (S/)"]
     for column, header in enumerate(headers, start=1):
         sheet.cell(row=3, column=column, value=header)
     for row, (group, label, runtime) in enumerate(GROUPS, start=4):
         where = f'Criteria[group],"{group}"'
-        values = [label, f"=COUNTIFS({where})", f'=COUNTIFS({where},Criteria[tps_ok],"NO")',
-                  f'=COUNTIFS({where},Criteria[services_ok],"NO")', runtime, f"=SUMIFS(Criteria[aks_month_pen],{where})",
-                  f"=F{row}-SUMIFS(Criteria[saving_month_pen],{where})", f"=F{row}-G{row}"]
+        values = [label, f"=SUMIFS(Criteria[clusters],{where})", f"=COUNTIFS({where})",
+                  f'=COUNTIFS({where},Criteria[tps_ok],"NO")', f'=COUNTIFS({where},Criteria[services_ok],"NO")', runtime,
+                  f"=SUMIFS(Criteria[aks_month_pen],{where})", f"=G{row}-SUMIFS(Criteria[saving_month_pen],{where})",
+                  f"=G{row}-H{row}"]
         for column, value in enumerate(values, start=1):
-            sheet.cell(row=row, column=column, value=value).number_format = PEN if column >= 6 else "General"
+            sheet.cell(row=row, column=column, value=value).number_format = PEN if column >= 7 else "General"
     total = 4 + len(GROUPS)
     sheet.cell(row=total, column=1, value="Total")
-    for column in (2, 6, 7, 8):
+    for column in (2, 3, 7, 8, 9):
         letter = get_column_letter(column)
         cell = sheet.cell(row=total, column=column, value=f"=SUM({letter}4:{letter}{total - 1})")
-        cell.number_format = PEN if column >= 6 else "General"
-    plain_table(sheet, "Results", f"A3:H{total}")
+        cell.number_format = PEN if column >= 7 else "General"
+    plain_table(sheet, "Results", f"A3:I{total}")
     sheet.cell(row=total + 1, column=1,
-               value='=COUNTIFS(Criteria[group],"IN_DEVELOPMENT")&" apps in development are not counted."')
+               value='=COUNTIFS(Criteria[group],"IN_DEVELOPMENT")&" apps in development are not counted. Fail columns count '
+                     'applications."')
     chart = BarChart()
-    chart.type, chart.style, chart.title = "col", 10, "Applications per destination"
+    chart.type, chart.style, chart.title = "col", 10, "Clusters per destination"
     chart.legend = Legend()
     chart.legend.position = "b"
     chart.varyColors = True
@@ -351,7 +354,7 @@ def write_results(sheet):
         chart.series[0].dPt.append(point)
     chart.height, chart.width = 9, 16
     sheet.add_chart(chart, f"A{total + 3}")
-    for column, width in zip("ABCDEFGH", (22, 8, 10, 13, 10, 16, 16, 16)):
+    for column, width in zip("ABCDEFGHI", (22, 9, 7, 10, 13, 10, 16, 16, 16)):
         sheet.column_dimensions[column].width = width
 
 
@@ -365,7 +368,7 @@ def write_calculator(sheet, default_app):
     sheet.add_data_validation(validation)
     validation.add("B2")
     sheet["A3"], sheet["B3"] = "Decision", f"={app('decision')}"
-    sheet["A4"], sheet["B4"] = "Night replicas", f"={app('night_replicas')}"
+    sheet["A4"], sheet["B4"] = "Off-hours replicas", f"={app('offhours_replicas')}"
     headers = ["Meter", "Units", "Cost / Unit", "Seconds", "Gross Total", "Discount", "Gross Total + Dsct",
                "Net Total", "Net Total (S/)"]
 
@@ -391,20 +394,20 @@ def write_calculator(sheet, default_app):
 
     sheet.cell(row=6, column=4, value="MONTH").font = BOLD
     month = [("days (12h)", "=office_seconds/3600/12"), ("hours", "=office_seconds/3600"),
-             ("seconds", "=office_seconds"), ("night seconds", "=night_seconds"),
+             ("seconds", "=office_seconds"), ("off-hours seconds", "=offhours_seconds"),
              ("Requests(M)", f"=N({app('requests_month')})*requests_buffer/1000000")]
     for column, (header, formula) in enumerate(month, start=1):
         sheet.cell(row=7, column=column, value=header)
         sheet.cell(row=8, column=column, value=formula).number_format = "#,##0.00"
     plain_table(sheet, "Month", "A7:E8")
-    night = lambda active, idle: f'=IF(night_rate="IDLE",{idle},{active})'
+    offhours = lambda active, idle: f'=IF(offhours_rate="IDLE",{idle},{active})'
     aca = block(10, "ACA - COST - MONTHLY", "AcaCost", [
         ("Requests (M)", "=E8", "=price_requests", 1, "=bank_discount"),
         ("vCPU office", f"={app('vcpu_office')}", "=price_vcpu", "=C8", "=bank_discount"),
         ("GiB office", f"={app('vcpu_office')}*gib_per_vcpu", "=price_gib", "=C8", "=bank_discount"),
-        ("vCPU night", f"=B4*{app('vcpu_one_replica_each')}", night("price_vcpu", "price_vcpu_idle"), "=D8",
+        ("vCPU off-hours", f"=B4*{app('vcpu_one_replica_each')}", offhours("price_vcpu", "price_vcpu_idle"), "=D8",
          "=bank_discount"),
-        ("GiB night", f"=B4*{app('vcpu_one_replica_each')}*gib_per_vcpu", night("price_gib", "price_gib_idle"),
+        ("GiB off-hours", f"=B4*{app('vcpu_one_replica_each')}*gib_per_vcpu", offhours("price_gib", "price_gib_idle"),
          "=D8", "=bank_discount"),
     ])
     lb = block(aca + 3, "LOAD BALANCER - COST - MONTHLY", "LbCost", [

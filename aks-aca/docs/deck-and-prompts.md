@@ -35,7 +35,7 @@ that knows TPS, CPU, RAM and time to market. The technical deck stays as backup 
      of their own; memory was dropped), the motivation (economic first, then operation and complexity) and the
      smallest AKS cluster against one Container Apps "micro"-service with one replica on 24 h.
   4. The two conditions to move to Container Apps (up to 100 TPS in the peak hour, up to 15 "micro"-services)
-     and the off-hours rule: traffic tends to zero at night, so it may scale to zero (first request waits up to
+     and the off-hours rule: traffic tends to zero outside office hours (nights and weekends), so it may scale to zero (first request waits up to
      ~30 s; check the caller's timeout), but the cost counts one replica on 24 h. ADT_019 is the reference
      ([adt-019-runtime.md](adt-019-runtime.md)); the size condition (4 vCPU / 8 GiB) was dropped on 2026-11-22.
      Critical and growing applications are validated before moving, not sent to AKS.
