@@ -347,11 +347,11 @@ def write_criteria(sheet, rows):
 # (group in Criteria, label, where it goes)
 GROUPS = [("AKS", "Stays on AKS", "AKS"), ("ACA_WITH_REVIEW", "ACA, with review", "ACA"),
           ("ACA", "Candidate to ACA", "ACA"), ("IN_USE", "In use, not measured", "AKS"),
-          ("NOT_IN_USE", "Not in use", "AKS")]
+          ("NOT_IN_USE", "Not in use", "AKS"), ("IN_DEVELOPMENT", "In development", "AKS")]
 
 
 GROUP_COLORS = {"AKS": "1E3A78", "ACA_WITH_REVIEW": "F2A15A", "ACA": "4CB07A", "IN_USE": "4A8FB8",
-                "NOT_IN_USE": "5B6770"}
+                "NOT_IN_USE": "5B6770", "IN_DEVELOPMENT": "C5CDD6"}
 
 
 def write_results(sheet):
@@ -377,8 +377,7 @@ def write_results(sheet):
         cell.number_format = PEN if column >= 7 else "General"
     plain_table(sheet, "Results", f"A3:I{total}")
     sheet.cell(row=total + 1, column=1,
-               value='=COUNTIFS(Criteria[group],"IN_DEVELOPMENT")&" apps in development are not counted. Fail columns count '
-                     'applications."')
+               value="Fail columns count applications. In development: not in PROD yet, so not evaluated.")
     chart = BarChart()
     chart.type, chart.style, chart.title = "col", 10, "Clusters per destination"
     chart.legend = Legend()

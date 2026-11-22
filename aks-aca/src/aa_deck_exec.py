@@ -575,17 +575,19 @@ DISTRIBUTION_GROUPS = {
     "ACA": ("Candidata a Container Apps", f"Hasta 100 TPS y hasta 15 {MICRO}", d.GREEN),
     "IN_USE": ("En uso, sin medición", "Tiene uso, pero su tráfico no se ve", d.STEEL),
     "NOT_IN_USE": ("Sin uso", "Por revisar", d.GREY),
+    "IN_DEVELOPMENT": ("En desarrollo", "Aún no sale a producción", d.SOFT),
 }
 
 
 def distribution_group(row):
-    """Slide group of an application; None for one still in development (shown in the note, not in the chart)."""
+    """Slide group of an application: its decision, or why it has no traffic (in use, not in use, in development).
+    Every application cluster is in one group, so the total matches the clusters with applications of slide 2."""
     key = decision(row)
     if key != "NO_TRAFFIC":
         return key
     reason = row.get("no_traffic_reason")
     if reason == "IN_DEVELOPMENT":
-        return None
+        return "IN_DEVELOPMENT"
     return "IN_USE" if reason == "IN_USE_NOT_MEASURED" else "NOT_IN_USE"
 
 
@@ -659,17 +661,17 @@ def slide_distribution(deck, apps, estate, results, source):
     slide = d.base_slide(deck, f"Resultado: {movable_clusters} de {counted_clusters} clusters podrían pasar a Container "
                                "Apps", source)
     short = {"AKS": "AKS", "ACA_WITH_REVIEW": "ACA con\nrevisión", "ACA": "ACA", "IN_USE": "Sin\nmedición",
-             "NOT_IN_USE": "Sin uso"}
+             "NOT_IN_USE": "Sin uso", "IN_DEVELOPMENT": "En\ndesarrollo"}
     d.bar_chart(slide, Inches(0.45), Inches(1.3), Inches(4.1), Inches(3.45), [short[key] for key in order],
                 [groups[key]["clusters"] for key in order], XL_CHART_TYPE.COLUMN_CLUSTERED,
                 [DISTRIBUTION_GROUPS[key][2] for key in order])
 
     # Table drawn with shapes: header, one row per group with hairlines, a tinted total row.
-    left, width, top, row_height = Inches(4.85), Inches(8.0), Inches(1.35), Inches(0.46)
+    left, width, top, row_height = Inches(4.85), Inches(8.0), Inches(1.3), Inches(0.42)
     columns = [("Destino", 2.6, "left"), ("≤ 100 TPS", 1.0, "center"), (f"≤ 15 {MICRO}", 1.3, "center"),
                ("Clusters", 1.0, "right"), ("AKS hoy / mes", 2.1, "right")]
     table_labels = {"AKS": "Se queda en AKS", "ACA_WITH_REVIEW": "ACA, con revisión", "ACA": "Candidata a ACA",
-                    "IN_USE": "En uso, sin medición", "NOT_IN_USE": "Sin uso"}
+                    "IN_USE": "En uso, sin medición", "NOT_IN_USE": "Sin uso", "IN_DEVELOPMENT": "En desarrollo"}
     edges, x = [], left
     for _, share, _ in columns:
         edges.append((x, Inches(share)))
@@ -692,7 +694,7 @@ def slide_distribution(deck, apps, estate, results, source):
         shape(slide, MSO_SHAPE.OVAL, left + Inches(0.05), y + (row_height - dot) / 2, dot, dot, colour)
         d.text_box(slide, left + Inches(0.28), y, Inches(2.15), row_height, label, size=11, bold=True, color=d.NAVY,
                    anchor=d.MSO_ANCHOR.MIDDLE)
-        known = key not in ("IN_USE", "NOT_IN_USE")
+        known = key not in ("IN_USE", "NOT_IN_USE", "IN_DEVELOPMENT")
         for index, fails in ((1, entry["fails_tps"]), (2, entry["fails_size"])):
             badge(slide, edges[index][0] + edges[index][1] / 2, y + row_height / 2, fails, known)
         cell(3, y, d.number(entry["clusters"]), bold=True, color=d.NAVY)
@@ -726,9 +728,6 @@ def slide_distribution(deck, apps, estate, results, source):
     extra = []
     if single:
         extra.append(f"{d.number(single)} clusters con un solo {MICRO_ONE} podrían ir a App Service")
-    developing_clusters = sum(int(to_float(row.get("clusters")) or 1) for row in apps if row["cod_app"] in developing)
-    if developing_clusters:
-        extra.append(f"{d.number(developing_clusters)} en desarrollo quedan fuera del total")
     if extra:
         text = "; ".join(extra)
         notes.append(text[0].upper() + text[1:] + ".")
