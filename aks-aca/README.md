@@ -195,8 +195,9 @@ python aks-aca/src/aa_criteria_workbook.py
     (one row per destination in clusters and applications, as the result slide, and an editable chart), `Criteria` (one row per application:
     data, conditions, decision, off-hours replicas (nights and weekends) — 1 by default, write 0 to let one scale to zero — and its monthly
     cost on AKS and Container Apps in soles), `Calculator` (one application meter by meter, in the format of the
-    team's calculator), `Services` (one row per "micro"-service: application, cluster, Container Apps size and office
-    replicas; filter it by application or cluster), `Prices` (with links to the sources), `Variables` and `Data`. `Data` and `Services` are Power
+    team's calculator), `Services` (one row per "micro"-service: application, cluster, request, office replicas, HPA and
+    measured use; filter it by application or cluster; `Criteria` sizes each one for Container Apps with `min_vcpu`
+    and `vcpu_step` from `Variables`), `Prices` (with links to the sources), `Variables` and `Data`. `Data` and `Services` are Power
     Query connections (queries `Apps` and `Services`): it reads the snapshot CSVs and joins each "micro"-service to its application.
     `Criteria` takes each row from it. To check it on another machine: Enable Content, edit the query and change
     `Folder` (its first step) to that machine's `aks-aca/results`, then Data > Refresh All; no figure should change.

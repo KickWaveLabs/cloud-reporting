@@ -79,6 +79,8 @@ YELLOW = d.RGBColor(0xE3, 0xC2, 0x1B)
 # "micro"-service on outside office hours (Microsoft: minReplicas >= 1 for production that must always answer), billed
 # at the active rate. aa_criteria_workbook.py lets each application change it.
 MAX_TPS, MAX_MICROSERVICES, OFFHOURS_REPLICAS = 100, 15, 1
+# Smallest Container Apps replica in vCPU (Azure Consumption allows 0.25 vCPU / 0.5 GiB); min_vcpu in the workbook.
+ACA_MIN_VCPU = 0.25
 CRITICAL_BIA = ("MUY ALTA", "ALTA")
 # The two minimums on slide 3 are computed from the list prices in prices.csv (Azure Retail Prices API, the same
 # prices as the Azure pricing calculator), set up as one would enter them in the calculator (East US 2):
@@ -783,7 +785,7 @@ def aca_size(row):
     """(vCPU, GiB) of the smallest Consumption size that covers a deployment's request: 0.25 vCPU steps, 2 GiB per
     vCPU."""
     cpu, mem = to_float(row["cpu_request_vcpu"]) or 0, to_float(row["mem_request_gib"]) or 0
-    vcpu = math.ceil(max(cpu, mem / 2, 0.25) * 4 - 1e-9) / 4
+    vcpu = math.ceil(max(cpu, mem / 2, ACA_MIN_VCPU) * 4 - 1e-9) / 4
     return vcpu, 2 * vcpu
 
 

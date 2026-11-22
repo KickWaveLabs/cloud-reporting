@@ -8,7 +8,7 @@ Seven sheets, plain Excel:
               off-hours replicas (1 by default, write 0 to let it scale to zero) and its monthly cost on AKS and ACA
   Calculator  one application's Container Apps and AKS cost, meter by meter (pick it in B2)
   Services    one row per "micro"-service (Services query), each one a container app in Container Apps: application,
-              cluster, size, office replicas, HPA and measured use
+              cluster, request, office replicas, HPA and measured use (Criteria sizes them with min_vcpu and vcpu_step)
   Prices      the list prices of the model, with the links where they come from
   Variables   thresholds, discount, IGV, exchange rate and the hours of the month
   Data        the Apps Power Query query: reads the CSV files and joins each "micro"-service to its application
@@ -24,7 +24,6 @@ Reads only results/ (no Azure call). Output: aks_aca_criteria.xlsx in the newest
 import argparse
 import glob
 import os
-from collections import defaultdict
 
 from openpyxl import Workbook
 from openpyxl.chart import BarChart, Reference
@@ -63,13 +62,13 @@ PRICES = [("price_vcpu", "aca_vcpu_active_s"), ("price_vcpu_idle", "aca_vcpu_idl
 APPS_COLUMNS = ["cod_app", "cluster_names", "clusters", "bia", "microservices", "microservices_projected", "traffic_status",
                 "traffic_layer",
                 "busiest_hour_tps", "busiest_offhours_hour_tps", "offhours_active_share", "requests_month",
-                "cost_month_usd", "no_traffic_reason", "vcpu_office", "vcpu_one_replica_each"]
+                "cost_month_usd", "no_traffic_reason"]
 APPS_NUMBERS = ["clusters", "microservices", "microservices_projected", "busiest_hour_tps", "busiest_offhours_hour_tps",
-                "offhours_active_share", "requests_month", "cost_month_usd", "vcpu_office", "vcpu_one_replica_each"]
+                "offhours_active_share", "requests_month", "cost_month_usd"]
 PRICES_COLUMNS = ["name", "meter", "unit", "price"]
 # Columns of the Services query (sheet Services): one row per "micro"-service, in order.
 SERVICES_COLUMNS = ["cod_app", "cluster", "namespace", "deployment", "cpu_request_vcpu", "mem_request_gib",
-                    "aca_vcpu", "aca_gib", "replicas_office", "hpa_min", "hpa_max", "replicas_max", "cpu_used_vcpu",
+                    "replicas_office", "hpa_min", "hpa_max", "replicas_max", "cpu_used_vcpu",
                     "mem_used_gib"]
 # Services columns read as they are from deployment_snapshot.csv (CSV name -> sheet name), all numbers.
 SERVICES_MEASURED = {"hpa_min": "hpa_min", "hpa_max": "hpa_max", "ci_replicas_max": "replicas_max",
@@ -86,45 +85,25 @@ def number_or_none(value):
 
 
 def apps_rows(results):
-    """application_snapshot.csv plus two sums per application from its "micro"-services (deployment_snapshot.csv,
-    joined to the application through cluster_snapshot.csv): vCPU running in office hours (replicas x Container
-    Apps size) and vCPU of one replica of each."""
-    clusters = {row["cluster_id"]: row["cod_app"]
-                for row in deck.results_csv(results, "aa-k8s-snapshot", "cluster_snapshot.csv")
-                if row["environment"] == "PROD" and row["category"] == aa.APPLICATION}
-    sums = defaultdict(lambda: [0.0, 0.0])
-    for row in deck.results_csv(results, "aa-k8s-snapshot", "deployment_snapshot.csv"):
-        code = clusters.get(row["cluster_id"])
-        if code and row["microservice"] == "YES":
-            vcpu, _ = deck.aca_size(row)
-            sums[code][0] += deck.office_replicas(row) * vcpu
-            sums[code][1] += vcpu
-    if not sums:
-        aa.azure.LOG.warning("No micro-service sizes: deployment_snapshot.csv or cluster_snapshot.csv is missing or "
-                             "empty in %s, so the Container Apps cost leaves out vCPU and memory",
-                             os.path.join(results, "aa-k8s-snapshot"))
-    out = []
-    for row in sorted(deck.results_csv(results, "aa-k8s-snapshot", "application_snapshot.csv"),
-                      key=lambda r: r["cod_app"]):
-        row = dict(row, vcpu_office=sums[row["cod_app"]][0], vcpu_one_replica_each=sums[row["cod_app"]][1])
-        out.append([number_or_none(row.get(c)) if c in APPS_NUMBERS else (row.get(c) or None) for c in APPS_COLUMNS])
-    return out
+    """application_snapshot.csv, the columns the conditions and the cost need."""
+    rows = sorted(deck.results_csv(results, "aa-k8s-snapshot", "application_snapshot.csv"), key=lambda r: r["cod_app"])
+    return [[number_or_none(row.get(c)) if c in APPS_NUMBERS else (row.get(c) or None) for c in APPS_COLUMNS]
+            for row in rows]
 
 
 def services_rows(results):
-    """Each "micro"-service of a PROD cluster with applications: one container app in Container Apps, with its size and
-    office replicas, the same figures its cost is made of."""
+    """Each "micro"-service of a PROD cluster with applications: one container app in Container Apps, with its request
+    and office replicas (Criteria sizes it), its HPA and its measured use."""
     clusters = {row["cluster_id"]: row["cod_app"]
                 for row in deck.results_csv(results, "aa-k8s-snapshot", "cluster_snapshot.csv")
                 if row["environment"] == "PROD" and row["category"] == aa.APPLICATION}
     out = []
     for row in deck.results_csv(results, "aa-k8s-snapshot", "deployment_snapshot.csv"):
         if row["microservice"] == "YES" and row["cluster_id"] in clusters:
-            vcpu, gib = deck.aca_size(row)
             code = clusters[row["cluster_id"]]
             out.append([code, row["cluster"], row["namespace"], row["deployment"],
                         number_or_none(row["cpu_request_vcpu"]),
-                        number_or_none(row["mem_request_gib"]), vcpu, gib, deck.office_replicas(row)]
+                        number_or_none(row["mem_request_gib"]), deck.office_replicas(row)]
                        + [number_or_none(row.get(source)) for source in SERVICES_MEASURED])
     return sorted(out, key=lambda values: (values[0], values[1], values[3]))
 
@@ -143,38 +122,26 @@ def prices_rows(results):
 # ---------------------------------------------------------------------------
 
 
-def apps_query(results_folder):
-    """M code of the Apps query: application_snapshot.csv, plus the vCPU of each application's "micro"-services
-    (deployment_snapshot.csv joined to its application through cluster_snapshot.csv, sized as Container Apps)."""
+def query_head(results_folder):
+    """First steps of both queries: the folder with the CSV files and how to read one."""
     folder = results_folder.replace('"', '""')
-    csv = '[Delimiter = ",", Encoding = 65001, QuoteStyle = QuoteStyle.Csv]'
+    return ("let\n"
+            "    // Folder with the CSV files (aks-aca/results): change it if they are somewhere else\n"
+            f'    Folder = "{folder}",\n'
+            '    Separator = if Text.Contains(Folder, "BSLASH") then "BSLASH" else "/",\n'
+            "    ReadCsv = (subfolder as text, file as text) => Table.PromoteHeaders(Csv.Document(File.Contents(Folder & "
+            'Separator & subfolder & Separator & file), [Delimiter = ",", Encoding = 65001, QuoteStyle = QuoteStyle.Csv]), '
+            "[PromoteAllScalars = true]),\n").replace("BSLASH", chr(92))
 
-    def read(subfolder, file_name):
-        return (f'Table.PromoteHeaders(Csv.Document(File.Contents(Folder & Separator & "{subfolder}" & Separator & '
-                f'"{file_name}"), {csv}), [PromoteAllScalars = true])')
-    columns = ", ".join(f'"{c}"' for c in APPS_COLUMNS[:-2])
-    blanks = ", ".join(f'"{c}"' for c in APPS_NUMBERS[:-2])
+
+def apps_query(results_folder):
+    """M code of the Apps query: the columns of application_snapshot.csv the conditions and the cost need."""
+    columns = ", ".join(f'"{c}"' for c in APPS_COLUMNS)
+    blanks = ", ".join(f'"{c}"' for c in APPS_NUMBERS)
     numbers = ", ".join(f'{{"{c}", type number}}' for c in APPS_NUMBERS)
-    return f'''let
-    // Folder with the CSV files (aks-aca/results): change it if they are somewhere else
-    Folder = "{folder}",
-    Separator = if Text.Contains(Folder, "\\") then "\\" else "/",
-    ToNumber = (value) => if value = null or value = "" then 0 else Number.From(value, "en-US"),
-    Applications = {read("aa-k8s-snapshot", "application_snapshot.csv")},
-    Deployments = {read("aa-k8s-snapshot", "deployment_snapshot.csv")},
-    Clusters = {read("aa-k8s-snapshot", "cluster_snapshot.csv")},
-    // Each "micro"-service of a PROD cluster with applications gets its application through the cluster
-    ApplicationClusters = Table.SelectColumns(Table.SelectRows(Clusters, each [environment] = "PROD" and [category] = "APPLICATION"), {{"cluster_id", "cod_app"}}),
-    MicroServices = Table.RemoveColumns(Table.SelectRows(Deployments, each [microservice] = "YES"), {{"cod_app"}}, MissingField.Ignore),
-    Services = Table.ExpandTableColumn(Table.NestedJoin(MicroServices, {{"cluster_id"}}, ApplicationClusters, {{"cluster_id"}}, "app", JoinKind.Inner), "app", {{"cod_app"}}),
-    // Smallest Container Apps size that covers the request: steps of 0.25 vCPU, 2 GiB per vCPU
-    AcaVcpu = Table.AddColumn(Services, "aca_vcpu", each Number.RoundUp(List.Max({{ToNumber([cpu_request_vcpu]), ToNumber([mem_request_gib]) / 2, 0.25}}) * 4) / 4, type number),
-    // Replicas in office hours: Container Insights average, else the HPA minimum, at least 1
-    Replicas = Table.AddColumn(AcaVcpu, "replicas_office", each List.Max({{1, if ToNumber([ci_replicas_avg_office]) > 0 then ToNumber([ci_replicas_avg_office]) else if ToNumber([hpa_min]) > 0 then ToNumber([hpa_min]) else 1}}), type number),
-    PerApplication = Table.Group(Replicas, {{"cod_app"}}, {{{{"vcpu_office", each List.Sum(List.Transform(Table.ToRecords(_), (r) => r[replicas_office] * r[aca_vcpu])), type number}}, {{"vcpu_one_replica_each", each List.Sum([aca_vcpu]), type number}}}}),
+    return query_head(results_folder) + f'''    Applications = ReadCsv("aa-k8s-snapshot", "application_snapshot.csv"),
     Columns = Table.SelectColumns(Applications, {{{columns}}}),
-    Joined = Table.ExpandTableColumn(Table.NestedJoin(Columns, {{"cod_app"}}, PerApplication, {{"cod_app"}}, "sizes", JoinKind.LeftOuter), "sizes", {{"vcpu_office", "vcpu_one_replica_each"}}),
-    Blanks = Table.ReplaceValue(Joined, "", null, Replacer.ReplaceValue, {{{blanks}}}),
+    Blanks = Table.ReplaceValue(Columns, "", null, Replacer.ReplaceValue, {{{blanks}}}),
     Typed = Table.TransformColumnTypes(Blanks, {{{numbers}}}, "en-US"),
     Sorted = Table.Sort(Typed, {{{{"cod_app", Order.Ascending}}}})
 in
@@ -182,16 +149,24 @@ in
 
 
 def services_query(results_folder):
-    """M code of the Services query: the same steps as the Apps query up to each "micro"-service's size and replicas."""
-    m = apps_query(results_folder)
+    """M code of the Services query: each "micro"-service of a PROD cluster with applications, with its application
+    (through cluster_snapshot.csv), its request, office replicas, HPA and measured use."""
     renames = ", ".join(f'{{"{source}", "{name}"}}' for source, name in SERVICES_MEASURED.items() if source != name)
     columns = ", ".join(f'"{c}"' for c in SERVICES_COLUMNS)
     numbers = ["cpu_request_vcpu", "mem_request_gib"] + list(SERVICES_MEASURED.values())
     blanks = ", ".join(f'"{c}"' for c in numbers)
     typed = ", ".join(f'{{"{c}", type number}}' for c in numbers)
-    return m[:m.index("    PerApplication =")] + f'''    AcaGib = Table.AddColumn(Replicas, "aca_gib", each [aca_vcpu] * 2, type number),
+    return query_head(results_folder) + f'''    ToNumber = (value) => if value = null or value = "" then 0 else Number.From(value, "en-US"),
+    Deployments = ReadCsv("aa-k8s-snapshot", "deployment_snapshot.csv"),
+    Clusters = ReadCsv("aa-k8s-snapshot", "cluster_snapshot.csv"),
+    // Each "micro"-service of a PROD cluster with applications gets its application through the cluster
+    ApplicationClusters = Table.SelectColumns(Table.SelectRows(Clusters, each [environment] = "PROD" and [category] = "APPLICATION"), {{"cluster_id", "cod_app"}}),
+    MicroServices = Table.RemoveColumns(Table.SelectRows(Deployments, each [microservice] = "YES"), {{"cod_app"}}, MissingField.Ignore),
+    Services = Table.ExpandTableColumn(Table.NestedJoin(MicroServices, {{"cluster_id"}}, ApplicationClusters, {{"cluster_id"}}, "app", JoinKind.Inner), "app", {{"cod_app"}}),
+    // Replicas in office hours: Container Insights average, else the HPA minimum, at least 1
+    Replicas = Table.AddColumn(Services, "replicas_office", each List.Max({{1, if ToNumber([ci_replicas_avg_office]) > 0 then ToNumber([ci_replicas_avg_office]) else if ToNumber([hpa_min]) > 0 then ToNumber([hpa_min]) else 1}}), type number),
     // Measured in Container Insights per replica (used) and the HPA configuration of the export
-    Renamed = Table.RenameColumns(AcaGib, {{{renames}}}),
+    Renamed = Table.RenameColumns(Replicas, {{{renames}}}),
     Columns = Table.SelectColumns(Renamed, {{{columns}}}),
     Blanks = Table.ReplaceValue(Columns, "", null, Replacer.ReplaceValue, {{{blanks}}}),
     Typed = Table.TransformColumnTypes(Blanks, {{{typed}}}, "en-US"),
@@ -245,6 +220,9 @@ def write_variables(book, sheet, month):
                             ("offhours_rate", "ACTIVE", "ACTIVE or IDLE (idle: replica without requests)"),
                             ("requests_buffer", deck.REQUESTS_BUFFER, "Extra on the requests of the month"),
                             ("environments_per_app", deck.ENVIRONMENTS_PER_APP, "One load balancer each"),
+                            ("min_vcpu", deck.ACA_MIN_VCPU,
+                             "Smallest replica in vCPU (Azure allows 0.25 vCPU / 0.5 GiB; try 0.5 or 1)"),
+                            ("vcpu_step", 0.25, "Sizes go up in steps of this many vCPU"),
                             ("gib_per_vcpu", 2, "Container Apps gives 2 GiB per vCPU")]),
         ("Money", [("bank_discount", deck.BANK_DISCOUNT, "Bank's discount on Azure list prices"),
                    ("igv", deck.IGV, "IGV"),
@@ -329,7 +307,7 @@ def write_data(sheet, rows):
 def write_services(sheet, rows):
     """The Services query's table: filter cod_app or cluster to see what each application or cluster runs."""
     add_table(sheet, "Services", SERVICES_COLUMNS, rows)
-    for column, width in zip("ABCDEFGHIJKLMN", (10, 18, 22, 48, 16, 16, 10, 10, 16, 9, 9, 13, 14, 13)):
+    for column, width in zip("ABCDEFGHIJKL", (10, 18, 22, 48, 16, 16, 16, 9, 9, 13, 14, 13)):
         sheet.column_dimensions[column].width = width
 
 
@@ -339,7 +317,16 @@ def write_criteria(sheet, rows):
     def pull(column):
         value = f"INDEX(Apps[{column}],ROW()-1)"
         return f'IF(ISBLANK({value}),"",{value})'
-    formulas = [(column, pull(column)) for column in APPS_COLUMNS] + criteria_formulas()
+    # Container Apps size of each of the application's "micro"-services (sheet Services): the largest of its CPU
+    # request, its memory request / gib_per_vcpu and min_vcpu, rounded up to vcpu_step; MAX written as (a+b+|a-b|)/2
+    # so SUMPRODUCT can apply it row by row.
+    cpu, mem = "Services[cpu_request_vcpu]", "Services[mem_request_gib]/gib_per_vcpu"
+    larger = f"(({cpu})+({mem})+ABS(({cpu})-({mem})))/2"
+    size = f"CEILING(({larger}+min_vcpu+ABS({larger}-min_vcpu))/2,vcpu_step)"
+    of_app = "(Services[cod_app]=Criteria[[#This Row],[cod_app]])"
+    sizes = [("vcpu_office", f"SUMPRODUCT({of_app}*Services[replicas_office]*{size})"),
+             ("vcpu_one_replica_each", f"SUMPRODUCT({of_app}*{size})")]
+    formulas = [(column, pull(column)) for column in APPS_COLUMNS] + sizes + criteria_formulas()
     add_table(sheet, "Criteria", [], [[] for _ in rows], formulas)
     for index, (header, _) in enumerate(formulas, start=1):
         sheet.column_dimensions[get_column_letter(index)].width = max(10, min(len(header) + 3, 22))
