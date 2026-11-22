@@ -456,9 +456,10 @@ step of its monthly Container Apps cost, so the saving slide can be rebuilt by h
 |---|---|---|
 | Replicas | `replicas_office` | Per microservice: office-hours average in Container Insights (else the HPA minimum, at least 1), added up |
 | Size of each replica | (inside `vcpu_seconds`) | Smallest Consumption size that covers the request: 0.25 vCPU steps, 2 GiB per vCPU |
-| Time warm | `office_seconds` | Monday to Friday 8:00–20:00 of the month (ADT_019); zero replicas otherwise |
-| vCPU-seconds | `vcpu_seconds` | replicas × vCPU × office seconds |
-| GiB-seconds | `gib_seconds` | replicas × GiB × office seconds |
+| Office hours | `office_seconds` | Monday to Friday 8:00–20:00 of the month, with the measured replicas |
+| Off hours | `offhours_seconds`, `offhours_replicas_per_microservice` | The rest of the month with 1 replica per microservice (never scaled to zero in the estimate), at the active rate; `offhours_part_usd` is its share of the cost |
+| vCPU-seconds | `vcpu_seconds` | (replicas × office seconds + 1 × off-hours seconds) × vCPU |
+| GiB-seconds | `gib_seconds` | the same with GiB |
 | Requests | `requests_with_buffer` | requests of the month × 1.25 (headroom so the saving is not overstated) |
 | Compute | `compute_usd`, `memory_usd` | vCPU-s × 0.000024 + GiB-s × 0.000003 (active rate, list price) |
 | Requests | `requests_usd` | requests / 1,000,000 × 0.40 |
@@ -488,17 +489,20 @@ and `aca_estimate_by_app.csv` (written next to the deck).
 Power Query columns on `application_snapshot` (types with the `en-US` locale), used by several slides:
 
 ```text
-expected_ms   = List.Max({[microservices], if [microservices_projected] = null then 0 else [microservices_projected]})
+has_traffic   = [traffic_status] = "MEASURED" and [busiest_hour_tps] <> null
 c1_traffic    = [busiest_hour_tps] <= 100
-c2_pieces     = not ([weekday_hours_with_traffic] > 10 and [expected_ms] > 15)
-c3_night      = [offhours_active_share] <= 0.5
-c4_size       = [microservices_over_aca_size] = 0
-group         = if [adt_runtime] <> "INSUFFICIENT_DATA" then [adt_runtime]
+c2_size       = [microservices] <= 15
+critical      = [bia] = "MUY ALTA" or [bia] = "ALTA"
+growing       = [microservices_projected] > 15 and [microservices] <= 15
+decision      = if not has_traffic then "NO_TRAFFIC" else if not (c1_traffic and c2_size) then "AKS"
+                else if critical or growing then "ACA_WITH_REVIEW" else "ACA"
+group         = if [decision] <> "NO_TRAFFIC" then [decision]
                 else if [no_traffic_reason] = "IN_DEVELOPMENT" then "IN_DEVELOPMENT"
                 else if [no_traffic_reason] = "IN_USE_NOT_MEASURED" then "IN_USE" else "NOT_IN_USE"
 ```
 
-(an empty `offhours_active_share` counts as 0, as in the script.)
+These are the columns of `aks_aca_criteria.xlsx` (sheet `Criteria`), already computed. Since 2026-11-22 the deck
+uses `decision`, not `adt_runtime` (the ADT_019 result, kept for reference).
 
 | Slide | Figure | Pivot or formula |
 |---|---|---|
@@ -509,18 +513,17 @@ group         = if [adt_runtime] <> "INSUFFICIENT_DATA" then [adt_runtime]
 | 3 | CPU and memory used | `aks_usage_monthly`, measured month, APPLICATION clusters only (category lookup): average: sum `cpu_used_office_avg` of the usage rows / sum `cpu_allocatable_avg` of the `ALLOCATABLE` rows; peak: sum `cpu_used_max` / the same allocatable (each pool's busiest moment of the month, added up although they happen at different times, so the estate's real peak is lower); the same with `mem_used_office_avg_gib`, `mem_used_max_gib` and `mem_allocatable_avg_gib` |
 | 3 | Autoscalers without changing size | `hpa_snapshot`, PROD, `microservice` = YES, APPLICATION clusters, `last_scale_bucket` other than NO_DATA: (`3_TO_12_MONTHS` + `OVER_1_YEAR`) / count |
 | 3 | Applications with 15 microservices or fewer | `application_snapshot`: count with `microservices` between 1 and 15, out of the total |
-| 3 | Minimum AKS vs one Container Apps microservice | Computed from `prices.csv` (Retail Prices API, the same list prices as the Azure pricing calculator, East US 2) and logged line by line to compare with the calculator. AKS: tier Standard, 4 × D8s v4 Linux, 730 h, 3-year reservation = 4 × 730 × 3,835 / 26,280 = 426.11 US$ of nodes, plus 4 managed OS disks P10 (4 × 17.92 = 71.68) and the Standard tier (730 × 0.10 = 73.00); disks and tier × 0.70 (the bank's 30%), nodes as they are: 527.39 US$ = S/ 2,124. Container Apps: the calculator setup of section 4, 16.26 US$ × 0.70 = S/ 46. Cross-check (log only): the median October bill of the 11 PROD clusters with exactly 4 D8s v4 nodes all month was 514.75 US$ (S/ 2,073), within 3% |
-| 4 | The four conditions | Text only. Each one is a column above (`c1` to `c4`); it is the ADT_019 tree read the other way round. Condition 2 is shown as "Hasta 15 servicios": `c2_pieces` keeps the ADT_019 rule (more than 15 services and more than 10 hours a day), and on the October data no application with more than 15 services is used 10 hours or less, so both give the same count; when one does, slide 5 names it |
-| 5 | Funnel | Rows with `busiest_hour_tps` not empty = "Con tráfico medido". Then filter `c1_traffic` = TRUE, then also `c2_pieces`, `c3_night`, `c4_size`: the count after each filter is one bar. The last bar equals `adt_runtime` in (ACA, ACA_WITH_REVIEW) |
-| 6 | Result per group | Pivot rows `group` (leave `IN_DEVELOPMENT` out of the chart; it is the second bullet); count of `cod_app` and sum of `cost_month_usd`, in soles |
-| 6 | Single microservice | Count of `possible_monolith` = YES |
-| 7 | Saving | `aca_estimate_by_app`, filter `adt_runtime` in (ACA, ACA_WITH_REVIEW). With discount: sum `aks_cost_pen_igv` − sum `aca_with_discount_pen_igv` per month; × 12 per year. List price: sum `aks_cost_usd` / measured discount − sum `aca_list_usd`, in soles |
+| 3 | Minimum AKS vs one Container Apps "micro"-service | Computed from `prices.csv` (Retail Prices API, the same list prices as the Azure pricing calculator, East US 2) and logged line by line to compare with the calculator. AKS: tier Standard, 4 × D8s v4 Linux, 730 h, 3-year reservation = 4 × 730 × 3,835 / 26,280 = 426.11 US$ of nodes, plus 4 managed OS disks P10 (4 × 17.92 = 71.68) and the Standard tier (730 × 0.10 = 73.00); disks and tier × 0.70 (the bank's 30%), nodes as they are: 527.39 US$ = S/ 2,124. Container Apps: 1 replica of 0.5 vCPU / 1 GiB for 730 h (31.54 + 7.88) plus 5 million requests (2.00) = 41.42 US$ × 0.70 = S/ 117. Cross-check (log only): the median October bill of the 11 PROD clusters with exactly 4 D8s v4 nodes all month was 514.75 US$ (S/ 2,073), within 3% |
+| 4 | The two conditions and the off-hours rule | Text only. Each condition is a column of `aks_aca_criteria.xlsx` (`c1_peak_hour_tps_ok`, `c2_microservices_ok`); the off-hours rule changes the cost, not the decision |
+| 5 | Result per group (chart and table) | `aks_aca_criteria.xlsx`, sheet `Results` (same groups, ✗ counts, cost today and new, editable chart); or sheet `Criteria`: pivot rows `decision`; NO_TRAFFIC splits by `no_traffic_reason` as `group` below (leave `IN_DEVELOPMENT` out of the chart; it is the second bullet); count of `cod_app` and sum of `cost_month_usd`, in soles |
+| 5 | Single microservice | Count of `possible_monolith` = YES |
+| 6 | Saving | `aks_aca_criteria.xlsx`, sheet `Summary`; or `aca_estimate_by_app`, filter `decision` in (ACA, ACA_WITH_REVIEW). With discount: sum `aks_cost_pen_igv` − sum `aca_with_discount_pen_igv` per month; × 12 per year. List price: sum `aks_cost_usd` / measured discount − sum `aca_list_usd`, in soles |
 
 - The measured discount is what PROD node VMs cost in the month (amortized, reservations included) divided by
   their node-hours at list price; the script logs it and prints it on slides 3 and 7. To check it in the portal:
   Cost analysis, amortized cost, group by *Pricing model* and filter Virtual Machines (Reservation vs OnDemand).
 - The saving is a month repeated twelve times: the same replicas, prices and applications. It includes the
-  applications "con revisión", so the firm saving is the `ACA` rows alone (filter `adt_runtime` = ACA).
+  applications "con revisión", so the firm saving is the `ACA` rows alone (filter `decision` = ACA).
 - To project with other inputs, change the columns of `aca_estimate_by_app` and recompute: more replicas
   (`replicas_office`), more environments (146 US$ each per month), more requests (`requests_with_buffer`).
 

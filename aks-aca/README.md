@@ -96,6 +96,7 @@ python aks-aca/src/aa_microservice_history.py   # optional; at least once a mont
 python aks-aca/src/aa_workbook.py
 python aks-aca/src/aa_deck.py        # after opening the workbook in Excel and saving it
 python aks-aca/src/aa_deck_exec.py
+python aks-aca/src/aa_criteria_workbook.py
 ```
 
 | Step | Scope by default | Time on 2026-11-10 | Check |
@@ -179,14 +180,27 @@ python aks-aca/src/aa_deck_exec.py
     technical criteria, strategic front, proposal and annex; 20 slides, native charts, text in Spanish) from the
     workbook's calculated values and `results/` (signals, and node and workload usage for the CPU vs memory
     slide). Open the workbook in Excel and save it first. Its figures are a draft to check.
-13. `aa_deck_exec.py` builds `aks_aca_corporate.pptx`, the corporate deck (slides 1 to 7, text in Spanish, amounts in
-    soles with IGV) for a non-technical forum: ways to build an application, the runtime estate (Azure icons from
-    `assets/icons/`; Functions hidden for now with `SHOW_FUNCTIONS`), the hypothesis
-    (signs, motivation, minimum AKS vs Container Apps), the four conditions to move to Container Apps, the
-    conditions applied as a funnel, the result per application and the possible saving with and without discount. Runtime counts only take
-    what existed in the measured month. It reads only
-    `results/` (including `application_snapshot.csv`), so it needs no saved workbook. AKS takes the discount measured on its node VMs (reservations included); `--aks-discount 0.60`
-    fixes it by hand. Container Apps takes the bank's 30%.
+13. `aa_deck_exec.py` builds `aks_aca_corporate.pptx`, the corporate deck (slides 1 to 6, text in Spanish, amounts in
+    soles with IGV) for a non-technical forum: ways to build an application (runtimes as acronyms, with a legend),
+    AKS in PROD (clusters, applications, "micro"-services, monthly and annual cost of PROD plus non-PROD; Azure icon
+    from `assets/icons/`), the hypothesis (three signs with a sentence each, motivation, minimum AKS vs Container
+    Apps), the two conditions to move to Container Apps (up to 100 TPS in the peak hour, up to 15 "micro"-services)
+    plus the off-hours rule, the result per group (conditions failed, where it goes, applications on AKS and ACA)
+    and the possible saving with and without discount. ADT_019 is the reference, not the rule: every Container Apps estimate keeps one
+    replica per "micro"-service on outside office hours. Runtime counts only take what existed in the measured
+    month. It reads only `results/` (including `application_snapshot.csv`), so it needs no saved workbook. AKS
+    takes the discount measured on its node VMs (reservations included); `--aks-discount 0.60` fixes it by hand.
+    Container Apps takes the bank's 30%.
+14. `aa_criteria_workbook.py` writes `aks_aca_criteria.xlsx` next to the deck: one row per PROD application with
+    the conditions it meets (one column each), its decision and its Container Apps cost and saving, all as Excel
+    formulas over the CSV data (sheets `Criteria`, `Services`, `Prices`) and the yellow cells (`Assumptions`).
+    `OffhoursReplicas` sets, per application, the replicas each "micro"-service keeps on at night (empty = 1, as
+    the deck; 0 = scale to zero). `Results` is the result slide with an editable chart and `Summary` the funnel and the saving; with the defaults
+    both give the deck's figures. `Calculator` shows one application's cost (pick it in C3) in the format of the
+    team's ACA/AKS calculators (units × cost per unit × seconds = gross; − discount; + IGV; in soles), and
+    `Minimums` rebuilds the slide 3 minimums the same way.
+    `aks_aca_criteria.pq`, next to it, holds the same three data tables as Power Query queries over the CSV files
+    (the join of deployments to applications through `cluster_snapshot.csv` included).
 
 Smoke tests before a full run: `aa_metrics.py --clusters <one-cluster> --skip-apim --start <day>
 --end <day>` and `aa_container_insights.py --clusters <one-cluster> --start <day> --end <day>`, each

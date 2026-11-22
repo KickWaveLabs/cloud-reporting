@@ -27,18 +27,27 @@ that knows TPS, CPU, RAM and time to market. The technical deck stays as backup 
   effort and migration estimate, by the manager's team). Plain words for a non-technical audience; every
   amount in soles with IGV at S/ 3.41333 per US$:
   1. Ways to build an application: modular monolith, miniservices, microservices, asynchronous processes,
-     each drawn and with its usual runtime (FAT_001, ADT_019).
-  2. The runtime estate today: AKS, Container Apps, App Service and Functions, each drawn as it works inside.
-  3. Hypothesis, why we challenge the model: 3–4 signs (CPU and memory used of what is paid, autoscalers that
-     do not scale, small applications with a cluster of their own), the motivation (economic first, then
-     operation and complexity) and the smallest AKS cluster against one Container Apps microservice.
-  4. The four conditions to move to Container Apps (ADT_019 tree read the other way round; see
-     [adt-019-runtime.md](adt-019-runtime.md)), no figures; critical and growing applications are validated before
-     moving, not sent to AKS (ADT_019 asks to consult governance and to review).
-  5. The conditions applied as a funnel, ending in the candidates.
-  6. Result: where each application goes.
-  7. Possible saving: monthly and annual, with and without discount.
+     each drawn and with its usual runtime (FAT_001, ADT_019); runtimes as acronyms (ACA, AKS) with a legend.
+  2. AKS in PROD only (no other runtime in the picture): clusters, applications, "micro"-services, monthly cost of
+     PROD plus non-PROD and the annual cost in large figures; non-PROD in small print.
+  3. Hypothesis, why we challenge the model: three signs, each with a sentence the presenter can say (CPU used
+     of what is paid, autoscalers that have not changed replicas in 3 months, small applications with a cluster
+     of their own; memory was dropped), the motivation (economic first, then operation and complexity) and the
+     smallest AKS cluster against one Container Apps "micro"-service with one replica on 24 h.
+  4. The two conditions to move to Container Apps (up to 100 TPS in the peak hour, up to 15 "micro"-services)
+     and the off-hours rule: traffic tends to zero at night, so it may scale to zero (first request waits up to
+     ~30 s; check the caller's timeout), but the cost counts one replica on 24 h. ADT_019 is the reference
+     ([adt-019-runtime.md](adt-019-runtime.md)); the size condition (4 vCPU / 8 GiB) was dropped on 2026-11-22.
+     Critical and growing applications are validated before moving, not sent to AKS.
+  5. Result: where each application goes (AKS or Container Apps), the conditions each group fails and its AKS cost
+     today; the comparison is in applications (today all on AKS; new: how many stay, how many move). No new cost
+     here: that is slide 6. The funnel slide was dropped on 2026-11-22; the boss gets the criteria
+     workbook (`Results` sheet and its chart) to change the chart if he wants.
+  6. Possible saving: monthly and annual, with and without discount.
   Runtime counts only take what existed in the measured month (`existed_at_measurement`).
+  From 2026-11-22 every count of the bank's deployed services is written "micro"-servicios on the slides.
+  Per-application detail (one column per condition, cost and saving): `aks_aca_criteria.xlsx`
+  (`aa_criteria_workbook.py`).
 - Traffic classes (office, extended, 24x7) stay in the technical deck until another architect validates them.
 
 ## Plan (2026-11-11)
