@@ -470,7 +470,7 @@ def slide_hypothesis(deck, estate, apps, scaling, results, source):
               (cpu_average, cpu_peak)),
              ("El autoescalado casi no se mueve", d.percent(stuck),
               f"de los {MICRO} con autoescalado no sube ni baja de réplicas hace más de 3 meses", None),
-             ("Clusters enteros para pocas cargas", f"{d.number(small)} de {d.number(len(app_clusters))}",
+             ("Un cluster completo para pocos servicios", f"{d.number(small)} de {d.number(len(app_clusters))}",
               f"clusters con aplicaciones tienen {MAX_MICROSERVICES} {MICRO} o menos", None)]
     width, gap = Inches(2.3), Inches(0.15)
     for index, (sentence, value, label, bar) in enumerate(signs):
