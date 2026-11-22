@@ -295,7 +295,8 @@ def slide_context(deck, apps, source):
         type_card(slide, Inches(0.6) + index * (width + gap), width, title, drawing, lines, runtime, accent)
     microservices = sum(int(row["microservices"] or 0) for row in apps)
     d.callout(slide, Inches(0.6), Inches(5.9), Inches(12.15), Inches(0.75),
-              f"Hoy casi todo corre en AKS: {d.number(len(apps))} aplicaciones y {d.number(microservices)} {MICRO}, "
+              f"Hoy casi todo corre en AKS: {d.number(sum(int(to_float(row.get('clusters')) or 1) for row in apps))} "
+              f"clusters y {d.number(microservices)} {MICRO}, "
               "en el runtime pensado para carga alta y constante.", size=15, fill=d.RUST)
     d.text_box(slide, Inches(0.6), Inches(6.68), Inches(12.15), Inches(0.28), ACRONYMS, size=10, color=d.GREY,
                align=d.PP_ALIGN.CENTER)
@@ -330,15 +331,18 @@ def slide_estate(deck, estate, apps, source):
                              height=icon)
     d.text_box(slide, left, top + Inches(1.7), width, Inches(0.35), "Servidores encendidos 24/7", size=11,
                color=d.SOFT, align=d.PP_ALIGN.CENTER)
-    d.text_box(slide, left, top + Inches(2.05), width, Inches(0.75), d.number(prod["aks"]), size=40, bold=True,
+    d.text_box(slide, left, top + Inches(1.95), width, Inches(0.7), d.number(prod["aks"]), size=40, bold=True,
                color=d.ORANGE, align=d.PP_ALIGN.CENTER)
-    d.text_box(slide, left, top + Inches(2.85), width, Inches(0.35), "clusters en producción", size=12, color=d.SOFT,
+    d.text_box(slide, left, top + Inches(2.62), width, Inches(0.3), "clusters productivos", size=12, color=d.SOFT,
                align=d.PP_ALIGN.CENTER)
+    d.text_box(slide, left, top + Inches(2.95), width, Inches(0.35),
+               f"+ {d.number(estate['nonprod_clusters'])} no productivos (certificación y desarrollo)", size=10,
+               color=d.SOFT, align=d.PP_ALIGN.CENTER)
     grid_left, gap = Inches(4.25), Inches(0.2)
     card_width = int((Inches(12.75) - grid_left - gap) / 2)
     app_clusters = category.get(aa.APPLICATION, {}).get("clusters", 0)
-    cards = [("Aplicaciones", d.number(len(apps)), f"en {d.number(app_clusters)} clusters propios", d.STEEL),
-             (MICRO, d.number(microservices), "servicios de las aplicaciones desplegados en AKS", d.GREEN),
+    cards = [("Clusters con aplicaciones", d.number(app_clusters), "base del análisis", d.STEEL),
+             (MICRO, d.number(microservices), "servicios desplegados en esos clusters", d.GREEN),
              ("Costo mensual", soles(prod_cost + nonprod_cost),
               f"producción {soles(prod_cost)} + no productivo {soles(nonprod_cost)} ({month})", d.ORANGE),
              ("Costo anual", soles((prod_cost + nonprod_cost) * 12), "costo mensual × 12", d.RUST)]
@@ -355,14 +359,8 @@ def slide_estate(deck, estate, apps, source):
             rows.append([label, d.number(entry["clusters"]), soles(entry["cost"])])
     d.table(slide, Inches(0.6), Inches(4.95), Inches(7.9), rows, [0.6, 0.15, 0.25], highlight_column=None,
             row_height=0.32, size=11)
-    multi = sum(int(to_float(row.get("clusters")) or 1) > 1 for row in apps)
     d.note_box(slide, Inches(8.85), Inches(4.95), Inches(3.9), Inches(0.85),
-               [f"{MICRO_CAP} = servicios de una aplicación desplegados en AKS.",
-                f"{d.number(len(apps))} aplicaciones en {d.number(category.get(aa.APPLICATION, {}).get('clusters', 0))} clusters: {d.number(multi)} usan 2 o "
-                "más."], size=10)
-    d.text_box(slide, Inches(8.85), Inches(5.95), Inches(3.9), Inches(0.6),
-               f"No productivo (certificación y desarrollo): {d.number(estate['nonprod_clusters'])} clusters, "
-               f"{soles(nonprod_cost)} al mes.", size=9, color=d.GREY, italic=True)
+               f"{MICRO_CAP} = servicios de una aplicación desplegados en AKS.", size=11)
 
 
 def minimum_costs(month, prices, region="eastus2"):
@@ -451,7 +449,9 @@ def slide_hypothesis(deck, estate, apps, scaling, results, source):
                           aks_min, measured_min, measured_clusters, month)
     aks_label = (f"el cluster AKS más chico ({MIN_AKS_NODES} servidores con reserva de 3 años, discos y tier "
                  f"Standard), aunque la aplicación sea pequeña")
-    small = sum(0 < int(row["microservices"] or 0) <= MAX_MICROSERVICES for row in apps)
+    app_clusters = [row for row in results_csv(results, "aa-k8s-snapshot", "cluster_snapshot.csv")
+                    if row["environment"] == "PROD" and row["category"] == aa.APPLICATION and row["in_inventory"] == "YES"]
+    small = sum(0 < int(row["microservices"] or 0) <= MAX_MICROSERVICES for row in app_clusters)
     cpu_average = d.share_of(estate["cpu_used"], estate["cpu_total"])
     cpu_peak = d.share_of(estate["cpu_peak"], estate["cpu_total"])
     stuck = d.share_of(scaling["over_3_months"], scaling["dated"]) if scaling["dated"] else None
@@ -462,8 +462,8 @@ def slide_hypothesis(deck, estate, apps, scaling, results, source):
               (cpu_average, cpu_peak)),
              ("El autoescalado casi no se mueve", d.percent(stuck),
               f"de los {MICRO} con autoescalado no sube ni baja de réplicas hace más de 3 meses", None),
-             ("Clusters enteros para aplicaciones pequeñas", f"{d.number(small)} de {d.number(len(apps))}",
-              f"aplicaciones tienen {MAX_MICROSERVICES} {MICRO} o menos y aun así un cluster propio", None)]
+             ("Clusters enteros para pocas cargas", f"{d.number(small)} de {d.number(len(app_clusters))}",
+              f"clusters con aplicaciones tienen {MAX_MICROSERVICES} {MICRO} o menos", None)]
     width, gap = Inches(2.3), Inches(0.15)
     for index, (sentence, value, label, bar) in enumerate(signs):
         sign_card(slide, Inches(0.6) + index * (width + gap), Inches(1.75), width, Inches(2.8), sentence, value, label,
@@ -521,7 +521,7 @@ MOVABLE = ("ACA", "ACA_WITH_REVIEW")
 # The two conditions to move to Container Apps: (funnel label, title, plain meaning, criteria() key).
 ACA_CONDITIONS = [
     ("Hasta 100 TPS", "Tráfico moderado", "Hasta 100 transacciones por segundo (TPS) en su hora pico.", "tps_ok"),
-    (f"Hasta 15 {MICRO}", f"Hasta 15 {MICRO}", "Una aplicación más grande se queda en AKS.", "size_ok"),
+    (f"Hasta 15 {MICRO}", f"Hasta 15 {MICRO}", "Si tiene más, se queda en AKS.", "size_ok"),
 ]
 OFFHOURS_RULE = ("Tiende a cero fuera de horario (de 20 a 8 h y fines de semana)",
                  ["Se puede apagar: la primera transacción la despierta en hasta ~30 s. Validar el timeout de quien la "
@@ -642,8 +642,9 @@ def slide_distribution(deck, apps, estate, results, source):
         entry["apps"].append(row)
         entry["clusters"] += int(to_float(row.get("clusters")) or 1)
         entry["today"] += today
-        entry["fails_tps"] += test["has_traffic"] and not test["tps_ok"]
-        entry["fails_size"] += not test["size_ok"]
+        clusters = int(to_float(row.get("clusters")) or 1)
+        entry["fails_tps"] += clusters if test["has_traffic"] and not test["tps_ok"] else 0
+        entry["fails_size"] += clusters if not test["size_ok"] else 0
     movable = sum(len(groups[key]["apps"]) for key in MOVABLE)
     movable_clusters = sum(groups[key]["clusters"] for key in MOVABLE)
     order = [key for key in DISTRIBUTION_GROUPS if groups[key]["apps"]]
@@ -658,9 +659,8 @@ def slide_distribution(deck, apps, estate, results, source):
 
     # Table drawn with shapes: header, one row per group with hairlines, a tinted total row.
     left, width, top, row_height = Inches(4.85), Inches(8.0), Inches(1.35), Inches(0.46)
-    columns = [("Destino", 2.1, "left"), ("≤ 100 TPS", 0.8, "center"), (f"≤ 15 {MICRO}", 1.15, "center"),
-               ("Clusters", 0.8, "right"), ("Apps", 0.65, "right"), ("Va a", 0.9, "center"),
-               ("AKS hoy / mes", 1.6, "right")]
+    columns = [("Destino", 2.6, "left"), ("≤ 100 TPS", 1.0, "center"), (f"≤ 15 {MICRO}", 1.3, "center"),
+               ("Clusters", 1.0, "right"), ("AKS hoy / mes", 2.1, "right")]
     table_labels = {"AKS": "Se queda en AKS", "ACA_WITH_REVIEW": "ACA, con revisión", "ACA": "Candidata a ACA",
                     "IN_USE": "En uso, sin medición", "NOT_IN_USE": "Sin uso"}
     edges, x = [], left
@@ -689,17 +689,7 @@ def slide_distribution(deck, apps, estate, results, source):
         for index, fails in ((1, entry["fails_tps"]), (2, entry["fails_size"])):
             badge(slide, edges[index][0] + edges[index][1] / 2, y + row_height / 2, fails, known)
         cell(3, y, d.number(entry["clusters"]), bold=True, color=d.NAVY)
-        cell(4, y, d.number(len(entry["apps"])))
-        runtime = "ACA" if key in MOVABLE else "AKS"
-
-        pill_w, pill_h = Inches(0.55), Inches(0.26)
-        pill_x = edges[5][0] + (edges[5][1] - pill_w) / 2
-        pill = d.rounded(slide, pill_x, y + (row_height - pill_h) / 2, pill_w, pill_h,
-                         d.GREEN if runtime == "ACA" else d.NAVY, radius=0.5)
-        pill.shadow.inherit = False
-        d.text_box(slide, pill_x, y + (row_height - pill_h) / 2, pill_w, pill_h, runtime, size=9, bold=True,
-                   color=d.WHITE, align=d.PP_ALIGN.CENTER, anchor=d.MSO_ANCHOR.MIDDLE)
-        cell(6, y, soles(entry["today"]))
+        cell(4, y, soles(entry["today"]))
         y += row_height
         hairline(slide, left, y, width)
     today = sum(entry["today"] for entry in groups.values())
@@ -709,8 +699,7 @@ def slide_distribution(deck, apps, estate, results, source):
     d.text_box(slide, left + Inches(0.28), y + Inches(0.04), Inches(2.15), row_height, "Total", size=11, bold=True,
                color=d.NAVY, anchor=d.MSO_ANCHOR.MIDDLE)
     cell(3, y + Inches(0.04), d.number(counted_clusters), bold=True, color=d.NAVY)
-    cell(4, y + Inches(0.04), d.number(counted), bold=True, color=d.NAVY)
-    cell(6, y + Inches(0.04), soles(today), bold=True, color=d.NAVY)
+    cell(4, y + Inches(0.04), soles(today), bold=True, color=d.NAVY)
 
     # The comparison in clusters (what is paid and operated): today all on AKS; after, how many stay and how many are
     # turned off because their application moves to Container Apps.
@@ -718,25 +707,24 @@ def slide_distribution(deck, apps, estate, results, source):
     card_w = int((Inches(12.85) - Inches(0.45) - 2 * gap) / 3)
     stay = counted_clusters - movable_clusters
     stat_card(slide, Inches(0.45), cards_top, card_w, card_h, "Hoy", f"{d.number(counted_clusters)} clusters",
-              f"de {d.number(counted)} aplicaciones, todos en AKS", d.NAVY)
+              "todos en AKS", d.NAVY)
     stat_card(slide, Inches(0.45) + card_w + gap, cards_top, card_w, card_h, "Nuevo: AKS", f"{d.number(stay)} clusters",
-              f"se quedan ({d.percent(d.share_of(stay, counted_clusters))}) · {d.number(counted - movable)} "
-              "aplicaciones", d.NAVY)
+              f"se quedan ({d.percent(d.share_of(stay, counted_clusters))})", d.NAVY)
     stat_card(slide, Inches(0.45) + 2 * (card_w + gap), cards_top, card_w, card_h, "Nuevo: ACA",
-              f"{d.number(movable_clusters)} clusters", f"se apagan ({d.percent(d.share_of(movable_clusters, counted_clusters))})"
-              f" · {d.number(movable)} aplicaciones a Container Apps", d.WHITE, fill=d.CARD, text_color=d.SOFT)
-    notes = [f"Se decide por aplicación y sus clusters se mueven juntos. Número en rojo: aplicaciones del grupo que no "
-             f"cumplen la condición. Costo AKS de {month}, con IGV; el costo con Container Apps está en la siguiente "
-             "lámina."]
-    single = sum(row["possible_monolith"] == "YES" for row in apps)
+              f"{d.number(movable_clusters)} clusters",
+              f"se apagan y pasan a Container Apps ({d.percent(d.share_of(movable_clusters, counted_clusters))})",
+              d.WHITE, fill=d.CARD, text_color=d.SOFT)
+    notes = [f"Número en rojo: clusters que no cumplen la condición. Costo AKS de {month}, con IGV."]
+    single = sum(int(to_float(row.get("clusters")) or 1) for row in apps if row["possible_monolith"] == "YES")
     extra = []
     if single:
-        extra.append(f"{d.number(single)} aplicaciones tienen un solo {MICRO_ONE} (podrían ir a App Service)")
-    if developing:
-        extra.append(f"{d.number(len(developing))} "
-                     + ("está en desarrollo" if len(developing) == 1 else "están en desarrollo") + " (fuera del total)")
+        extra.append(f"{d.number(single)} clusters con un solo {MICRO_ONE} podrían ir a App Service")
+    developing_clusters = sum(int(to_float(row.get("clusters")) or 1) for row in apps if row["cod_app"] in developing)
+    if developing_clusters:
+        extra.append(f"{d.number(developing_clusters)} en desarrollo quedan fuera del total")
     if extra:
-        notes.append("Además: " + "; ".join(extra) + ".")
+        text = "; ".join(extra)
+        notes.append(text[0].upper() + text[1:] + ".")
     d.text_box(slide, Inches(0.45), Inches(6.35), Inches(12.4), Inches(0.55), notes, size=9, color=d.GREY)
 
 
@@ -897,8 +885,8 @@ def slide_cost(deck, apps, estate, results, source, ratio):
     aa.azure.LOG.info("Saving with discounts: %d applications, AKS %.2f - ACA %.2f = %.2f US$ a month", len(movable),
                       aks_paid, aca_list * (1 - BANK_DISCOUNT), saving)
     clusters = sum(int(to_float(row.get("clusters")) or 1) for row in movable)
-    slide = d.base_slide(deck, f"Apagar {clusters} clusters ({len(movable)} aplicaciones) ahorraría ~{soles(saving)} al "
-                               f"mes ({soles(saving * 12)} al año)", source)
+    slide = d.base_slide(deck, f"Apagar {clusters} clusters ahorraría ~{soles(saving)} al mes ({soles(saving * 12)} al "
+                               "año)", source)
     rows = [["Escenario (con IGV)", "AKS hoy / mes", "Container Apps / mes", "Ahorro / mes", "Ahorro / año"]]
     for label, aks_cost, aca_cost in scenarios:
         rows.append([label, soles(aks_cost), soles(aca_cost), soles(aks_cost - aca_cost),
@@ -908,13 +896,13 @@ def slide_cost(deck, apps, estate, results, source, ratio):
     rows = [["Cómo se paga", "AKS", "Container Apps"],
             ["Cobro", "Nodos completos (VM) las 24 horas", "vCPU-segundo y GB-segundo en uso, y transacciones"],
             ["Fuera de horario", "Se paga igual", f"1 réplica encendida por {MICRO_ONE} (podría bajar a cero)"],
-            ["Descuento", f"Con reservas: se paga {d.percent(ratio)} del precio de lista de las VM",
+            ["Descuento", f"{d.percent(1 - ratio)} de descuento por reservas en las VM",
              f"{d.percent(BANK_DISCOUNT)} del banco (sin reservas)"]]
     d.table(slide, Inches(0.6), Inches(3.25), Inches(12.1), rows, [0.2, 0.38, 0.42], row_height=0.45, size=12)
     d.note_box(slide, Inches(0.6), Inches(5.35), Inches(12.1), Inches(0.65),
                f"Estimado con las réplicas medidas en {month_label(month)} en horario de oficina, cada una del tamaño que "
-               f"pide hoy, y 1 réplica encendida fuera de horario. Incluye las aplicaciones \"con revisión\": el ahorro "
-               f"firme es menor. Detalle por aplicación en el Excel de criterios.", size=11)
+               f"pide hoy, y 1 réplica encendida fuera de horario. Incluye los clusters \"con revisión\": el ahorro "
+               f"firme es menor. Detalle en el Excel de criterios.", size=11)
     d.note_box(slide, Inches(0.6), Inches(6.1), Inches(12.1), Inches(0.6),
                "Beneficio adicional sin monto: menos clusters que actualizar y mantener (horas-hombre de los equipos).",
                size=11)
