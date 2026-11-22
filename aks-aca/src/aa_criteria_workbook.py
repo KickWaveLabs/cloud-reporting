@@ -2,14 +2,16 @@
 """Write the criteria workbook: which conditions each PROD application meets and what moving it to Container Apps
 would save, from the CSV files in results/.
 
-Six sheets, plain Excel:
+Seven sheets, plain Excel:
   Results     one row per destination (as the result slide) and a chart that can be edited
   Criteria    one row per application: its data (from the Data sheet, same row), the conditions, the decision, its
               off-hours replicas (1 by default, write 0 to let it scale to zero) and its monthly cost on AKS and ACA
   Calculator  one application's Container Apps and AKS cost, meter by meter (pick it in B2)
+  Services    one row per "micro"-service (Services query): application, cluster, size and office replicas
   Prices      the list prices of the model, with the links where they come from
   Variables   thresholds, discount, IGV, exchange rate and the hours of the month
   Data        the Apps Power Query query: reads the CSV files and joins each "micro"-service to its application
+Both Services and Data are Power Query connections to the CSV files.
 
 Data > Refresh All reads the CSV files again (Folder, the first step of the query, is the --results folder; change it
 on another machine). If a refresh brings more applications, drag the corner of the Criteria table down. The deck
@@ -63,6 +65,9 @@ APPS_COLUMNS = ["cod_app", "cluster_names", "clusters", "bia", "microservices", 
 APPS_NUMBERS = ["clusters", "microservices", "microservices_projected", "busiest_hour_tps", "busiest_offhours_hour_tps",
                 "offhours_active_share", "requests_month", "cost_month_usd", "vcpu_office", "vcpu_one_replica_each"]
 PRICES_COLUMNS = ["name", "meter", "unit", "price"]
+# Columns of the Services query (sheet Services): one row per "micro"-service, in order.
+SERVICES_COLUMNS = ["cod_app", "cluster", "namespace", "deployment", "cpu_request_vcpu", "mem_request_gib", "aca_vcpu",
+                    "aca_gib", "replicas_office"]
 
 
 # ---------------------------------------------------------------------------
@@ -98,6 +103,21 @@ def apps_rows(results):
         row = dict(row, vcpu_office=sums[row["cod_app"]][0], vcpu_one_replica_each=sums[row["cod_app"]][1])
         out.append([number_or_none(row.get(c)) if c in APPS_NUMBERS else (row.get(c) or None) for c in APPS_COLUMNS])
     return out
+
+
+def services_rows(results):
+    """Each "micro"-service of a PROD cluster with applications, with its Container Apps size and office replicas."""
+    clusters = {row["cluster_id"]: row["cod_app"]
+                for row in deck.results_csv(results, "aa-k8s-snapshot", "cluster_snapshot.csv")
+                if row["environment"] == "PROD" and row["category"] == aa.APPLICATION}
+    out = []
+    for row in deck.results_csv(results, "aa-k8s-snapshot", "deployment_snapshot.csv"):
+        if row["microservice"] == "YES" and row["cluster_id"] in clusters:
+            vcpu, gib = deck.aca_size(row)
+            out.append([clusters[row["cluster_id"]], row["cluster"], row["namespace"], row["deployment"],
+                        number_or_none(row["cpu_request_vcpu"]), number_or_none(row["mem_request_gib"]), vcpu, gib,
+                        deck.office_replicas(row)])
+    return sorted(out, key=lambda values: (values[0], values[1], values[3]))
 
 
 def prices_rows(results):
@@ -148,6 +168,19 @@ def apps_query(results_folder):
     Blanks = Table.ReplaceValue(Joined, "", null, Replacer.ReplaceValue, {{{blanks}}}),
     Typed = Table.TransformColumnTypes(Blanks, {{{numbers}}}, "en-US"),
     Sorted = Table.Sort(Typed, {{{{"cod_app", Order.Ascending}}}})
+in
+    Sorted'''
+
+
+def services_query(results_folder):
+    """M code of the Services query: the same steps as the Apps query up to each "micro"-service's size and replicas."""
+    m = apps_query(results_folder)
+    columns = ", ".join(f'"{c}"' for c in SERVICES_COLUMNS)
+    return m[:m.index("    PerApplication =")] + f'''    AcaGib = Table.AddColumn(Replicas, "aca_gib", each [aca_vcpu] * 2, type number),
+    Columns = Table.SelectColumns(AcaGib, {{{columns}}}),
+    Blanks = Table.ReplaceValue(Columns, "", null, Replacer.ReplaceValue, {{"cpu_request_vcpu", "mem_request_gib"}}),
+    Typed = Table.TransformColumnTypes(Blanks, {{{{"cpu_request_vcpu", type number}}, {{"mem_request_gib", type number}}}}, "en-US"),
+    Sorted = Table.Sort(Typed, {{{{"cod_app", Order.Ascending}}, {{"cluster", Order.Ascending}}, {{"deployment", Order.Ascending}}}})
 in
     Sorted'''
 
@@ -278,6 +311,13 @@ def write_data(sheet, rows):
         sheet.column_dimensions[get_column_letter(index)].width = max(10, min(len(header) + 3, 22))
 
 
+def write_services(sheet, rows):
+    """The Services query's table: filter cod_app or cluster to see what each application or cluster runs."""
+    add_table(sheet, "Services", SERVICES_COLUMNS, rows)
+    for column, width in zip("ABCDEFGHI", (10, 18, 22, 48, 16, 16, 10, 10, 16)):
+        sheet.column_dimensions[column].width = width
+
+
 def write_criteria(sheet, rows):
     """One row per application: each data column comes from the same row of the Data sheet (the Apps query), then
     the conditions, the decision, the off-hours replicas (a value that can be changed) and the costs."""
@@ -369,6 +409,8 @@ def write_calculator(sheet, default_app):
     validation.add("B2")
     sheet["A3"], sheet["B3"] = "Decision", f"={app('decision')}"
     sheet["A4"], sheet["B4"] = "Off-hours replicas", f"={app('offhours_replicas')}"
+    sheet["A5"], sheet["B5"] = "\"Micro\"-services", "=COUNTIFS(Services[cod_app],$B$2)"
+    sheet["C5"] = "(the list: sheet Services, filter cod_app)"
     headers = ["Meter", "Units", "Cost / Unit", "Seconds", "Gross Total", "Discount", "Gross Total + Dsct",
                "Net Total", "Net Total (S/)"]
 
@@ -433,19 +475,22 @@ def build(results, output):
     book = Workbook()
     results_sheet = book.active
     results_sheet.title = "Results"
-    criteria, calculator, prices, variables, data = (book.create_sheet(title) for title in
-                                                     ("Criteria", "Calculator", "Prices", "Variables", "Data"))
+    criteria, calculator, services, prices, variables, data = (
+        book.create_sheet(title) for title in ("Criteria", "Calculator", "Services", "Prices", "Variables", "Data"))
     write_variables(book, variables, month)
     write_prices(book, prices, prices_rows(results))
     rows = apps_rows(results)
     write_data(data, rows)
+    write_services(services, services_rows(results))
     write_criteria(criteria, rows)
     candidates = sorted(row["cod_app"] for row in apps if deck.decision(row) in deck.MOVABLE)
     write_calculator(calculator, candidates[0] if candidates else rows[0][0])
     write_results(results_sheet)
     book.calculation.fullCalcOnLoad = True
     book.save(output)
-    pq.load_query(output, "Data", "Apps", "Apps", apps_query(os.path.abspath(results)), APPS_COLUMNS)
+    folder = os.path.abspath(results)
+    pq.load_queries(output, [("Data", "Apps", "Apps", apps_query(folder), APPS_COLUMNS),
+                             ("Services", "Services", "Services", services_query(folder), SERVICES_COLUMNS)])
     return len(rows)
 
 
