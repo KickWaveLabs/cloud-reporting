@@ -191,13 +191,17 @@ python aks-aca/src/aa_criteria_workbook.py
     month. It reads only `results/` (including `application_snapshot.csv`), so it needs no saved workbook. AKS
     takes the discount measured on its node VMs (reservations included); `--aks-discount 0.60` fixes it by hand.
     Container Apps takes the bank's 30%.
-14. `aa_criteria_workbook.py` writes `aks_aca_criteria.xlsx` next to the deck, plain Excel in five sheets: `Results`
+14. `aa_criteria_workbook.py` writes `aks_aca_criteria.xlsx` next to the deck, plain Excel in six sheets: `Results`
     (one row per destination, as the result slide, and an editable chart), `Criteria` (one row per application:
     data, conditions, decision, night replicas — 1 by default, write 0 to let one scale to zero — and its monthly
     cost on AKS and Container Apps in soles), `Calculator` (one application meter by meter, in the format of the
-    team's calculator), `Prices` (with links to the sources) and `Variables`. With the defaults it gives the deck's
-    figures. `aks_aca_criteria.pq`, next to it, holds the three Power Query queries (Services as a connection only,
-    Apps and Prices loaded into their sheets) and how to add them in Excel.
+    team's calculator), `Prices` (with links to the sources), `Variables` and `Data`. `Data` is a Power Query
+    connection (query `Apps`): it reads the snapshot CSVs and joins each "micro"-service to its application.
+    `Criteria` takes each row from it. To check it on another machine: Enable Content, edit the query and change
+    `Folder` (its first step) to that machine's `aks-aca/results`, then Data > Refresh All; no figure should change.
+    If a refresh brings more applications, drag the corner of the `Criteria` table down. With the defaults the
+    workbook gives the deck's figures. The query block starts from the one Excel wrote for Microsoft's
+    connected-workbooks library (`assets/powerquery/`, MIT); only Python is needed.
 
 Smoke tests before a full run: `aa_metrics.py --clusters <one-cluster> --skip-apim --start <day>
 --end <day>` and `aa_container_insights.py --clusters <one-cluster> --start <day> --end <day>`, each

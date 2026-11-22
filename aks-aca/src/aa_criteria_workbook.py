@@ -2,19 +2,20 @@
 """Write the criteria workbook: which conditions each PROD application meets and what moving it to Container Apps
 would save, from the CSV files in results/.
 
-Five sheets, plain Excel:
+Six sheets, plain Excel:
   Results     one row per destination (as the result slide) and a chart that can be edited
-  Criteria    one row per application: its data, the conditions, the decision, its night replicas (1 by default,
-              write 0 to let it scale to zero) and its monthly cost on AKS and Container Apps
+  Criteria    one row per application: its data (from the Data sheet, same row), the conditions, the decision, its
+              night replicas (1 by default, write 0 to let it scale to zero) and its monthly cost on AKS and ACA
   Calculator  one application's Container Apps and AKS cost, meter by meter (pick it in B2)
   Prices      the list prices of the model, with the links where they come from
   Variables   thresholds, discount, IGV, exchange rate and the hours of the month
+  Data        the Apps Power Query query: reads the CSV files and joins each "micro"-service to its application
 
-The data columns of Criteria and Prices are what the Power Query queries in aks_aca_criteria.pq return (written next
-to the workbook): load Apps into Criteria and Prices into Prices, and the formula columns keep working. The deck
+Data > Refresh All reads the CSV files again (Folder, the first step of the query, is the --results folder; change it
+on another machine). If a refresh brings more applications, drag the corner of the Criteria table down. The deck
 (aa_deck_exec.py) uses the same conditions and cost model; with the defaults both give the same figures.
-Reads only results/ (no Azure call). Output: aks_aca_criteria.xlsx and aks_aca_criteria.pq in the newest
-reports/<date>-aks-aca folder (or --output).
+Reads only results/ (no Azure call). Output: aks_aca_criteria.xlsx in the newest reports/<date>-aks-aca folder (or
+--output).
 """
 
 import argparse
@@ -33,6 +34,7 @@ from openpyxl.worksheet.table import Table, TableColumn, TableFormula, TableStyl
 
 import aa_common as aa
 import aa_deck_exec as deck
+import aa_powerquery as pq
 
 REGION = "eastus2"
 STYLE = "TableStyleMedium2"
@@ -84,11 +86,14 @@ def apps_rows(results):
             vcpu, _ = deck.aca_size(row)
             sums[code][0] += deck.office_replicas(row) * vcpu
             sums[code][1] += vcpu
+    if not sums:
+        aa.azure.LOG.warning("No micro-service sizes: deployment_snapshot.csv or cluster_snapshot.csv is missing or "
+                             "empty in %s, so the Container Apps cost leaves out vCPU and memory",
+                             os.path.join(results, "aa-k8s-snapshot"))
     out = []
     for row in sorted(deck.results_csv(results, "aa-k8s-snapshot", "application_snapshot.csv"),
                       key=lambda r: r["cod_app"]):
-        row = dict(row, vcpu_office=round(sums[row["cod_app"]][0], 4),
-                   vcpu_one_replica_each=round(sums[row["cod_app"]][1], 4))
+        row = dict(row, vcpu_office=sums[row["cod_app"]][0], vcpu_one_replica_each=sums[row["cod_app"]][1])
         out.append([number_or_none(row.get(c)) if c in APPS_NUMBERS else (row.get(c) or None) for c in APPS_COLUMNS])
     return out
 
@@ -103,77 +108,46 @@ def prices_rows(results):
 
 
 # ---------------------------------------------------------------------------
-# Power Query code (aks_aca_criteria.pq)
+# Power Query: the Apps query, loaded into the Criteria sheet
 # ---------------------------------------------------------------------------
 
 
-def power_query(results_folder):
+def apps_query(results_folder):
+    """M code of the Apps query: application_snapshot.csv, plus the vCPU of each application's "micro"-services
+    (deployment_snapshot.csv joined to its application through cluster_snapshot.csv, sized as Container Apps)."""
     folder = results_folder.replace('"', '""')
     csv = '[Delimiter = ",", Encoding = 65001, QuoteStyle = QuoteStyle.Csv]'
 
     def read(subfolder, file_name):
         return (f'Table.PromoteHeaders(Csv.Document(File.Contents(Folder & Separator & "{subfolder}" & Separator & '
                 f'"{file_name}"), {csv}), [PromoteAllScalars = true])')
-    head = f'''    Folder = "{folder}",
-    Separator = if Text.Contains(Folder, "\\\\") then "\\\\" else "/",'''.replace("\\\\", "\\")
     columns = ", ".join(f'"{c}"' for c in APPS_COLUMNS[:-2])
     blanks = ", ".join(f'"{c}"' for c in APPS_NUMBERS[:-2])
     numbers = ", ".join(f'{{"{c}", type number}}' for c in APPS_NUMBERS)
-    keys = ", ".join(f'"{key}"' for _, key in PRICES)
-    names = ", ".join(f'{{"{key}", "{label}"}}' for label, key in PRICES)
-    return f'''// Power Query for aks_aca_criteria.xlsx: three queries. For each one, in Excel: Data > Get Data > From Other
-// Sources > Blank Query > Advanced Editor, paste it and give the query the name in its title.
-//   Services: Close & Load To > Only Create Connection.
-//   Apps:     Close & Load To > Table > Existing worksheet, Criteria!$A$1 (replace the table there).
-//   Prices:   Close & Load To > Table > Existing worksheet, Prices!$A$1 (replace the table there).
-// Folder (first step of each query) is the folder with the CSV files (aks-aca/results).
-
-
-// ===== Services =====
-// Each "micro"-service of a PROD cluster with applications, with its application and its Container Apps size.
-let
-{head}
+    return f'''let
+    // Folder with the CSV files (aks-aca/results): change it if they are somewhere else
+    Folder = "{folder}",
+    Separator = if Text.Contains(Folder, "\\") then "\\" else "/",
+    ToNumber = (value) => if value = null or value = "" then 0 else Number.From(value, "en-US"),
+    Applications = {read("aa-k8s-snapshot", "application_snapshot.csv")},
     Deployments = {read("aa-k8s-snapshot", "deployment_snapshot.csv")},
     Clusters = {read("aa-k8s-snapshot", "cluster_snapshot.csv")},
+    // Each "micro"-service of a PROD cluster with applications gets its application through the cluster
     ApplicationClusters = Table.SelectColumns(Table.SelectRows(Clusters, each [environment] = "PROD" and [category] = "APPLICATION"), {{"cluster_id", "cod_app"}}),
     MicroServices = Table.RemoveColumns(Table.SelectRows(Deployments, each [microservice] = "YES"), {{"cod_app"}}, MissingField.Ignore),
-    WithApplication = Table.ExpandTableColumn(Table.NestedJoin(MicroServices, {{"cluster_id"}}, ApplicationClusters, {{"cluster_id"}}, "app", JoinKind.Inner), "app", {{"cod_app"}}),
-    ToNumber = (value) => if value = null or value = "" then 0 else Number.From(value, "en-US"),
+    Services = Table.ExpandTableColumn(Table.NestedJoin(MicroServices, {{"cluster_id"}}, ApplicationClusters, {{"cluster_id"}}, "app", JoinKind.Inner), "app", {{"cod_app"}}),
     // Smallest Container Apps size that covers the request: steps of 0.25 vCPU, 2 GiB per vCPU
-    AcaVcpu = Table.AddColumn(WithApplication, "aca_vcpu", each Number.RoundUp(List.Max({{ToNumber([cpu_request_vcpu]), ToNumber([mem_request_gib]) / 2, 0.25}}) * 4) / 4, type number),
+    AcaVcpu = Table.AddColumn(Services, "aca_vcpu", each Number.RoundUp(List.Max({{ToNumber([cpu_request_vcpu]), ToNumber([mem_request_gib]) / 2, 0.25}}) * 4) / 4, type number),
     // Replicas in office hours: Container Insights average, else the HPA minimum, at least 1
-    Replicas = Table.AddColumn(AcaVcpu, "replicas_office", each List.Max({{1, if ToNumber([ci_replicas_avg_office]) > 0 then ToNumber([ci_replicas_avg_office]) else if ToNumber([hpa_min]) > 0 then ToNumber([hpa_min]) else 1}}), type number)
-in
-    Replicas
-
-
-// ===== Apps =====
-// One row per PROD application, with the vCPU of its "micro"-services from Services.
-let
-{head}
-    Applications = {read("aa-k8s-snapshot", "application_snapshot.csv")},
+    Replicas = Table.AddColumn(AcaVcpu, "replicas_office", each List.Max({{1, if ToNumber([ci_replicas_avg_office]) > 0 then ToNumber([ci_replicas_avg_office]) else if ToNumber([hpa_min]) > 0 then ToNumber([hpa_min]) else 1}}), type number),
+    PerApplication = Table.Group(Replicas, {{"cod_app"}}, {{{{"vcpu_office", each List.Sum(List.Transform(Table.ToRecords(_), (r) => r[replicas_office] * r[aca_vcpu])), type number}}, {{"vcpu_one_replica_each", each List.Sum([aca_vcpu]), type number}}}}),
     Columns = Table.SelectColumns(Applications, {{{columns}}}),
-    PerApplication = Table.Group(Services, {{"cod_app"}}, {{{{"vcpu_office", each List.Sum(List.Transform(Table.ToRecords(_), (r) => r[replicas_office] * r[aca_vcpu])), type number}}, {{"vcpu_one_replica_each", each List.Sum([aca_vcpu]), type number}}}}),
     Joined = Table.ExpandTableColumn(Table.NestedJoin(Columns, {{"cod_app"}}, PerApplication, {{"cod_app"}}, "sizes", JoinKind.LeftOuter), "sizes", {{"vcpu_office", "vcpu_one_replica_each"}}),
     Blanks = Table.ReplaceValue(Joined, "", null, Replacer.ReplaceValue, {{{blanks}}}),
     Typed = Table.TransformColumnTypes(Blanks, {{{numbers}}}, "en-US"),
     Sorted = Table.Sort(Typed, {{{{"cod_app", Order.Ascending}}}})
 in
-    Sorted
-
-
-// ===== Prices =====
-// The list prices the cost uses (East US 2).
-let
-{head}
-    Prices = {read("aa-prices", "prices.csv")},
-    Wanted = Table.Distinct(Table.SelectRows(Prices, each [region] = "{REGION}" and List.Contains({{{keys}}}, [key])), {{"key"}}),
-    Named = Table.AddColumn(Wanted, "name", each List.First(List.Select({{{names}}}, (pair) => pair{{0}} = [key])){{1}}),
-    Columns = Table.RenameColumns(Table.SelectColumns(Named, {{"name", "meter", "unit", "retail_price"}}), {{{{"retail_price", "price"}}}}),
-    Typed = Table.TransformColumnTypes(Columns, {{{{"price", type number}}}}, "en-US")
-in
-    Typed
-'''
+    Sorted'''
 
 
 # ---------------------------------------------------------------------------
@@ -269,7 +243,7 @@ def write_prices(book, sheet, rows):
 
 
 def criteria_formulas():
-    r = lambda column: f"Apps[[#This Row],[{column}]]"
+    r = lambda column: f"Criteria[[#This Row],[{column}]]"
     night_vcpu = 'IF(night_rate="IDLE",price_vcpu_idle,price_vcpu)'
     night_gib = 'IF(night_rate="IDLE",price_gib_idle,price_gib)'
     return [
@@ -295,16 +269,34 @@ def criteria_formulas():
     ]
 
 
+def write_data(sheet, rows):
+    """The Apps query's table: the CSV data, refreshed from the files (Data > Refresh All)."""
+    add_table(sheet, "Apps", APPS_COLUMNS, rows)
+    for index, header in enumerate(APPS_COLUMNS, start=1):
+        sheet.column_dimensions[get_column_letter(index)].width = max(10, min(len(header) + 3, 22))
+
+
 def write_criteria(sheet, rows):
-    formulas = criteria_formulas()
-    add_table(sheet, "Apps", APPS_COLUMNS, rows, formulas)
-    for index, header in enumerate(APPS_COLUMNS + [header for header, _ in formulas], start=1):
+    """One row per application: each data column comes from the same row of the Data sheet (the Apps query), then
+    the conditions, the decision, the night replicas (a value that can be changed) and the costs."""
+    def pull(column):
+        value = f"INDEX(Apps[{column}],ROW()-1)"
+        return f'IF(ISBLANK({value}),"",{value})'
+    formulas = [(column, pull(column)) for column in APPS_COLUMNS] + criteria_formulas()
+    add_table(sheet, "Criteria", [], [[] for _ in rows], formulas)
+    for index, (header, _) in enumerate(formulas, start=1):
         sheet.column_dimensions[get_column_letter(index)].width = max(10, min(len(header) + 3, 22))
         number_format = (USD if header.endswith("_usd") else PEN if header.endswith("_pen")
                          else PCT if header == "offhours_active_share" else None)
         if number_format:
             for row in range(2, len(rows) + 2):
                 sheet.cell(row=row, column=index).number_format = number_format
+    # Night replicas are a value, not a formula: 1 for every application, 0 where it may scale to zero at night.
+    column = [header for header, _ in formulas].index("night_replicas") + 1
+    for row in range(2, len(rows) + 2):
+        sheet.cell(row=row, column=column, value=deck.OFFHOURS_REPLICAS)
+    table = sheet.tables["Criteria"]
+    table.tableColumns[column - 1].calculatedColumnFormula = None
 
 
 # (group in Criteria, label, where it goes)
@@ -321,10 +313,10 @@ def write_results(sheet):
     for column, header in enumerate(headers, start=1):
         sheet.cell(row=3, column=column, value=header)
     for row, (group, label, runtime) in enumerate(GROUPS, start=4):
-        where = f'Apps[group],"{group}"'
-        values = [label, f"=COUNTIFS({where})", f'=COUNTIFS({where},Apps[tps_ok],"NO")',
-                  f'=COUNTIFS({where},Apps[services_ok],"NO")', runtime, f"=SUMIFS(Apps[aks_month_pen],{where})",
-                  f"=F{row}-SUMIFS(Apps[saving_month_pen],{where})", f"=F{row}-G{row}"]
+        where = f'Criteria[group],"{group}"'
+        values = [label, f"=COUNTIFS({where})", f'=COUNTIFS({where},Criteria[tps_ok],"NO")',
+                  f'=COUNTIFS({where},Criteria[services_ok],"NO")', runtime, f"=SUMIFS(Criteria[aks_month_pen],{where})",
+                  f"=F{row}-SUMIFS(Criteria[saving_month_pen],{where})", f"=F{row}-G{row}"]
         for column, value in enumerate(values, start=1):
             sheet.cell(row=row, column=column, value=value).number_format = PEN if column >= 6 else "General"
     total = 4 + len(GROUPS)
@@ -335,7 +327,7 @@ def write_results(sheet):
         cell.number_format = PEN if column >= 6 else "General"
     plain_table(sheet, "Results", f"A3:H{total}")
     sheet.cell(row=total + 1, column=1,
-               value='=COUNTIFS(Apps[group],"IN_DEVELOPMENT")&" apps in development are not counted."')
+               value='=COUNTIFS(Criteria[group],"IN_DEVELOPMENT")&" apps in development are not counted."')
     chart = BarChart()
     chart.type, chart.style, chart.legend, chart.title = "col", 10, None, "Applications per destination"
     chart.add_data(Reference(sheet, min_col=2, min_row=3, max_row=3 + len(GROUPS)), titles_from_data=True)
@@ -352,10 +344,10 @@ def write_results(sheet):
 def write_calculator(sheet, default_app):
     """One application, meter by meter, as the team's calculator: units x cost per unit x time = gross; less the
     discount; plus IGV; in soles."""
-    app = lambda column: f"INDEX(Apps[{column}],MATCH($B$2,Apps[cod_app],0))"
+    app = lambda column: f"INDEX(Criteria[{column}],MATCH($B$2,Criteria[cod_app],0))"
     sheet["A2"], sheet["B2"], sheet["C2"] = "Application", default_app, "(choose it from the list)"
     sheet["A2"].font = sheet["B2"].font = BOLD
-    validation = DataValidation(type="list", formula1='=INDIRECT("Apps[cod_app]")', allow_blank=False)
+    validation = DataValidation(type="list", formula1='=INDIRECT("Criteria[cod_app]")', allow_blank=False)
     sheet.add_data_validation(validation)
     validation.add("B2")
     sheet["A3"], sheet["B3"] = "Decision", f"={app('decision')}"
@@ -424,19 +416,19 @@ def build(results, output):
     book = Workbook()
     results_sheet = book.active
     results_sheet.title = "Results"
-    criteria, calculator, prices, variables = (book.create_sheet(title) for title in
-                                               ("Criteria", "Calculator", "Prices", "Variables"))
+    criteria, calculator, prices, variables, data = (book.create_sheet(title) for title in
+                                                     ("Criteria", "Calculator", "Prices", "Variables", "Data"))
     write_variables(book, variables, month)
     write_prices(book, prices, prices_rows(results))
     rows = apps_rows(results)
+    write_data(data, rows)
     write_criteria(criteria, rows)
     candidates = sorted(row["cod_app"] for row in apps if deck.decision(row) in deck.MOVABLE)
     write_calculator(calculator, candidates[0] if candidates else rows[0][0])
     write_results(results_sheet)
     book.calculation.fullCalcOnLoad = True
     book.save(output)
-    with open(os.path.splitext(output)[0] + ".pq", "w", encoding="utf-8") as handle:
-        handle.write(power_query(os.path.abspath(results)))
+    pq.load_query(output, "Data", "Apps", "Apps", apps_query(os.path.abspath(results)), APPS_COLUMNS)
     return len(rows)
 
 
@@ -453,7 +445,7 @@ def main():
     reports = sorted(glob.glob(os.path.join(aa.TOPIC_DIR, "reports", "*-aks-aca")))
     output = args.output or os.path.join(reports[-1] if reports else aa.TOPIC_DIR, "aks_aca_criteria.xlsx")
     count = build(args.results, output)
-    aa.azure.LOG.info("Wrote %s and its Power Query code (%d applications)", output, count)
+    aa.azure.LOG.info("Wrote %s (%d applications; the Data sheet is the Apps query)", output, count)
 
 
 if __name__ == "__main__":
