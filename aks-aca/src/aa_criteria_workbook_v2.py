@@ -34,6 +34,7 @@ from openpyxl import Workbook
 from openpyxl.chart import BarChart, LineChart, Reference
 from openpyxl.chart.label import DataLabelList
 from openpyxl.chart.legend import Legend
+from openpyxl.chart.series import SeriesLabel
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
@@ -63,6 +64,7 @@ GROUPS = [("AKS", "Stays on AKS (criteria)"), ("BELOW_MARGIN", "Meets criteria, 
           ("ACA_WITH_REVIEW", "ACA, with review"), ("ACA", "Candidate to ACA"),
           ("IN_USE", "In use, not measured"), ("NOT_IN_USE", "Not in use"), ("IN_DEVELOPMENT", "In development")]
 LAYERS = ["UX", "BS", "CORE", "MAINFRAME"]
+HOUR_LABEL_STEP = 4  # hours 0, 4, 8 ... 20 on the charts: office hours are 8:00 to 19:59
 # Official sources of the sizing rule, linked next to their variables.
 SOURCES = {
     "concurrent_requests": "https://learn.microsoft.com/azure/container-apps/scale-app#http",
@@ -408,6 +410,36 @@ def criteria_formulas():
 
 
 
+def untitled(chart):
+    """The chart without a title: Excel otherwise titles a one-series chart with the series name. (Wraps the
+    instance's writer: a subclass would lose openpyxl's element list.)"""
+    write = chart._write
+
+    def write_untitled():
+        tree = write()
+        container = tree.find("chart")
+        container.insert(0, container.makeelement("autoTitleDeleted", {"val": "1"}))
+        return tree
+
+    chart._write = write_untitled
+    return chart
+
+
+def value_labels():
+    """Data labels with the value only (Excel adds the series and category names when they are left unset)."""
+    labels = DataLabelList()
+    labels.showVal, labels.showSerName, labels.showCatName, labels.showLegendKey = True, False, False, False
+    return labels
+
+
+def hour_axis(chart):
+    """Show both axes (openpyxl 3.1 hides them by default), an hour label every HOUR_LABEL_STEP and the legend below."""
+    chart.x_axis.delete, chart.y_axis.delete = False, False
+    chart.x_axis.tickLblSkip = chart.x_axis.tickMarkSkip = HOUR_LABEL_STEP
+    chart.legend = Legend()
+    chart.legend.position = "b"
+
+
 def write_results(sheet):
     sheet["A1"], sheet["A1"].font = "Result per destination (one row per cluster in Criteria)", Font(bold=True, size=14)
     headers = ["Destination", "Clusters", "AKS today (S/)", "After (S/)", "Saving (S/)"]
@@ -432,14 +464,16 @@ def write_results(sheet):
              "A cluster that meets the criteria but saves less than min_saving stays on AKS (BELOW_MARGIN)."]
     for offset, text in enumerate(notes, start=1):
         sheet.cell(row=total + offset, column=1, value=text)
-    chart = BarChart()
-    chart.type, chart.style, chart.title = "col", 10, "Clusters per destination"
-    chart.legend = None
+    chart = untitled(BarChart())
+    chart.type, chart.style, chart.varyColors = "col", 10, True
     chart.add_data(Reference(sheet, min_col=2, min_row=3, max_row=3 + len(GROUPS)), titles_from_data=True)
     chart.set_categories(Reference(sheet, min_col=1, min_row=4, max_row=3 + len(GROUPS)))
-    chart.dataLabels = DataLabelList()
-    chart.dataLabels.showVal = True
-    chart.height, chart.width = 8, 18
+    chart.legend = Legend()
+    chart.legend.position = "r"
+    chart.x_axis.delete = True  # the legend names each bar
+    chart.y_axis.delete = False
+    chart.dataLabels = value_labels()
+    chart.height, chart.width = 9, 22
     sheet.add_chart(chart, f"A{total + 6}")
     for column, width in zip("ABCDE", (44, 10, 16, 16, 16)):
         sheet.column_dimensions[column].width = width
@@ -526,16 +560,20 @@ def write_calculator(sheet, default_scope):
         chart.y_axis.title, chart.x_axis.title = "TPS", "Hour"
         chart.add_data(Reference(sheet, min_col=2 + block, max_col=4 + block, min_row=top, max_row=last),
                        titles_from_data=True)
+        for series, name in zip(chart.series, ("TPS min", "TPS average", "TPS peak")):
+            series.tx = SeriesLabel(v=name)
         chart.set_categories(Reference(sheet, min_col=1, min_row=top + 1, max_row=last))
-        chart.legend = Legend()
-        chart.legend.position = "b"
+        hour_axis(chart)
         sheet.add_chart(chart, anchor)
     replicas_chart = BarChart()
     replicas_chart.type, replicas_chart.title, replicas_chart.height, replicas_chart.width = \
         "col", "Chosen replicas per \"micro\"-service", 8, 16
-    for column in (7, 13):
-        replicas_chart.add_data(Reference(sheet, min_col=column, min_row=top, max_row=last), titles_from_data=True)
+    replicas_chart.y_axis.title, replicas_chart.x_axis.title = "Replicas", "Hour"
+    for column, name in ((7, "Weekday"), (13, "Weekend")):
+        replicas_chart.add_data(Reference(sheet, min_col=column, min_row=top + 1, max_row=last))
+        replicas_chart.series[-1].tx = SeriesLabel(v=name)
     replicas_chart.set_categories(Reference(sheet, min_col=1, min_row=top + 1, max_row=last))
+    hour_axis(replicas_chart)
     sheet.add_chart(replicas_chart, "O38")
     sheet.column_dimensions["A"].width = 40
     for column in "BCDEFGHIJKLM":
