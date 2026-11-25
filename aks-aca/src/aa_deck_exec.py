@@ -61,6 +61,9 @@ MONEY_NOTE = "Montos en soles con IGV (18 %); tipo de cambio S/ 3,41333 por US$.
 # Smallest PROD AKS cluster (architecture team: 2 system + 2 user nodes of 8 vCPU / 32 GB) and the Container Apps
 # "micro"-service of the model (0.5 vCPU / 1 GiB, one replica on 24 h, 5 million requests a month).
 MIN_AKS_NODES, MIN_AKS_VM, HOURS_MONTH = 4, "Standard_D8s_v4", 730
+# Real application shown on slide 3: one cluster, candidate to Container Apps, several "micro"-services and a clear
+# saving. Another code here changes the example; if it no longer qualifies, the slide takes the best one that does.
+EXAMPLE_APP, EXAMPLE_MIN_MICROSERVICES = "BSEG", 5
 # The bank's discount on Azure list prices: for the minimum comparison and for Container Apps, which has no
 # reservations (the measured node discount includes them).
 BANK_DISCOUNT = 0.30
@@ -425,7 +428,7 @@ PEAK_COLOR, TRACK_COLOR = d.RGBColor(0xF7, 0xD3, 0xB0), d.RGBColor(0x3A, 0x50, 0
 
 def sign_card(slide, left, top, width, height, sentence, value, label, bar=None):
     """One sign of the hypothesis: a sentence the presenter can say, the figure and what it counts. bar = (average,
-    peak) draws the whole capacity with the average strong and the peak light."""
+    peak) draws the capacity paid with the average strong, the peak light with a tick, and "Pico del mes: N%" under it."""
     d.rounded(slide, left, top, width, height, d.CARD)
     d.text_box(slide, left + Inches(0.12), top + Inches(0.1), width - Inches(0.24), Inches(0.6), sentence, size=12,
                bold=True, color=d.WHITE, align=d.PP_ALIGN.CENTER, anchor=d.MSO_ANCHOR.MIDDLE)
@@ -437,12 +440,18 @@ def sign_card(slide, left, top, width, height, sentence, value, label, bar=None)
     if bar:
         average, peak = bar
         bar_left, bar_width = left + Inches(0.25), width - Inches(0.5)
-        bar_top, bar_height = top + height - Inches(0.3), Inches(0.12)
+        bar_top, bar_height = top + height - Inches(0.75), Inches(0.2)
         for share, colour in ((1.0, TRACK_COLOR), (peak or 0, PEAK_COLOR), (average or 0, d.ORANGE)):
             if share > 0:
                 d.rounded(slide, bar_left, bar_top, max(int(bar_width * min(share, 1.0)), Inches(0.04)), bar_height,
                           colour, radius=0.5)
-
+        if peak:
+            tick = bar_left + int(bar_width * min(peak, 1.0))
+            shape(slide, MSO_SHAPE.RECTANGLE, tick - Inches(0.015), bar_top - Inches(0.05), Inches(0.03),
+                  bar_height + Inches(0.1), d.WHITE)
+            d.text_box(slide, left, bar_top + bar_height + Inches(0.08), width, Inches(0.3),
+                       f"Pico del mes: {d.percent(peak)}", size=12, bold=True, color=PEAK_COLOR,
+                       align=d.PP_ALIGN.CENTER)
 
 def slide_hypothesis(deck, estate, apps, scaling, results, source):
     month = estate["month"]
@@ -455,8 +464,6 @@ def slide_hypothesis(deck, estate, apps, scaling, results, source):
     if measured_min:
         aa.azure.LOG.info("Minimum AKS after discount: %.2f US$; real bills %.2f US$ (median of %d clusters, %s)",
                           aks_min, measured_min, measured_clusters, month)
-    aks_label = (f"el cluster AKS más chico ({MIN_AKS_NODES} servidores con reserva de 3 años, discos y tier "
-                 f"Standard), aunque la aplicación sea pequeña")
     app_clusters = [row for row in results_csv(results, "aa-k8s-snapshot", "cluster_snapshot.csv")
                     if row["environment"] == "PROD" and row["category"] == aa.APPLICATION and row["in_inventory"] == "YES"]
     small = sum(0 < int(row["microservices"] or 0) <= MAX_MICROSERVICES for row in app_clusters)
@@ -466,7 +473,7 @@ def slide_hypothesis(deck, estate, apps, scaling, results, source):
     slide = d.base_slide(deck, "Hipótesis: un cluster AKS por aplicación paga más de lo que usa", source)
     d.heading(slide, Inches(0.6), Inches(1.3), Inches(7.2), "Indicios", size=14)
     signs = [("Pagamos CPU que casi no usamos", d.percent(cpu_average),
-              f"de la CPU de los clusters se usa en horario de oficina (pico del mes: {d.percent(cpu_peak)})",
+              "de la CPU pagada se usa en promedio",
               (cpu_average, cpu_peak)),
              ("El autoescalado casi no se mueve", d.percent(stuck),
               f"de los {MICRO} con autoescalado no sube ni baja de réplicas hace más de 3 meses", None),
@@ -483,17 +490,44 @@ def slide_hypothesis(deck, estate, apps, scaling, results, source):
                                   "Complejidad: sin servidores ni versiones de Kubernetes que administrar")):
         d.callout(slide, Inches(8.1), Inches(3.05) + index * (Inches(0.75)), Inches(4.6), Inches(0.65), text, size=12,
                   fill=d.CARD)
-    d.heading(slide, Inches(0.6), Inches(4.75), Inches(12.1), f"Lo mínimo que se paga al mes, según la calculadora "
-              f"de Azure (con el {d.percent(BANK_DISCOUNT)} de descuento del banco)", size=14)
-    d.kpi(slide, Inches(0.6), Inches(5.15), Inches(5.9), Inches(1.3), soles(aks_min), aks_label,
-          value_color=d.RUST, value_size=28, label_size=11)
-    d.kpi(slide, Inches(6.8), Inches(5.15), Inches(5.9), Inches(1.3), soles(aca_min),
-          f"un {MICRO_ONE} en Container Apps, con 1 réplica encendida las 24 horas", value_color=d.GREEN,
+    example = example_app(apps, aca_estimate(results, apps, month, read_prices(results)))
+    aa.azure.LOG.info("Slide 3 example: %s (%s), %d microservices, AKS %.2f US$ vs Container Apps %.2f US$ a month "
+                      "(%.0f%% less)", example["code"], example["cluster"], example["microservices"], example["aks"],
+                      example["aca"], 100 * example["saving"])
+    d.heading(slide, Inches(0.6), Inches(4.75), Inches(12.1),
+              f"Ejemplo real: {example['code']}, {example['microservices']} {MICRO} en un cluster. En Container Apps "
+              f"costaría {d.percent(example['saving'])} menos al mes", size=14)
+    d.kpi(slide, Inches(0.6), Inches(5.15), Inches(5.9), Inches(1.3), soles(example["aks"]),
+          f"hoy en AKS: lo que se pagó en {month_label(month)} por su cluster, con reservas", value_color=d.RUST,
           value_size=28, label_size=11)
-    # Both minimums leave out the load balancer every AKS cluster and every Container Apps environment pays (the
-    # saving on slide 7 includes it on both sides).
-    d.text_box(slide, Inches(0.6), Inches(6.5), Inches(12.1), Inches(0.25), "No incluye el balanceador.", size=9,
-               color=d.GREY, italic=True)
+    d.kpi(slide, Inches(6.8), Inches(5.15), Inches(5.9), Inches(1.3), soles(example["aca"]),
+          f"en Container Apps: los mismos {example['microservices']} {MICRO}, con el "
+          f"{d.percent(BANK_DISCOUNT)} de descuento del banco", value_color=d.GREEN, value_size=28, label_size=11)
+    # The example follows the criteria workbook's model: measured office replicas, 1 replica per "micro"-service off
+    # hours and the environment's load balancer. The minimums stay as reference.
+    d.text_box(slide, Inches(0.6), Inches(6.5), Inches(12.1), Inches(0.25),
+               f"Con IGV. Container Apps con las réplicas medidas en horario de oficina y 1 por {MICRO_ONE} fuera de "
+               f"horario. Mínimo de referencia: {soles(aks_min)} un cluster AKS de {MIN_AKS_NODES} servidores; "
+               f"{soles(aca_min)} un {MICRO_ONE} en Container Apps encendido todo el mes.", size=9, color=d.GREY,
+               italic=True)
+
+
+def example_app(apps, aca_list):
+    """Slide 3's real example: EXAMPLE_APP when it is a one-cluster Container Apps candidate with at least
+    EXAMPLE_MIN_MICROSERVICES "micro"-services and a saving; otherwise the one with the largest saving share that is.
+    Costs in US$ a month: AKS as paid, Container Apps with the bank's discount (the criteria workbook's model)."""
+    options = []
+    for row in apps:
+        aks, aca = to_float(row["cost_month_usd"]) or 0, aca_list.get(row["cod_app"], 0) * (1 - BANK_DISCOUNT)
+        microservices = int(to_float(row.get("microservices")) or 0)
+        if (decision(row) == "ACA" and row.get("clusters") in ("1", 1) and microservices >= EXAMPLE_MIN_MICROSERVICES
+                and aks > aca > 0):
+            options.append({"code": row["cod_app"], "cluster": row["cluster_names"], "microservices": microservices,
+                            "aks": aks, "aca": aca, "saving": 1 - aca / aks})
+    chosen = [option for option in options if option["code"] == EXAMPLE_APP]
+    if not chosen:
+        aa.azure.LOG.warning("%s does not qualify as the slide 3 example; taking the largest saving instead", EXAMPLE_APP)
+    return (chosen or sorted(options, key=lambda option: -option["saving"]))[0]
 
 
 def apps_label(count):
