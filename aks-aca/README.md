@@ -90,7 +90,8 @@ python aks-aca/src/aa_metrics.py
 python aks-aca/src/aa_container_insights.py
 python aks-aca/src/aa_cost.py
 python aks-aca/src/aa_prices.py
-python aks-aca/src/aa_k8s_snapshot.py --snapshot-date <export-day>   # optional, needs the exports below
+python aks-aca/src/aa_k8s_snapshot.py --snapshot-date <export-day>   # needs the exports below; the date is required
+python aks-aca/src/aa_cluster_snapshot.py   # criteria v2 inputs, after the snapshot
 python aks-aca/src/aa_signals.py   # optional; after aa_metrics.py
 python aks-aca/src/aa_microservice_history.py   # optional; at least once a month, keeps a growing history
 python aks-aca/src/aa_workbook.py

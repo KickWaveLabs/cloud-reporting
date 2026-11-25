@@ -27,6 +27,8 @@ Outputs (in --output-dir):
                           the IncomingMessages of the Event Hubs / Service Bus namespaces of AKS applications with no
                           AKS-backed PROD API (event-driven: their load is messages); apim_layer says which
   entry_points_hourly_profile.csv the same profile for those entry points
+  apim_api_hourly.csv     APIM x API x Lima hour with traffic: requests in the hour and its busiest 5-minute bucket
+  entry_points_hourly.csv the same hourly series for the entry points
   metrics_errors.csv
   metrics_summary.json
 """
@@ -143,6 +145,7 @@ class ApiState:
         self.cooldown = cooldown
         self.months = defaultdict(lambda: defaultdict(float))
         self.hours = defaultdict(float)          # (month, local hour start) -> requests
+        self.hour_peaks = defaultdict(float)     # (month, local hour start) -> busiest 5-minute bucket in that hour
         self.profile = defaultdict(float)        # (day type, hour) -> requests
         self.in_run = False
         self.last = None
@@ -159,7 +162,9 @@ class ApiState:
         figures["office_requests" if office else "offhours_requests"] += requests
         figures["office_buckets" if office else "offhours_buckets"] += 1
         figures["peak_5min"] = max(figures["peak_5min"], requests)
-        self.hours[(month, local.replace(minute=0, second=0, microsecond=0))] += requests
+        hour_start = local.replace(minute=0, second=0, microsecond=0)
+        self.hours[(month, hour_start)] += requests
+        self.hour_peaks[(month, hour_start)] = max(self.hour_peaks[(month, hour_start)], requests)
         self.profile[("weekday" if local.weekday() < 5 else "weekend", local.hour)] += requests
         active = requests > 0
         if office:
@@ -195,6 +200,15 @@ class ApiState:
                 "offhours_active_seconds": int(figures["offhours_active_buckets"] * BUCKET_SECONDS),
                 "offhours_idle_seconds": int(figures["offhours_wakeups"] * self.cooldown),
             }
+
+    def hourly_rows(self, apim, api_id):
+        """One row per hour with traffic: requests in the hour and its busiest 5-minute bucket (Lima time). The
+        snapshot adds them up per cluster and application to draw min / average / peak per hour of the day."""
+        for (month, hour_start), value in sorted(self.hours.items()):
+            if value > 0:
+                yield {"apim": apim, "api_id": api_id, "month": month,
+                       "hour_start": hour_start.strftime("%Y-%m-%dT%H:00"), "requests": int(value),
+                       "peak_5min_requests": int(self.hour_peaks[(month, hour_start)])}
 
     def profile_rows(self, apim, api_id, day_counts):
         for (day_type, hour), value in sorted(self.profile.items()):
@@ -342,7 +356,7 @@ def main():
             usage_rows.extend(result or [])
         output.csv("aks_usage_monthly.csv", aa.with_cod_app(usage_rows, "cluster", cluster_codes))
 
-    api_rows, profile_rows = [], []
+    api_rows, profile_rows, hourly_rows = [], [], []
     if not args.skip_apim:
         days = day_counts(start, end)
         calendar = bucket_calendar(start, end)
@@ -350,14 +364,16 @@ def main():
             for api_id, state in sorted(apim_requests(ctx, service, start, end, args).items()):
                 api_rows.extend(state.rows(service["name"], api_id, calendar))
                 profile_rows.extend(state.profile_rows(service["name"], api_id, days))
+                hourly_rows.extend(state.hourly_rows(service["name"], api_id))
         api_code = lambda row: api_codes.get((row["apim"], row["api_id"]), "")
         layer = lambda row: layer_of.get(row["apim"], "")
         output.csv("apim_api_monthly.csv", aa.with_cod_app(aa.insert_column(api_rows, "apim", "apim_layer", layer),
                                                            "api_id", api_code))
         output.csv("apim_hourly_profile.csv", aa.with_cod_app(aa.insert_column(profile_rows, "apim", "apim_layer", layer),
                                                               "api_id", api_code))
+        output.csv("apim_api_hourly.csv", aa.insert_column(hourly_rows, "apim", "apim_layer", layer))
 
-    entry_rows, entry_profile = [], []
+    entry_rows, entry_profile, entry_hourly = [], [], []
     if not args.skip_entry_points and entries:
         days = day_counts(start, end)
         calendar = bucket_calendar(start, end)
@@ -370,8 +386,11 @@ def main():
                               for row in result.rows(entry["name"], metric, calendar))
             entry_profile.extend(dict(row, apim_layer=entry["kind"], cod_app=entry["cod_app"])
                                  for row in result.profile_rows(entry["name"], metric, days))
+            entry_hourly.extend(dict(row, apim_layer=entry["kind"], cod_app=entry["cod_app"])
+                                for row in result.hourly_rows(entry["name"], metric))
         output.csv("entry_points_monthly.csv", entry_rows)
         output.csv("entry_points_hourly_profile.csv", entry_profile)
+        output.csv("entry_points_hourly.csv", entry_hourly)
 
     output.csv("metrics_errors.csv", ctx.errors.rows, azure.ErrorLog.FIELDS)
     output.json("metrics_summary.json", azure.run_metadata(ctx, {

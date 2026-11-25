@@ -13,6 +13,8 @@ Outputs (in --output-dir):
   aks_workloads_monthly.csv  cluster x namespace x workload x month x office/off-hours: replicas (avg,
                              max) and per-counter usage and requests (total and per replica)
   aks_services.csv           cluster x namespace x service x type
+  aks_workloads_hourly_profile.csv  cluster x namespace x workload x month x weekday/weekend x Lima hour: replicas
+                             min / average / max over the hours with pods (--skip-hourly leaves it out)
   ci_coverage.csv            cluster x month: rows returned, so empty months are visible
   ci_errors.csv
   ci_summary.json
@@ -60,6 +62,27 @@ Perf
 | summarize Hours = count(), AvgReplicas = avg(Replicas), MaxReplicas = max(Replicas),
     AvgTotal = avg(Total), P95Total = percentile(Total, 95), MaxTotal = max(Total), AvgPerReplica = avg(Total / Replicas)
     by Month, Office, Namespace, Workload, ControllerKind, CounterName
+"""
+
+# Replicas per workload by weekday / weekend and Lima hour of day: the "today" column of the v2 calculator.
+HOURLY_QUERY = """
+let t0 = datetime({start}); let t1 = datetime({end});
+let pods = KubePodInventory
+| where TimeGenerated between (t0 .. t1) and isnotempty(ControllerName)
+| extend Workload = {workload}
+| distinct PodUid, Namespace, Workload, ControllerKind;
+Perf
+| where TimeGenerated between (t0 .. t1)
+| where ObjectName == 'K8SContainer' and CounterName == 'cpuUsageNanoCores'
+| extend PodUid = extract(@'/([^/]+)/[^/]+$', 1, InstanceName)
+| summarize by Hour = bin(TimeGenerated, 1h), PodUid
+| join kind=inner pods on PodUid
+| summarize Replicas = dcount(PodUid) by Hour, Namespace, Workload, ControllerKind
+| extend Local = datetime_utc_to_local(Hour, 'America/Lima')
+| extend Month = format_datetime(Local, 'yyyy-MM'), DayType = iff(dayofweek(Local) between (1d .. 5d), 'weekday', 'weekend'),
+    HourOfDay = hourofday(Local)
+| summarize Hours = count(), MinReplicas = min(Replicas), AvgReplicas = avg(Replicas), MaxReplicas = max(Replicas)
+    by Month, Namespace, Workload, ControllerKind, DayType, HourOfDay
 """
 
 SERVICES_QUERY = """
@@ -167,6 +190,8 @@ def main():
     parser.add_argument("--end", default=None, help="Last day (YYYY-MM-DD, Lima). Default: last day of last month")
     parser.add_argument("--clusters", default="", help="Comma-separated cluster names. Default: clusters in --environments")
     parser.add_argument("--pause", type=float, default=2.0, help="Seconds between Log Analytics queries")
+    parser.add_argument("--skip-hourly", action="store_true",
+                        help="Do not query replicas by hour of day (aks_workloads_hourly_profile.csv)")
     aa.add_cache_argument(parser)
     args = parser.parse_args()
     azure.setup_logging(args.verbose)
@@ -189,7 +214,7 @@ def main():
         ctx.errors.add("container-insights", name, "inventory", code="NotEnabled",
                        message="Container Insights add-on is not enabled on this cluster")
     client = LogsClient(ctx, args.pause, aa.query_cache(args))
-    workloads, services, coverage = [], [], []
+    workloads, services, coverage, hourly = [], [], [], []
     started = time.monotonic()
     for number, cluster in enumerate(clusters, 1):  # sequential: Log Analytics allows few concurrent queries per user
         azure.LOG.info("Container Insights %d/%d %s (%.0f min)", number, len(clusters), cluster["name"],
@@ -201,6 +226,15 @@ def main():
             workloads.extend(workload_rows(cluster, rows or []))
             coverage.append({"cluster": cluster["name"], "cluster_id": cluster["id"].lower(), "month": month, "rows": len(rows or []),
                              "status": "ERROR" if rows is None else ("EMPTY" if not rows else "OK")})
+            if not args.skip_hourly:
+                kql = HOURLY_QUERY.format(start=aa.iso_z(begin), end=aa.iso_z(finish), workload=WORKLOAD_NAME)
+                rows = ctx.try_arm("ci-hourly", cluster["name"], client.query, cluster["id"], kql, timespan, finish)
+                hourly.extend({"cluster": cluster["name"], "cluster_id": cluster["id"].lower(),
+                               "environment": cluster["environment"], "month": row["Month"],
+                               "namespace": row["Namespace"], "workload": row["Workload"], "kind": row["ControllerKind"],
+                               "day_type": row["DayType"], "hour": row["HourOfDay"], "hours": row["Hours"],
+                               "replicas_min": row["MinReplicas"], "replicas_avg": round(row["AvgReplicas"], 2),
+                               "replicas_max": row["MaxReplicas"]} for row in rows or [])
         kql = SERVICES_QUERY.format(start=aa.iso_z(start), end=aa.iso_z(end))
         rows = ctx.try_arm("ci-services", cluster["name"], client.query, cluster["id"], kql,
                            f"{aa.iso_z(start)}/{aa.iso_z(end)}", end)
@@ -218,6 +252,8 @@ def main():
     output = azure.Output(args.output_dir, args.delimiter)
     output.csv("aks_workloads_monthly.csv", aa.with_cod_app(workloads, "cluster", cluster_codes))
     output.csv("aks_services.csv", aa.with_cod_app(services, "cluster", cluster_codes))
+    if not args.skip_hourly:
+        output.csv("aks_workloads_hourly_profile.csv", aa.with_cod_app(hourly, "cluster", cluster_codes))
     output.csv("ci_coverage.csv", aa.with_cod_app(coverage, "cluster", cluster_codes))
     output.csv("ci_errors.csv", ctx.errors.rows, azure.ErrorLog.FIELDS)
     output.json("ci_summary.json", azure.run_metadata(ctx, {

@@ -1007,8 +1007,9 @@ def write_export_history(folder, delimiter, taken_on, cluster_table, deployments
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--inputs", default=DEFAULT_INPUTS, help="Folder with the reportHpa and reportDeployment exports")
-    parser.add_argument("--snapshot-date", default=None,
-                        help="Day the exports were taken (YYYY-MM-DD). Default: modification date of the HPA file")
+    parser.add_argument("--snapshot-date", required=True,
+                        help="Day the exports were taken (YYYY-MM-DD). Required: the days without scaling are counted "
+                             "up to this day, and a file's modification date can be days later")
     parser.add_argument("--inventory", default=aa.results_path("aa-inventory"), help="Folder with the aa_inventory.py output")
     parser.add_argument("--container-insights", default=aa.results_path("aa-container-insights"),
                         help="Folder with the aa_container_insights.py output")
