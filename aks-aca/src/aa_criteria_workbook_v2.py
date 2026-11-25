@@ -11,14 +11,18 @@ explains them); with the default variables both give the same figures. Sheets:
               charts), replicas per "micro"-service each hour (today, simulated from traffic, chosen: editable) and
               the monthly cost meter by meter on AKS and on Container Apps
   Latency     the UX -> BS -> Core -> mainframe chain: how much a request takes with each layer on AKS or Container
-              Apps; every parameter can be changed (to validate with the architecture team)
+              Apps for the chosen application, a drawing of the chain and the measured latency per application;
+              every parameter can be changed (to validate with the architecture team)
   Traffic     scope (cluster or application) x weekday/weekend x hour: TPS and simulated replicas
-  Services    one row per "micro"-service: request, Container Apps size and its cost per second
+  Services    one row per "micro"-service: application, cluster, request and replicas today
   Prices      list prices with their links
   Variables   thresholds, saving margin, sizing rule, minimum replicas, discount, IGV, exchange rate
   Lists       the scopes the calculator offers
-Plain values and formulas (no Power Query): run the script again to refresh. Reads only results/. Output:
-aks_aca_criteria_v2.xlsx in the newest reports/<date>-aks-aca folder (or --output).
+  Data, TrafficData, LatencyData, LatencyLayers, Lists, Services and the list in Apps are Power Query connections to
+              the CSV files in results/ (Data > Refresh All reads them again; the folder is the first step of each
+              query). Formulas live in their own tables (Criteria, Traffic, Apps, LatencyApps) and read the query
+              tables row by row: after a refresh that adds rows, drag the corner of those tables down.
+Reads only results/. Output: aks_aca_criteria_v2.xlsx in the newest reports/<date>-aks-aca folder (or --output).
 """
 
 import argparse
@@ -30,13 +34,15 @@ from openpyxl import Workbook
 from openpyxl.chart import BarChart, LineChart, Reference
 from openpyxl.chart.label import DataLabelList
 from openpyxl.chart.legend import Legend
-from openpyxl.styles import Font, PatternFill
+from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
+from openpyxl.worksheet.table import Table, TableColumn, TableFormula, TableStyleInfo
 
 import aa_common as aa
 import aa_criteria_workbook as v1wb
 import aa_deck_exec as deck
+import aa_powerquery as pq
 import aa_v2_model as model
 
 BOLD = Font(bold=True)
@@ -130,36 +136,241 @@ def write_variables(book, sheet, month, days):
         sheet.column_dimensions[column].width = width
 
 
+
+
 def r(table, column):
     return f"{table}[[#This Row],[{column}]]"
 
 
-def write_traffic(sheet, profile):
-    rows = [[row[c] if c in ("scope", "scope_type", "day_type") else number(row[c]) for c in TRAFFIC_COLUMNS]
+def pull(query, column, top=1):
+    """A formula table's cell: the same row of a query table (Excel drops formula columns inside a query table, so
+    formulas live in their own table and read the query table row by row)."""
+    value = f"INDEX({query}[{column}],ROW()-{top})"
+    return f'IF(ISBLANK({value}),"",{value})'
+
+
+def formula_table(sheet, name, formulas, rows, top=1, left=1):
+    """A table of formula columns only, at any position, with one row per row of the query table it reads."""
+    for offset, (header, formula) in enumerate(formulas):
+        sheet.cell(row=top, column=left + offset, value=header)
+        for index in range(rows):
+            sheet.cell(row=top + 1 + index, column=left + offset, value="=" + formula)
+    ref = f"{get_column_letter(left)}{top}:{get_column_letter(left + len(formulas) - 1)}{top + max(rows, 1)}"
+    table = Table(displayName=name, ref=ref)
+    table.tableStyleInfo = TableStyleInfo(name=v1wb.STYLE, showRowStripes=True)
+    table.tableColumns = [TableColumn(id=index, name=header) for index, (header, _) in enumerate(formulas, start=1)]
+    for column, (_, formula) in zip(table.tableColumns, formulas):
+        column.calculatedColumnFormula = TableFormula(attr_text=formula)
+    sheet.add_table(table)
+
+
+# ---------------------------------------------------------------------------
+# Rows each Power Query query returns (written as the table's first data; Data > Refresh All reads the CSVs again)
+# ---------------------------------------------------------------------------
+
+
+def cluster_rows(clusters):
+    return [[number(row[c]) if c in CLUSTER_NUMBERS else (row[c] or None) for c in CLUSTER_COLUMNS]
+            for row in sorted(clusters, key=lambda item: (item["cod_app"], item["cluster"]))]
+
+
+def traffic_rows(profile):
+    return [[row[c] if c in ("scope", "scope_type", "day_type") else number(row[c]) for c in TRAFFIC_COLUMNS]
             for row in profile]
-    t = lambda column: r("Traffic", column)
-    formulas = [("sim_replicas", f'MAX(IF({t("office")}=1,min_replicas_office,min_replicas_offhours),'
-                                 f'CEILING(IF(sizing_basis="PEAK",{t("tps_peak")},{t("tps_avg")})*traffic_share/'
-                                 'concurrent_requests,1))'),
-                ("replica_seconds", f'{t("days")}*3600*{t("sim_replicas")}')]
-    v1wb.add_table(sheet, "Traffic", TRAFFIC_COLUMNS, rows, formulas)
-    for index, header in enumerate(TRAFFIC_COLUMNS + [f for f, _ in formulas], start=1):
-        sheet.column_dimensions[get_column_letter(index)].width = max(9, min(len(header) + 2, 18))
 
 
-def write_services(sheet, services, names):
+def service_rows(services, clusters):
+    code = {row["cluster_id"]: row["cod_app"] for row in clusters}
+    rows = [[row["cluster"], code[row["cluster_id"]], row["namespace"], row["deployment"],
+             number(row["cpu_request_vcpu"]), number(row["mem_request_gib"]), number(row["ci_replicas_avg_office"])]
+            for row in services if row["environment"] == "PROD"]
+    return sorted(rows, key=lambda values: (values[0], values[3]))
+
+
+def latency_inputs(results):
+    """Per API of the month: (cod_app, layer, requests, backend ms, gateway ms), the join the queries also make."""
+    requests = {(row["apim"], row["api_id"], row["month"]): number(row["requests"])
+                for row in aa.read_csv(os.path.join(results, "aa-metrics", "apim_api_monthly.csv"))}
+    out = []
+    for row in aa.read_csv(os.path.join(results, "aa-signals", "apim_latency_monthly.csv")):
+        weight = requests.get((row["apim"], row["api_id"], row["month"]))
+        backend = number(row.get("backend_duration_avg_ms"))
+        if row.get("cod_app") and weight and backend is not None:
+            gateway = number(row.get("duration_avg_ms"))
+            out.append((row["cod_app"], row["apim_layer"], weight, backend, backend if gateway is None else gateway))
+    return out
+
+
+def latency_app_rows(inputs):
+    sums = defaultdict(lambda: [0.0, 0.0, 0.0])
+    for code, layer, weight, backend, gateway in inputs:
+        entry = sums[(code, layer)]
+        entry[0] += weight
+        entry[1] += weight * backend
+        entry[2] += weight * gateway
     rows = []
-    for row in sorted(services, key=lambda item: (names[item["cluster_id"]], item["deployment"])):
-        rows.append([names[row["cluster_id"]], row["cod_app"], row["namespace"], row["deployment"],
-                     number(row["cpu_request_vcpu"]), number(row["mem_request_gib"]),
-                     number(row["ci_replicas_avg_office"])])
-    s = lambda column: r("Services", column)
-    larger = f'MAX({s("cpu_request_vcpu")},{s("mem_request_gib")}/gib_per_vcpu,min_vcpu)'
-    formulas = [("size_vcpu", f"CEILING({larger},vcpu_step)"),
-                ("usd_per_second", f'{s("size_vcpu")}*(price_vcpu+gib_per_vcpu*price_gib)')]
-    v1wb.add_table(sheet, "Services", SERVICE_COLUMNS, rows, formulas)
-    for column, width in zip("ABCDEFGHI", (18, 9, 14, 48, 15, 15, 18, 10, 15)):
-        sheet.column_dimensions[column].width = width
+    for code in sorted({code for code, _ in sums}):
+        ux, bs = sums.get((code, "UX")), sums.get((code, "BS"))
+        if ux and bs and ux[0] >= MIN_UX_REQUESTS and bs[0] > 0:
+            rows.append([code, ux[0], ux[1] / ux[0], bs[0], bs[1] / bs[0], bs[2] / bs[0]])
+    return rows
+
+
+def latency_layer_rows(inputs):
+    sums = defaultdict(lambda: [0.0, 0.0, 0.0])
+    for _, layer, weight, backend, gateway in inputs:
+        sums[layer][0] += weight
+        sums[layer][1] += weight * backend
+        sums[layer][2] += weight * gateway
+    return [[layer, entry[0], entry[1] / entry[0], entry[2] / entry[0]] for layer, entry in sorted(sums.items())]
+
+
+# Applications with fewer UX requests in the month are left out: a handful of calls gives meaningless ratios.
+MIN_UX_REQUESTS = 1000
+LATENCY_APP_COLUMNS = ["cod_app", "ux_requests", "ux_backend_ms", "bs_requests", "bs_backend_ms", "bs_gateway_ms"]
+LATENCY_LAYER_COLUMNS = ["apim_layer", "requests", "backend_ms", "gateway_ms"]
+
+
+# ---------------------------------------------------------------------------
+# Power Query M code (one query per table; the folder is the first step, change it on another machine)
+# ---------------------------------------------------------------------------
+
+
+def m_list(columns):
+    return ", ".join(f'"{c}"' for c in columns)
+
+
+def m_types(columns):
+    return ", ".join(f'{{"{c}", type number}}' for c in columns)
+
+
+def m_typed(source, numbers):
+    return (f'Table.TransformColumnTypes(Table.ReplaceValue({source}, "", null, Replacer.ReplaceValue, '
+            f'{{{m_list(numbers)}}}), {{{m_types(numbers)}}}, "en-US")')
+
+
+def query_clusters(folder):
+    numbers = [c for c in CLUSTER_COLUMNS if c in CLUSTER_NUMBERS]
+    return v1wb.query_head(folder) + f'''    Clusters = ReadCsv("aa-cluster-snapshot", "cluster_criteria_input.csv"),
+    Columns = Table.SelectColumns(Clusters, {{{m_list(CLUSTER_COLUMNS)}}}),
+    Typed = {m_typed("Columns", numbers)},
+    Sorted = Table.Sort(Typed, {{{{"cod_app", Order.Ascending}}, {{"cluster", Order.Ascending}}}})
+in
+    Sorted'''
+
+
+def query_traffic(folder):
+    numbers = [c for c in TRAFFIC_COLUMNS if c not in ("scope", "scope_type", "day_type")]
+    return v1wb.query_head(folder) + f'''    Profile = ReadCsv("aa-cluster-snapshot", "traffic_hourly_profile.csv"),
+    Columns = Table.SelectColumns(Profile, {{{m_list(TRAFFIC_COLUMNS)}}}),
+    Typed = {m_typed("Columns", numbers)}
+in
+    Typed'''
+
+
+def query_services(folder):
+    numbers = ["cpu_request_vcpu", "mem_request_gib", "replicas_today_office"]
+    return v1wb.query_head(folder) + f'''    Deployments = ReadCsv("aa-k8s-snapshot", "deployment_snapshot.csv"),
+    Clusters = Table.SelectColumns(ReadCsv("aa-cluster-snapshot", "cluster_criteria_input.csv"), {{"cluster_id", "cod_app"}}),
+    // Each PROD "micro"-service of a cluster of the v2 criteria, with the cluster's application
+    MicroServices = Table.RemoveColumns(Table.SelectRows(Deployments, each [microservice] = "YES" and [environment] = "PROD"), {{"cod_app"}}, MissingField.Ignore),
+    Joined = Table.ExpandTableColumn(Table.NestedJoin(MicroServices, {{"cluster_id"}}, Clusters, {{"cluster_id"}}, "c", JoinKind.Inner), "c", {{"cod_app"}}),
+    Renamed = Table.RenameColumns(Joined, {{{{"ci_replicas_avg_office", "replicas_today_office"}}}}),
+    Columns = Table.SelectColumns(Renamed, {{{m_list(SERVICE_COLUMNS)}}}),
+    Typed = {m_typed("Columns", numbers)},
+    Sorted = Table.Sort(Typed, {{{{"cluster", Order.Ascending}}, {{"deployment", Order.Ascending}}}})
+in
+    Sorted'''
+
+
+def latency_head(folder):
+    return v1wb.query_head(folder) + '''    Latency = ReadCsv("aa-signals", "apim_latency_monthly.csv"),
+    Requests = Table.SelectColumns(ReadCsv("aa-metrics", "apim_api_monthly.csv"), {"apim", "api_id", "month", "requests"}),
+    // Each API's latency weighted by its requests of the same month
+    Joined = Table.ExpandTableColumn(Table.NestedJoin(Latency, {"apim", "api_id", "month"}, Requests, {"apim", "api_id", "month"}, "r", JoinKind.Inner), "r", {"requests"}),
+    Typed = ''' + m_typed("Joined", ["requests", "backend_duration_avg_ms", "duration_avg_ms"]) + ''',
+    Valid = Table.SelectRows(Typed, each [cod_app] <> null and [cod_app] <> "" and [requests] <> null and [requests] > 0 and [backend_duration_avg_ms] <> null),
+    Weighted = Table.AddColumn(Table.AddColumn(Valid, "wb", each [requests] * [backend_duration_avg_ms], type number), "wg", each [requests] * (if [duration_avg_ms] = null then [backend_duration_avg_ms] else [duration_avg_ms]), type number),
+'''
+
+
+def query_latency_apps(folder):
+    return latency_head(folder) + f'''    Layer = (t as table, layer as text, field as text) => List.Sum(Table.Column(Table.SelectRows(t, each [apim_layer] = layer), field)),
+    Grouped = Table.Group(Weighted, {{"cod_app"}}, {{
+        {{"ux_requests", each Layer(_, "UX", "requests"), type number}}, {{"ux_wb", each Layer(_, "UX", "wb"), type number}},
+        {{"bs_requests", each Layer(_, "BS", "requests"), type number}}, {{"bs_wb", each Layer(_, "BS", "wb"), type number}},
+        {{"bs_wg", each Layer(_, "BS", "wg"), type number}}}}),
+    // Applications with traffic on both UX (at least {MIN_UX_REQUESTS} requests) and BS
+    Both = Table.SelectRows(Grouped, each [ux_requests] <> null and [ux_requests] >= {MIN_UX_REQUESTS} and [bs_requests] <> null and [bs_requests] > 0),
+    Ms = Table.AddColumn(Table.AddColumn(Table.AddColumn(Both, "ux_backend_ms", each [ux_wb] / [ux_requests], type number), "bs_backend_ms", each [bs_wb] / [bs_requests], type number), "bs_gateway_ms", each [bs_wg] / [bs_requests], type number),
+    Columns = Table.SelectColumns(Ms, {{{m_list(LATENCY_APP_COLUMNS)}}}),
+    Sorted = Table.Sort(Columns, {{{{"cod_app", Order.Ascending}}}})
+in
+    Sorted'''
+
+
+def query_latency_layers(folder):
+    return latency_head(folder) + f'''    Grouped = Table.Group(Weighted, {{"apim_layer"}}, {{{{"requests", each List.Sum([requests]), type number}}, {{"wb", each List.Sum([wb]), type number}}, {{"wg", each List.Sum([wg]), type number}}}}),
+    Ms = Table.AddColumn(Table.AddColumn(Grouped, "backend_ms", each [wb] / [requests], type number), "gateway_ms", each [wg] / [requests], type number),
+    Columns = Table.SelectColumns(Ms, {{{m_list(LATENCY_LAYER_COLUMNS)}}}),
+    Sorted = Table.Sort(Columns, {{{{"apim_layer", Order.Ascending}}}})
+in
+    Sorted'''
+
+
+def query_scopes(folder):
+    return v1wb.query_head(folder) + '''    Clusters = ReadCsv("aa-cluster-snapshot", "cluster_criteria_input.csv"),
+    // The calculator offers every cluster, then every application
+    Names = Table.Sort(Table.RenameColumns(Table.SelectColumns(Clusters, {"cluster"}), {{"cluster", "scope"}}), {{"scope", Order.Ascending}}),
+    Codes = Table.Sort(Table.Distinct(Table.RenameColumns(Table.SelectColumns(Clusters, {"cod_app"}), {{"cod_app", "scope"}})), {{"scope", Order.Ascending}}),
+    Scopes = Table.Combine({Names, Codes})
+in
+    Scopes'''
+
+
+def query_apps(folder):
+    return v1wb.query_head(folder) + '''    Clusters = ReadCsv("aa-cluster-snapshot", "cluster_criteria_input.csv"),
+    Codes = Table.Sort(Table.Distinct(Table.SelectColumns(Clusters, {"cod_app"})), {{"cod_app", Order.Ascending}})
+in
+    Codes'''
+
+
+# ---------------------------------------------------------------------------
+# Sheets
+# ---------------------------------------------------------------------------
+
+
+def widths(sheet, headers, left=1):
+    for index, header in enumerate(headers, start=left):
+        sheet.column_dimensions[get_column_letter(index)].width = max(9, min(len(header) + 2, 20))
+
+
+def write_query_table(sheet, name, columns, rows):
+    v1wb.add_table(sheet, name, columns, rows)
+    widths(sheet, columns)
+
+
+def write_traffic(sheet, count):
+    """Traffic: the TrafficData query read row by row, and the replicas simulated each hour."""
+    t = lambda column: r("Traffic", column)
+    pulled = ["scope", "scope_type", "day_type", "hour", "office", "days", "tps_avg", "tps_peak"]
+    formulas = [(column, pull("TrafficData", column)) for column in pulled] + [
+        ("sim_replicas", f'MAX(IF({t("office")}=1,min_replicas_office,min_replicas_offhours),'
+                         f'CEILING(IF(sizing_basis="PEAK",{t("tps_peak")},{t("tps_avg")})*traffic_share/'
+                         'concurrent_requests,1))'),
+        ("replica_seconds", f'{t("days")}*3600*{t("sim_replicas")}')]
+    formula_table(sheet, "Traffic", formulas, count)
+    widths(sheet, [header for header, _ in formulas])
+
+
+def service_cost(match):
+    """US$ per second of one replica of each "micro"-service where match (an array condition on Services) holds:
+    Container Apps size = the largest of the CPU request, memory / gib_per_vcpu and min_vcpu, up to vcpu_step (MAX
+    written as (a+b+|a-b|)/2 so SUMPRODUCT applies it row by row)."""
+    cpu, mem = "Services[cpu_request_vcpu]", "Services[mem_request_gib]/gib_per_vcpu"
+    larger = f"(({cpu})+({mem})+ABS(({cpu})-({mem})))/2"
+    size = f"CEILING(({larger}+min_vcpu+ABS({larger}-min_vcpu))/2,vcpu_step)"
+    return f"SUMPRODUCT(({match})*{size}*(price_vcpu+gib_per_vcpu*price_gib))"
 
 
 def criteria_formulas():
@@ -178,7 +389,7 @@ def criteria_formulas():
                      f'{c("growing")}="YES",{c("app_over_15")}="YES"),"ACA_WITH_REVIEW","ACA")))'),
         ("replica_seconds", f'SUMIFS(Traffic[replica_seconds],Traffic[scope],{c("cluster")},Traffic[scope_type],'
                             '"CLUSTER")'),
-        ("usd_per_second", f'SUMIFS(Services[usd_per_second],Services[cluster],{c("cluster")})'),
+        ("usd_per_second", service_cost(f'Services[cluster]={c("cluster")}')),
         ("aca_list_usd", f'{c("replica_seconds")}*{c("usd_per_second")}+IF({c("event_driven")}="YES",0,'
                          f'N({c("requests_month")}))*requests_buffer/1000000*price_requests'
                          '+environments_per_cluster*hours_month*price_lb_hour'),
@@ -195,37 +406,6 @@ def criteria_formulas():
     ]
 
 
-def write_criteria(sheet, clusters):
-    rows = [[number(row[c]) if c in CLUSTER_NUMBERS else (row[c] or None) for c in CLUSTER_COLUMNS]
-            for row in sorted(clusters, key=lambda item: (item["cod_app"], item["cluster"]))]
-    formulas = criteria_formulas()
-    v1wb.add_table(sheet, "Criteria", CLUSTER_COLUMNS, rows, formulas)
-    headers = CLUSTER_COLUMNS + [header for header, _ in formulas]
-    for index, header in enumerate(headers, start=1):
-        sheet.column_dimensions[get_column_letter(index)].width = max(9, min(len(header) + 2, 20))
-        fmt = USD if header.endswith("_usd") else PEN if header.endswith("_pen") else PCT if header == "saving_share" \
-            else None
-        if fmt:
-            for row in range(2, len(rows) + 2):
-                sheet.cell(row=row, column=index).number_format = fmt
-    sheet.freeze_panes = "C2"
-
-
-def write_apps(sheet, codes):
-    a = lambda column: r("Apps", column)
-    formulas = [("clusters", f'COUNTIFS(Criteria[cod_app],{a("cod_app")})'),
-                ("clusters_to_aca", f'COUNTIFS(Criteria[cod_app],{a("cod_app")},Criteria[goes_to_aca],"YES")'),
-                ("status", f'IF({a("clusters_to_aca")}=0,"Stays on AKS",IF({a("clusters_to_aca")}={a("clusters")},'
-                           '"All to ACA","Split"))'),
-                ("aks_month_pen", f'SUMIFS(Criteria[aks_month_pen],Criteria[cod_app],{a("cod_app")})'),
-                ("after_month_pen", f'SUMIFS(Criteria[final_month_pen],Criteria[cod_app],{a("cod_app")})'),
-                ("saving_month_pen", f'{a("aks_month_pen")}-{a("after_month_pen")}')]
-    v1wb.add_table(sheet, "Apps", ["cod_app"], [[code] for code in codes], formulas)
-    for index, header in enumerate(["cod_app"] + [f for f, _ in formulas], start=1):
-        sheet.column_dimensions[get_column_letter(index)].width = 16
-        if header.endswith("_pen"):
-            for row in range(2, len(codes) + 2):
-                sheet.cell(row=row, column=index).number_format = PEN
 
 
 def write_results(sheet):
@@ -265,10 +445,6 @@ def write_results(sheet):
         sheet.column_dimensions[column].width = width
 
 
-def write_lists(sheet, clusters):
-    scopes = sorted(row["cluster"] for row in clusters) + sorted({row["cod_app"] for row in clusters})
-    v1wb.add_table(sheet, "Scopes", ["scope"], [[scope] for scope in scopes])
-    sheet.column_dimensions["A"].width = 20
 
 
 def write_calculator(sheet, default_scope):
@@ -283,9 +459,8 @@ def write_calculator(sheet, default_scope):
              ("\"Micro\"-services", f'=IF({is_cluster},COUNTIFS(Services[cluster],$B$2),'
                                     'COUNTIFS(Services[cod_app],$B$2))'),
              ("Clusters", f'=IF({is_cluster},1,COUNTIFS(Criteria[cod_app],$B$2))'),
-             ("US$ per second, one replica of each", f'=IF({is_cluster},SUMIFS(Services[usd_per_second],'
-                                                    'Services[cluster],$B$2),SUMIFS(Services[usd_per_second],'
-                                                    'Services[cod_app],$B$2))'),
+             ("US$ per second, one replica of each", f"=IF({is_cluster},{service_cost('Services[cluster]=$B$2')},"
+                                                    f"{service_cost('Services[cod_app]=$B$2')})"),
              ("Requests of the month", f"={pick('requests_month')}"),
              ("AKS today (S/, with IGV)", f"={pick('aks_month_pen')}"),
              ("Weekdays / weekend days", "=weekdays&\" / \"&weekend_days")]
@@ -306,6 +481,7 @@ def write_calculator(sheet, default_scope):
                                             "it starts as Simulated)").font = BOLD
     for column, header in enumerate(headers, start=1):
         sheet.cell(row=top, column=column, value=header).font = BOLD
+    source = lambda field: "Traffic" if field == "sim_replicas" else "TrafficData"
     fields = [("tps_min", "0.00"), ("tps_avg", "0.00"), ("tps_peak", "0.00"), ("replicas_today_avg", "0.0"),
               ("sim_replicas", "0")]
     for hour in range(24):
@@ -314,8 +490,8 @@ def write_calculator(sheet, default_scope):
         for block, day_type in ((0, "weekday"), (6, "weekend")):
             for offset, (field, fmt) in enumerate(fields):
                 cell = sheet.cell(row=row, column=2 + block + offset,
-                                  value=f'=SUMIFS(Traffic[{field}],Traffic[scope],$B$2,Traffic[day_type],'
-                                        f'"{day_type}",Traffic[hour],$A{row})')
+                                  value=f'=SUMIFS({source(field)}[{field}],{source(field)}[scope],$B$2,'
+                                        f'{source(field)}[day_type],"{day_type}",{source(field)}[hour],$A{row})')
                 cell.number_format = fmt
             simulated = get_column_letter(6 + block)
             chosen = sheet.cell(row=row, column=7 + block, value=f"={simulated}{row}")
@@ -366,27 +542,64 @@ def write_calculator(sheet, default_scope):
         sheet.column_dimensions[column].width = 13
 
 
-def layer_latency(results):
-    """Request-weighted average backend latency per APIM layer (ms), from aa_signals.py, for reference."""
-    latency = aa.read_csv(os.path.join(results, "aa-signals", "apim_latency_monthly.csv"))
-    requests = {(row["apim"], row["api_id"], row["month"]): model.to_float(row["requests"]) or 0
-                for row in aa.read_csv(os.path.join(results, "aa-metrics", "apim_api_monthly.csv"))}
-    sums = defaultdict(lambda: [0.0, 0.0])
-    for row in latency:
-        weight = requests.get((row["apim"], row["api_id"], row["month"]), 0)
-        value = model.to_float(row.get("backend_duration_avg_ms"))
-        if weight and value is not None:
-            sums[row["apim_layer"]][0] += value * weight
-            sums[row["apim_layer"]][1] += weight
-    return {layer: round(total / weight, 1) for layer, (total, weight) in sums.items() if weight}
 
 
-def write_latency(book, sheet, measured):
+def write_criteria(sheet, count):
+    """Criteria: the ClusterData query read row by row, then the criteria, the decision and the costs."""
+    formulas = [(column, pull("ClusterData", column)) for column in CLUSTER_COLUMNS] + criteria_formulas()
+    formula_table(sheet, "Criteria", formulas, count)
+    headers = [header for header, _ in formulas]
+    widths(sheet, headers)
+    for index, header in enumerate(headers, start=1):
+        fmt = USD if header.endswith("_usd") else PEN if header.endswith("_pen") else PCT if header == "saving_share" \
+            else None
+        if fmt:
+            for row in range(2, count + 2):
+                sheet.cell(row=row, column=index).number_format = fmt
+    sheet.freeze_panes = "C2"
+
+
+def write_apps(sheet, codes):
+    """Apps: the AppList query (column A) and, next to it, one formula row per application."""
+    v1wb.add_table(sheet, "AppList", ["cod_app"], [[code] for code in codes])
+    a = lambda column: r("Apps", column)
+    formulas = [("application", pull("AppList", "cod_app")),
+                ("clusters", f'COUNTIFS(Criteria[cod_app],{a("application")})'),
+                ("clusters_to_aca", f'COUNTIFS(Criteria[cod_app],{a("application")},Criteria[goes_to_aca],"YES")'),
+                ("status", f'IF({a("clusters_to_aca")}=0,"Stays on AKS",IF({a("clusters_to_aca")}={a("clusters")},'
+                           '"All to ACA","Split"))'),
+                ("aks_month_pen", f'SUMIFS(Criteria[aks_month_pen],Criteria[cod_app],{a("application")})'),
+                ("after_month_pen", f'SUMIFS(Criteria[final_month_pen],Criteria[cod_app],{a("application")})'),
+                ("saving_month_pen", f'{a("aks_month_pen")}-{a("after_month_pen")}')]
+    formula_table(sheet, "Apps", formulas, len(codes), left=3)
+    sheet.column_dimensions["A"].width = 12
+    for index, (header, _) in enumerate(formulas, start=3):
+        sheet.column_dimensions[get_column_letter(index)].width = 16
+        if header.endswith("_pen"):
+            for row in range(2, len(codes) + 2):
+                sheet.cell(row=row, column=index).number_format = PEN
+
+
+def box(sheet, cells, text, fill, color="FFFFFF"):
+    sheet.merge_cells(cells)
+    cell = sheet[cells.split(":")[0]]
+    cell.value, cell.fill = text, PatternFill("solid", fgColor=fill)
+    cell.font = Font(bold=True, color=color)
+    cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+
+def write_latency(book, sheet, app_count, default_app):
     """The chain UX -> BS -> Core -> mainframe, built from the bottom: latency(layer) = own time + calls to the next
     layer x (hop + latency(next)), plus, on Container Apps, its ingress, a cold start when no replica is on and the
-    scale-out delay of a burst."""
+    scale-out delay of a burst. Own times start from the measured APIM latency (LatencyData, LatencyLayers)."""
     sheet["A1"], sheet["A1"].font = "Latency of one request along the chain (ms) - parameters to validate", \
         Font(bold=True, size=14)
+    sheet["A3"], sheet["A3"].font = "Application (UX and BS measured)", BOLD
+    sheet["B3"], sheet["B3"].fill = default_app, EDITABLE
+    validation = DataValidation(type="list", formula1='=INDIRECT("LatencyApps[application]")', allow_blank=False)
+    sheet.add_data_validation(validation)
+    validation.add("B3")
+    v1wb.define(book, "latency_app", "Latency!$B$3")
     params = [("hop_aks_ms", 2, "Network hop between services inside AKS"),
               ("aca_ingress_ms", 5, "Extra of the Container Apps ingress (Envoy) on each call into a layer on ACA"),
               ("cross_platform_ms", 5, "Extra when a call goes from AKS to Container Apps or back"),
@@ -394,97 +607,154 @@ def write_latency(book, sheet, measured):
               ("cold_probability", 0, "Share of requests that find no replica on (0 with 1 minimum replica)"),
               ("scale_delay_s", 15, "Container Apps checks its HTTP rule every 15 s"),
               ("burst_probability", 0.001, "Share of requests that arrive while a burst waits for a new replica")]
-    sheet.cell(row=3, column=1, value="Parameter").font = BOLD
-    sheet.cell(row=3, column=2, value="Value").font = BOLD
-    for offset, (label, value, comment) in enumerate(params, start=4):
+    for offset, (label, value, comment) in enumerate(params, start=5):
         sheet.cell(row=offset, column=1, value=label)
         cell = sheet.cell(row=offset, column=2, value=value)
         cell.fill = EDITABLE
         sheet.cell(row=offset, column=3, value=comment)
         v1wb.define(book, label, f"Latency!$B${offset}")
-    top = 13
-    headers = ["Layer", "Own time (ms)", "Calls to next layer", "Measured APIM backend (ms)",
-               "All AKS", "UX on ACA", "UX+BS on ACA", "UX+BS+Core on ACA"]
+    app = lambda column: f"INDEX(LatencyApps[{column}],MATCH(latency_app,LatencyApps[application],0))"
+    layer = lambda name, column: f'IFERROR(INDEX(LatencyLayers[{column}],MATCH("{name}",LatencyLayers[apim_layer],0)),0)'
+    top = 14
+    headers = ["Layer", "Own time (ms)", "Calls to next layer", "Measured (ms)", "All AKS", "UX on ACA",
+               "UX+BS on ACA", "UX+BS+Core on ACA"]
     for column, header in enumerate(headers, start=1):
         sheet.cell(row=top, column=column, value=header).font = BOLD
     platforms = {"All AKS": [], "UX on ACA": ["UX"], "UX+BS on ACA": ["UX", "BS"], "UX+BS+Core on ACA": ["UX", "BS", "CORE"]}
-    # Own time from the measured APIM backend latency: each layer's minus the one below (a layer's latency includes
-    # the calls it makes); the mainframe takes half of Core's until it is measured. Fallbacks when a layer is missing.
-    ux, bs, core = measured.get("UX", 170), measured.get("BS", 150), measured.get("CORE", 40)
-    mainframe = round(core / 2, 1)
-    defaults = {"UX": (max(round(ux - bs, 1), 1), 1), "BS": (max(round(bs - core, 1), 1), 1),
-                "CORE": (max(round(core - mainframe, 1), 1), 1), "MAINFRAME": (mainframe, 0)}
-    for offset, layer in enumerate(LAYERS, start=1):
+    # Own time: the selected application's UX minus what its BS answers through the gateway, and its BS minus what
+    # Core answers (Core is measured for the whole layer: half Core, half mainframe, until measured per application).
+    # From the bottom up the chain then adds to the application's measured UX latency.
+    own = {"UX": f'=MAX(1,{app("ux_minus_bs")})',
+           "BS": f'=MAX(1,{app("bs_gateway_ms")}-{layer("CORE", "gateway_ms")})',
+           "CORE": f'=MAX(1,{layer("CORE", "backend_ms")}/2)', "MAINFRAME": f'={layer("CORE", "backend_ms")}/2'}
+    measured = {"UX": f'={app("ux_backend_ms")}', "BS": f'={app("bs_gateway_ms")}',
+                "CORE": f'={layer("CORE", "backend_ms")}', "MAINFRAME": '="-"'}
+    calls = {"UX": 1, "BS": 1, "CORE": 1, "MAINFRAME": 0}
+    for offset, name in enumerate(LAYERS, start=1):
         row = top + offset
-        sheet.cell(row=row, column=1, value=layer)
-        for column, value in ((2, defaults[layer][0]), (3, defaults[layer][1])):
+        sheet.cell(row=row, column=1, value=name)
+        for column, value in ((2, own[name]), (3, calls[name])):
             cell = sheet.cell(row=row, column=column, value=value)
-            cell.fill = EDITABLE
-        sheet.cell(row=row, column=4, value=measured.get(layer, "-"))
+            cell.fill, cell.number_format = EDITABLE, "0"
+        sheet.cell(row=row, column=4, value=measured[name]).number_format = "0"
         for column, scenario in enumerate(platforms, start=5):
-            if layer == "MAINFRAME":
+            if name == "MAINFRAME":
                 sheet.cell(row=row, column=column, value="ON-PREM")
             else:
-                sheet.cell(row=row, column=column, value="ACA" if layer in platforms[scenario] else "AKS").fill = EDITABLE
+                sheet.cell(row=row, column=column, value="ACA" if name in platforms[scenario] else "AKS").fill = EDITABLE
     result = top + len(LAYERS) + 2
     sheet.cell(row=result, column=1, value="Latency from this layer down (ms)").font = BOLD
-    for offset, layer in enumerate(reversed(LAYERS)):
+    for offset, name in enumerate(reversed(LAYERS)):
         row = result + 1 + offset
-        sheet.cell(row=row, column=1, value=layer)
-        source = top + 1 + LAYERS.index(layer)
+        sheet.cell(row=row, column=1, value=name)
+        source = top + 1 + LAYERS.index(name)
         for column in range(5, 9):
             letter = get_column_letter(column)
             here = f"{letter}{source}"
             extra = (f'IF({here}="ACA",aca_ingress_ms+cold_probability*cold_start_s*1000+burst_probability*'
                      'scale_delay_s*1000,0)')
-            if layer == "MAINFRAME":
+            if name == "MAINFRAME":
                 formula = f"=$B{source}+{extra}"
             else:
-                below_platform = f"{letter}{source + 1}"
-                below_latency = f"{letter}{row - 1}"
-                hop = f'(hop_aks_ms+IF(AND({below_platform}<>"ON-PREM",{here}<>{below_platform}),cross_platform_ms,0))'
-                formula = f"=$B{source}+{extra}+$C{source}*({hop}+{below_latency})"
+                below = f"{letter}{source + 1}"
+                hop = f'(hop_aks_ms+IF(AND({below}<>"ON-PREM",{here}<>{below}),cross_platform_ms,0))'
+                formula = f"=$B{source}+{extra}+$C{source}*({hop}+{letter}{row - 1})"
             sheet.cell(row=row, column=column, value=formula).number_format = "0"
     total = result + len(LAYERS)
     sheet.cell(row=total + 1, column=1, value="Extra over all AKS (ms)").font = BOLD
     for column in range(5, 9):
         letter = get_column_letter(column)
         sheet.cell(row=total + 1, column=column, value=f"={letter}{total}-$E${total}").number_format = "0"
-    sheet.cell(row=total + 3, column=1, value=(
-        "Own time: what the layer itself takes (measured APIM backend latency of the layer minus that of the layer "
-        "below, approximately). Calls to next layer: sequential calls per request. Yellow cells can be changed."))
-    for column, width in zip("ABCDEFGH", (34, 14, 18, 26, 12, 12, 14, 18)):
+    sheet.cell(row=total + 2, column=1, value="BS requests per UX request (selected application)").font = BOLD
+    sheet.cell(row=total + 2, column=2, value=f'={app("bs_calls_per_ux")}').number_format = "0.0"
+
+    # The chain drawn with cells: one UX request can call BS several times.
+    box(sheet, "K4:L6", "UX\n1 request", "1E3A78")
+    box(sheet, "M5:M5", "→", "FFFFFF", "1E3A78")
+    for index, cells in enumerate(("N3:O3", "N5:O5", "N7:O7"), start=1):
+        box(sheet, cells, f"BS call {index}", "4A8FB8")
+    box(sheet, "P5:P5", "→", "FFFFFF", "1E3A78")
+    box(sheet, "Q4:R6", "Core", "F2A15A")
+    box(sheet, "S5:S5", "→", "FFFFFF", "1E3A78")
+    box(sheet, "T4:U6", "Mainframe", "5B6770")
+    sheet["K9"] = ("A UX service is a wrapper: for one request it may call BS several times (\"Calls to next layer\"). "
+                   "One after another the times add up (the model's case); in parallel only the slowest counts.")
+    sheet["K9"].alignment = Alignment(wrap_text=True, vertical="top")
+    sheet.merge_cells("K9:U11")
+
+    # Measured latency per application, from the LatencyData query (one row per application with UX and BS).
+    table_top = total + 5
+    sheet.cell(row=table_top - 1, column=1, value="Measured per application (APIM, requests-weighted, month of the "
+                                                   f"data; at least {MIN_UX_REQUESTS:,} UX requests)").font = BOLD
+    l = lambda column: r("LatencyApps", column)
+    formulas = [("application", pull("LatencyData", "cod_app", table_top)),
+                ("ux_requests", pull("LatencyData", "ux_requests", table_top)),
+                ("ux_backend_ms", pull("LatencyData", "ux_backend_ms", table_top)),
+                ("bs_requests", pull("LatencyData", "bs_requests", table_top)),
+                ("bs_gateway_ms", pull("LatencyData", "bs_gateway_ms", table_top)),
+                ("ux_minus_bs", f'{l("ux_backend_ms")}-{l("bs_gateway_ms")}'),
+                ("bs_calls_per_ux", f'IF({l("ux_requests")}>0,{l("bs_requests")}/{l("ux_requests")},0)')]
+    formula_table(sheet, "LatencyApps", formulas, app_count, top=table_top)
+    for row in range(table_top + 1, table_top + 1 + app_count):
+        for column, fmt in ((2, "#,##0"), (3, "0"), (4, "#,##0"), (5, "0"), (6, "0"), (7, "0.0")):
+            sheet.cell(row=row, column=column).number_format = fmt
+    sheet.cell(row=table_top + app_count + 2, column=1, value=(
+        "ux_minus_bs: what UX adds over what its BS answers. Negative: the UX APIs do not call these BS APIs (other "
+        "application, cache or only the fast ones). bs_calls_per_ux: BS requests per UX request; above 1, UX calls BS "
+        "several times (only meaningful when that BS serves this UX alone)."))
+    for column, width in zip("ABCDEFGH", (34, 14, 18, 14, 12, 12, 14, 18)):
         sheet.column_dimensions[column].width = width
 
 
 def build(results, output):
     data = model.load(results)
     clusters = data["clusters"]
-    summary = aa.read_csv(os.path.join(results, "aa-cluster-snapshot", "traffic_hourly_profile.csv"))
-    days = {"weekday": 0, "weekend": 0}
-    for row in summary:
-        days[row["day_type"]] = int(row["days"])
+    days = {row["day_type"]: int(row["days"]) for row in data["profile"]}
     month = clusters[0]["month"] if clusters else ""
     book = Workbook()
-    sheets = {name: (book.active if index == 0 else book.create_sheet(name))
-              for index, name in enumerate(["Results", "Criteria", "Apps", "Calculator", "Latency", "Traffic",
-                                            "Services", "Prices", "Variables", "Lists"])}
+    names = ["Results", "Criteria", "Apps", "Calculator", "Latency", "Traffic", "Services", "Prices", "Variables",
+             "Data", "TrafficData", "LatencyData", "LatencyLayers", "Lists"]
+    sheets = {}
+    for index, name in enumerate(names):
+        sheets[name] = book.active if index == 0 else book.create_sheet(name)
     sheets["Results"].title = "Results"
     write_variables(book, sheets["Variables"], month, days)
     v1wb.write_prices(book, sheets["Prices"], v1wb.prices_rows(results))
-    write_traffic(sheets["Traffic"], data["profile"])
-    write_services(sheets["Services"], data["services"], data["names"])
-    write_criteria(sheets["Criteria"], clusters)
-    write_apps(sheets["Apps"], sorted({row["cod_app"] for row in clusters}))
+    clusters_data = cluster_rows(clusters)
+    traffic_data = traffic_rows(data["profile"])
+    services_data = service_rows(data["services"], clusters)
+    inputs = latency_inputs(results)
+    latency_apps, latency_layers = latency_app_rows(inputs), latency_layer_rows(inputs)
+    codes = sorted({row["cod_app"] for row in clusters})
+    scopes = sorted(row["cluster"] for row in clusters) + codes
+    write_query_table(sheets["Data"], "ClusterData", CLUSTER_COLUMNS, clusters_data)
+    write_query_table(sheets["TrafficData"], "TrafficData", TRAFFIC_COLUMNS, traffic_data)
+    write_query_table(sheets["Services"], "Services", SERVICE_COLUMNS, services_data)
+    write_query_table(sheets["LatencyData"], "LatencyData", LATENCY_APP_COLUMNS, latency_apps)
+    write_query_table(sheets["LatencyLayers"], "LatencyLayers", LATENCY_LAYER_COLUMNS, latency_layers)
+    write_query_table(sheets["Lists"], "Scopes", ["scope"], [[scope] for scope in scopes])
+    write_traffic(sheets["Traffic"], len(traffic_data))
+    write_criteria(sheets["Criteria"], len(clusters_data))
+    write_apps(sheets["Apps"], codes)
     write_results(sheets["Results"])
-    write_lists(sheets["Lists"], clusters)
     example = next((row["cluster"] for row in clusters if row["cod_app"] == deck.EXAMPLE_APP), clusters[0]["cluster"])
     write_calculator(sheets["Calculator"], example)
-    write_latency(book, sheets["Latency"], layer_latency(results))
+    latency_default = deck.EXAMPLE_APP if any(row[0] == deck.EXAMPLE_APP for row in latency_apps) else \
+        (latency_apps[0][0] if latency_apps else "")
+    write_latency(book, sheets["Latency"], len(latency_apps), latency_default)
     book.calculation.fullCalcOnLoad = True
     os.makedirs(os.path.dirname(os.path.abspath(output)), exist_ok=True)
     book.save(output)
-    aa.azure.LOG.info("Wrote %s (%d clusters)", output, len(clusters))
+    folder = os.path.abspath(results)
+    pq.load_queries(output, [
+        ("Data", "ClusterData", "ClusterData", query_clusters(folder), CLUSTER_COLUMNS),
+        ("TrafficData", "TrafficData", "TrafficData", query_traffic(folder), TRAFFIC_COLUMNS),
+        ("Services", "Services", "Services", query_services(folder), SERVICE_COLUMNS),
+        ("LatencyData", "LatencyData", "LatencyData", query_latency_apps(folder), LATENCY_APP_COLUMNS),
+        ("LatencyLayers", "LatencyLayers", "LatencyLayers", query_latency_layers(folder), LATENCY_LAYER_COLUMNS),
+        ("Lists", "Scopes", "Scopes", query_scopes(folder), ["scope"]),
+        ("Apps", "AppList", "AppList", query_apps(folder), ["cod_app"])])
+    aa.azure.LOG.info("Wrote %s (%d clusters, 7 Power Query connections to %s)", output, len(clusters), folder)
 
 
 def main():
