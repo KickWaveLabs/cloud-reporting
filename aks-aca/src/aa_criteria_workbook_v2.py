@@ -59,7 +59,7 @@ CLUSTER_COLUMNS = ["cluster", "cod_app", "clusters_of_app", "bia", "microservice
 CLUSTER_NUMBERS = {"clusters_of_app", "microservices", "microservices_app", "microservices_app_projected",
                    "microservices_over_aca_size", "requests_month", "busiest_hour_tps", "peak_tps", "cost_month_usd"}
 TRAFFIC_COLUMNS = ["scope", "scope_type", "day_type", "hour", "office", "days", "tps_min", "tps_avg", "tps_max_hour",
-                   "tps_peak", "replicas_today_avg", "replicas_today_max"]
+                   "tps_peak", "replicas_today_avg", "replicas_today_max", "off_5min_min", "off_5min_avg"]
 SERVICE_COLUMNS = ["cluster", "cod_app", "namespace", "deployment", "cpu_request_vcpu", "mem_request_gib",
                    "replicas_today_office"]
 GROUPS = [("AKS", "Stays on AKS (criteria)"), ("BELOW_MARGIN", "Meets criteria, saves less than the margin"),
@@ -68,6 +68,8 @@ GROUPS = [("AKS", "Stays on AKS (criteria)"), ("BELOW_MARGIN", "Meets criteria, 
 LAYERS = ["UX", "BS", "CORE", "MAINFRAME"]
 BLOCK = 7  # Calculator: columns per day type (TPS min, average, peak, today, by peak, by average, chosen)
 HOUR_LABEL_STEP = 4  # hours 0, 4, 8 ... 20 on the charts: office hours are 8:00 to 19:59
+LISTS = {"sizing_basis": '"PEAK,AVERAGE"', "count_zero_5min": '"NO,YES"'}  # variables picked from a list
+BUCKETS = 12  # 5-minute buckets in an hour
 # Official sources of the sizing rule, linked next to their variables.
 SOURCES = {
     "concurrent_requests": "https://learn.microsoft.com/azure/container-apps/scale-app#http",
@@ -100,7 +102,10 @@ def write_variables(book, sheet, month, days):
                                                                            "weekdays 8:00-20:00 (1 avoids the cold "
                                                                            "start)"),
             ("min_replicas_offhours", model.DEFAULTS["min_replicas_offhours"], "Minimum replicas per "
-                                                                               "\"micro\"-service, the rest")]),
+                                                                               "\"micro\"-service, the rest"),
+            ("count_zero_5min", model.DEFAULTS["count_zero_5min"],
+             "YES: in hours whose minimum is 0, bill only the 5-minute buckets that cannot be at zero (no traffic "
+             "in the bucket nor the one before); PEAK takes the day with the fewest, AVERAGE their average")]),
         ("Container Apps", [("requests_buffer", model.DEFAULTS["requests_buffer"], "Extra on the requests of the month"),
                             ("environments_per_cluster", model.DEFAULTS["environments_per_cluster"],
                              "Environments (one load balancer each) per cluster moved"),
@@ -131,8 +136,8 @@ def write_variables(book, sheet, month, days):
                 link = sheet.cell(row=row, column=4, value="Microsoft Learn")
                 link.hyperlink, link.style = SOURCES[label], "Hyperlink"
             v1wb.define(book, label, f"Variables!$B${row}")
-            if label == "sizing_basis":
-                validation = DataValidation(type="list", formula1='"PEAK,AVERAGE"', allow_blank=False)
+            if label in LISTS:
+                validation = DataValidation(type="list", formula1=LISTS[label], allow_blank=False)
                 sheet.add_data_validation(validation)
                 validation.add(cell.coordinate)
             row += 1
@@ -355,14 +360,21 @@ def write_query_table(sheet, name, columns, rows):
     widths(sheet, columns)
 
 
+def zero_factor(minimum, off_min, off_avg, basis='sizing_basis="PEAK"'):
+    """Share of the hour billed: 1, or the 5-minute buckets that cannot be at zero when count_zero_5min is on and
+    the hour's minimum is 0 (the day with the fewest off buckets for the peak, their average for the average)."""
+    return (f'IF(AND(count_zero_5min="YES",{minimum}=0),({BUCKETS}-IF({basis},{off_min},{off_avg}))/{BUCKETS},1)')
+
+
 def write_traffic(sheet, count):
     """Traffic: the TrafficData query read row by row, and the replicas simulated each hour."""
     t = lambda column: r("Traffic", column)
-    pulled = ["scope", "scope_type", "day_type", "hour", "office", "days", "tps_avg", "tps_peak"]
+    pulled = ["scope", "scope_type", "day_type", "hour", "office", "days", "tps_avg", "tps_peak", "off_5min_min",
+              "off_5min_avg"]
+    minimum = f'IF({t("office")}=1,min_replicas_office,min_replicas_offhours)'
     formulas = [(column, pull("TrafficData", column)) for column in pulled] + [
-        ("sim_replicas", f'MAX(IF({t("office")}=1,min_replicas_office,min_replicas_offhours),'
-                         f'CEILING(IF(sizing_basis="PEAK",{t("tps_peak")},{t("tps_avg")})*traffic_share/'
-                         'concurrent_requests,1))'),
+        ("sim_replicas", f'MAX({minimum},CEILING(IF(sizing_basis="PEAK",{t("tps_peak")},{t("tps_avg")})*traffic_share/'
+                         f'concurrent_requests,1))*{zero_factor(minimum, t("off_5min_min"), t("off_5min_avg"))}'),
         ("replica_seconds", f'{t("days")}*3600*{t("sim_replicas")}')]
     formula_table(sheet, "Traffic", formulas, count)
     widths(sheet, [header for header, _ in formulas])
@@ -551,14 +563,16 @@ def write_calculator(sheet, default_scope):
                 cell.number_format = fmt
             minimum = f"IF(SUMIFS(TrafficData[office],{where})>0,min_replicas_office,min_replicas_offhours)"
             average, peak = (get_column_letter(2 + block + offset) for offset in (1, 2))
-            for offset, tps in ((4, peak), (5, average)):
+            off = {name: f"SUMIFS(TrafficData[{name}],{where})" for name in ("off_5min_min", "off_5min_avg")}
+            for offset, tps, basis in ((4, peak, "TRUE"), (5, average, "FALSE")):
+                factor = zero_factor(minimum, off["off_5min_min"], off["off_5min_avg"], basis)
                 sheet.cell(row=row, column=2 + block + offset,
-                           value=f"=MAX({minimum},CEILING({tps}{row}*traffic_share/concurrent_requests,1))"
-                           ).number_format = "0"
+                           value=f"=MAX({minimum},CEILING({tps}{row}*traffic_share/concurrent_requests,1))*{factor}"
+                           ).number_format = "0.##"
             by_peak, by_average = (get_column_letter(2 + block + offset) for offset in (4, 5))
             chosen = sheet.cell(row=row, column=8 + block,
                                 value=f'=IF(sizing_basis="PEAK",{by_peak}{row},{by_average}{row})')
-            chosen.fill, chosen.number_format = EDITABLE, "0"
+            chosen.fill, chosen.number_format = EDITABLE, "0.##"
     last = top + 24
     cost_top = last + 2
     sheet.cell(row=cost_top, column=1, value="Monthly cost (US$ list price unless said)").font = BOLD

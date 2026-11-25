@@ -22,6 +22,12 @@ Hourly profile per scope (cluster or application) and day type (weekday Monday t
                                     5 minutes of the hour (an upper bound: APIs do not peak at the same minute)
   replicas_today_avg / _max         Container Insights replicas per "micro"-service of the scope at that hour
                                     (average over its "micro"-services), when aks_workloads_hourly_profile.csv exists
+  off_5min_min / off_5min_avg       5-minute buckets of that hour Container Apps could spend at zero replicas: no
+                                    traffic in the bucket nor in the one before (the 5-minute cooldown before it
+                                    scales in). A bucket has traffic when any API or entry point of the scope had a
+                                    request, whatever its layer. _min: the day with the fewest (goes with the peak),
+                                    _avg: the average over the month's days. 0 to 12; only used when the model's
+                                    count_zero_5min is on and the hour's minimum is 0 replicas.
 
 Outputs (in --output-dir, results/aa-cluster-snapshot by default):
   cluster_criteria_input.csv   PROD application cluster: application, BIA, "micro"-services (cluster and
@@ -96,8 +102,33 @@ def choose_layer(requests_by_layer):
     return busiest if requests_by_layer.get(busiest) else ""
 
 
-def profile_rows(scope, scope_type, series, days, replicas):
-    """24 x 2 rows for one scope from its hourly series {(date, hour): (requests, peak_5min)}."""
+BUCKETS = 12  # 5-minute buckets in an hour
+
+
+def month_dates(month):
+    year, number = int(month[:4]), int(month[5:7])
+    return [date(year, number, day) for day in range(1, calendar.monthrange(year, number)[1] + 1)]
+
+
+def off_buckets(month, activity):
+    """{(day type, hour): [buckets that could be at zero replicas, one count per day of the month]} from
+    {(date, hour): bitmask of buckets with traffic}. A bucket counts when it and the one before have no traffic; the
+    bucket before the month's first is taken as active (unknown)."""
+    counts = defaultdict(list)
+    previous_active = True
+    for day in month_dates(month):
+        for hour in range(24):
+            mask, off = activity.get((day, hour), 0), 0
+            for bucket in range(BUCKETS):
+                active = bool(mask >> bucket & 1)
+                off += 0 if active or previous_active else 1
+                previous_active = active
+            counts[("weekday" if day.weekday() < 5 else "weekend", hour)].append(off)
+    return counts
+
+
+def profile_rows(scope, scope_type, series, days, replicas, off):
+    """24 x 2 rows for one scope from its hourly series {(date, hour): (requests, peak_5min)} and its off buckets."""
     by_slot = defaultdict(list)
     for (day, hour), (requests, peak) in series.items():
         by_slot[("weekday" if day.weekday() < 5 else "weekend", hour)].append((requests, peak))
@@ -108,13 +139,15 @@ def profile_rows(scope, scope_type, series, days, replicas):
             count = days[day_type]
             hourly = [requests for requests, _ in values] + [0] * max(count - len(values), 0)
             today = replicas.get((day_type, hour), ("", ""))
+            zero = off.get((day_type, hour)) or [0]
             out.append({"scope": scope, "scope_type": scope_type, "day_type": day_type, "hour": hour,
                         "office": 1 if is_office(day_type, hour) else 0, "days": count,
                         "tps_min": round(min(hourly) / 3600, 3) if hourly else 0,
                         "tps_avg": round(sum(hourly) / count / 3600, 3) if count else 0,
                         "tps_max_hour": round(max(hourly) / 3600, 3) if hourly else 0,
                         "tps_peak": round(max((peak for _, peak in values), default=0) / 300, 3),
-                        "replicas_today_avg": today[0], "replicas_today_max": today[1]})
+                        "replicas_today_avg": today[0], "replicas_today_max": today[1],
+                        "off_5min_min": min(zero), "off_5min_avg": round(sum(zero) / len(zero), 2)})
     return out
 
 
@@ -192,8 +225,9 @@ def main():
     cluster_layer = {key: choose_layer(value) for key, value in cluster_layers.items()}
     app_layer = {code: (row.get("traffic_layer") or "") for code, row in applications.items()}
 
-    # Hourly series per scope.
+    # Hourly series per scope (its traffic layer) and its buckets with traffic (any layer).
     series = defaultdict(dict)
+    activity = defaultdict(lambda: defaultdict(int))
     for row in read("aa-metrics", "apim_api_hourly.csv") + read("aa-metrics", "entry_points_hourly.csv"):
         if row["month"] != month:
             continue
@@ -201,6 +235,9 @@ def main():
         moment = datetime.strptime(row["hour_start"], "%Y-%m-%dT%H:%M")
         key = (moment.date(), moment.hour)
         values = (snap.to_float(row["requests"]) or 0, snap.to_float(row["peak_5min_requests"]) or 0)
+        mask = sum(1 << bucket for bucket, flag in enumerate(row.get("active_5min") or "1" * BUCKETS) if flag == "1")
+        for scope in {cluster_id, code} - {""}:
+            activity[scope][key] |= mask
         for scope, chosen in ((cluster_id, cluster_layer.get(cluster_id)), (code, app_layer.get(code))):
             if scope and layer and layer == chosen:
                 previous = series[scope].get(key, (0, 0))
@@ -228,9 +265,10 @@ def main():
     profile = []
     for cluster_id in sorted(by_id, key=lambda key: by_id[key]["cluster"]):
         profile += profile_rows(by_id[cluster_id]["cluster"], "CLUSTER", series.get(cluster_id, {}), days,
-                                replicas_today.get(cluster_id, {}))
+                                replicas_today.get(cluster_id, {}), off_buckets(month, activity.get(cluster_id, {})))
     for code in sorted({row["cod_app"] for row in clusters}):
-        profile += profile_rows(code, "APP", series.get(code, {}), days, replicas_today.get(code, {}))
+        profile += profile_rows(code, "APP", series.get(code, {}), days, replicas_today.get(code, {}),
+                                off_buckets(month, activity.get(code, {})))
     busiest = defaultdict(float)
     peak = defaultdict(float)
     for row in profile:

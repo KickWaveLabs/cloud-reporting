@@ -27,7 +27,8 @@ Outputs (in --output-dir):
                           the IncomingMessages of the Event Hubs / Service Bus namespaces of AKS applications with no
                           AKS-backed PROD API (event-driven: their load is messages); apim_layer says which
   entry_points_hourly_profile.csv the same profile for those entry points
-  apim_api_hourly.csv     APIM x API x Lima hour with traffic: requests in the hour and its busiest 5-minute bucket
+  apim_api_hourly.csv     APIM x API x Lima hour with traffic: requests in the hour, its busiest 5-minute bucket and
+                          which of its 12 buckets had traffic (active_5min, "1" or "0" from :00 to :55)
   entry_points_hourly.csv the same hourly series for the entry points
   metrics_errors.csv
   metrics_summary.json
@@ -146,6 +147,7 @@ class ApiState:
         self.months = defaultdict(lambda: defaultdict(float))
         self.hours = defaultdict(float)          # (month, local hour start) -> requests
         self.hour_peaks = defaultdict(float)     # (month, local hour start) -> busiest 5-minute bucket in that hour
+        self.hour_active = defaultdict(set)      # (month, local hour start) -> its buckets with traffic (0 to 11)
         self.profile = defaultdict(float)        # (day type, hour) -> requests
         self.in_run = False
         self.last = None
@@ -165,6 +167,8 @@ class ApiState:
         hour_start = local.replace(minute=0, second=0, microsecond=0)
         self.hours[(month, hour_start)] += requests
         self.hour_peaks[(month, hour_start)] = max(self.hour_peaks[(month, hour_start)], requests)
+        if requests > 0:
+            self.hour_active[(month, hour_start)].add(local.minute * 60 // BUCKET_SECONDS)
         self.profile[("weekday" if local.weekday() < 5 else "weekend", local.hour)] += requests
         active = requests > 0
         if office:
@@ -202,13 +206,16 @@ class ApiState:
             }
 
     def hourly_rows(self, apim, api_id):
-        """One row per hour with traffic: requests in the hour and its busiest 5-minute bucket (Lima time). The
-        snapshot adds them up per cluster and application to draw min / average / peak per hour of the day."""
+        """One row per hour with traffic: requests in the hour, its busiest 5-minute bucket and which buckets had
+        traffic (Lima time). The snapshot adds them up per cluster and application to draw min / average / peak per
+        hour of the day and to count the buckets Container Apps could spend at zero replicas."""
         for (month, hour_start), value in sorted(self.hours.items()):
             if value > 0:
                 yield {"apim": apim, "api_id": api_id, "month": month,
                        "hour_start": hour_start.strftime("%Y-%m-%dT%H:00"), "requests": int(value),
-                       "peak_5min_requests": int(self.hour_peaks[(month, hour_start)])}
+                       "peak_5min_requests": int(self.hour_peaks[(month, hour_start)]),
+                       "active_5min": "".join("1" if bucket in self.hour_active[(month, hour_start)] else "0"
+                                              for bucket in range(3600 // BUCKET_SECONDS))}
 
     def profile_rows(self, apim, api_id, day_counts):
         for (day_type, hour), value in sorted(self.profile.items()):
