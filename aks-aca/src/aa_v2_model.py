@@ -9,6 +9,7 @@ Decision of a cluster, in order (the first that applies):
   AKS               a "micro"-service requests more than a Container Apps replica allows (4 vCPU / 8 GiB): implicit
   AKS               busiest hour above MAX_TPS (average TPS of the busiest hour of the day, as v1)
   AKS               more than MAX_SERVICES "micro"-services in the cluster
+  AKS               BIA at AKS_FROM_BIA or above (MUY ALTA > ALTA > MEDIA > BAJA; NONE by default: no cluster)
   ACA_WITH_REVIEW   critical (BIA ALTA or MUY ALTA), growing past MAX_SERVICES with DESA, or its application has more
                     than MAX_SERVICES "micro"-services across its clusters
   ACA               otherwise
@@ -42,11 +43,13 @@ DEFAULTS = {
     "max_tps": 100, "max_services": 15, "min_saving": 0.10,
     "concurrent_requests": 10, "traffic_share": 1.0, "sizing_basis": "PEAK",
     "min_replicas_office": 1, "min_replicas_offhours": 1, "count_zero_5min": "NO",
+    "aks_from_bia": "NONE",
     "requests_buffer": v1.REQUESTS_BUFFER, "environments_per_cluster": 1, "hours_month": v1.HOURS_MONTH,
     "min_vcpu": v1.ACA_MIN_VCPU, "vcpu_step": 0.25, "gib_per_vcpu": 2,
     "bank_discount": v1.BANK_DISCOUNT, "igv": v1.IGV, "exchange_rate": v1.EXCHANGE_RATE,
 }
 CRITICAL_BIA = ("MUY ALTA", "ALTA")
+BIA_LEVELS = ["BAJA", "MEDIA", "ALTA", "MUY ALTA"]  # lowest first; SIN BIA is below them all
 PRICE_KEYS = {"price_vcpu": "aca_vcpu_active_s", "price_gib": "aca_mem_active_gib_s",
               "price_requests": "aca_requests_million", "price_lb_hour": "lb_standard_rules_hour"}
 GROUP_OF_REASON = {"IN_DEVELOPMENT": "IN_DEVELOPMENT", "IN_USE_NOT_MEASURED": "IN_USE"}
@@ -107,6 +110,10 @@ def decide(row, variables):
     services, app = int(to_float(row["microservices"]) or 0), int(to_float(row["microservices_app"]) or 0)
     if services > variables["max_services"]:
         return "AKS", f"More than {variables['max_services']} \"micro\"-services"
+    threshold = variables["aks_from_bia"]
+    if threshold in BIA_LEVELS and row["bia"] in BIA_LEVELS and \
+            BIA_LEVELS.index(row["bia"]) >= BIA_LEVELS.index(threshold):
+        return "AKS", f"BIA {threshold} or above"
     reasons = []
     if row["bia"] in CRITICAL_BIA:
         reasons.append("Critical (BIA)")

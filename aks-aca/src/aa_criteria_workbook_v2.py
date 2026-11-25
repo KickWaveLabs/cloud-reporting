@@ -77,7 +77,9 @@ TOP = 20  # rows of each Top costs table
 GREEN, AMBER = PatternFill("solid", fgColor="C6EFCE"), PatternFill("solid", fgColor="FFEB9C")
 BLOCK = 7  # Calculator: columns per day type (TPS min, average, peak, today, by peak, by average, chosen)
 HOUR_LABEL_STEP = 4  # hours 0, 4, 8 ... 20 on the charts: office hours are 8:00 to 19:59
-LISTS = {"sizing_basis": '"PEAK,AVERAGE"', "count_zero_5min": '"NO,YES"'}  # variables picked from a list
+LISTS = {"sizing_basis": '"PEAK,AVERAGE"', "count_zero_5min": '"NO,YES"',
+         "aks_from_bia": '"NONE,MUY ALTA,ALTA,MEDIA,BAJA"'}
+BIA_ORDER = '{"BAJA","MEDIA","ALTA","MUY ALTA"}'  # lowest first; SIN BIA and NONE match none  # variables picked from a list
 BUCKETS = 12  # 5-minute buckets in an hour
 # Official sources of the sizing rule, linked next to their variables.
 SOURCES = {
@@ -96,7 +98,9 @@ def number(value):
 def write_variables(book, sheet, month, days):
     blocks = [
         ("Criteria", [("max_tps", model.DEFAULTS["max_tps"], "Busiest hour up to this TPS (average of the hour)"),
-                      ("max_services", model.DEFAULTS["max_services"], "Up to this many \"micro\"-services per cluster")]),
+                      ("max_services", model.DEFAULTS["max_services"], "Up to this many \"micro\"-services per cluster"),
+                      ("aks_from_bia", model.DEFAULTS["aks_from_bia"],
+                       "Clusters with this BIA or above stay on AKS (MUY ALTA > ALTA > MEDIA > BAJA); NONE: no cluster")]),
         ("Saving filter (applied at the end, not a criterion)",
          [("min_saving", model.DEFAULTS["min_saving"], "A cluster that meets the criteria moves only if it saves at "
                                                         "least this share of its AKS cost")]),
@@ -433,12 +437,14 @@ def criteria_formulas():
         ("size_ok", f'IF(N({c("microservices_over_aca_size")})=0,"YES","NO")'),
         ("tps_ok", f'IF({c("has_traffic")}="NO","-",IF({c("busiest_hour_tps")}<=max_tps,"YES","NO"))'),
         ("services_ok", f'IF(N({c("microservices")})<=max_services,"YES","NO")'),
+        ("bia_ok", f'IF(IFERROR(MATCH({c("bia")},{BIA_ORDER},0),0)>=IFERROR(MATCH(aks_from_bia,{BIA_ORDER},0),99),'
+                   '"NO","YES")'),
         ("critical", f'IF(OR({c("bia")}="MUY ALTA",{c("bia")}="ALTA"),"YES","NO")'),
         ("growing", f'IF(AND(ISNUMBER({c("microservices_app_projected")}),N({c("microservices_app_projected")})>'
                     f'max_services,N({c("microservices_app")})<=max_services),"YES","NO")'),
         ("app_over_15", f'IF(N({c("microservices_app")})>max_services,"YES","NO")'),
         ("decision", f'IF({c("has_traffic")}="NO","NO_TRAFFIC",IF(OR({c("event_driven")}="YES",{c("size_ok")}="NO",'
-                     f'{c("tps_ok")}="NO",{c("services_ok")}="NO"),"AKS",IF(OR({c("critical")}="YES",'
+                     f'{c("tps_ok")}="NO",{c("services_ok")}="NO",{c("bia_ok")}="NO"),"AKS",IF(OR({c("critical")}="YES",'
                      f'{c("growing")}="YES",{c("app_over_15")}="YES"),"ACA_WITH_REVIEW","ACA")))'),
         ("replica_seconds", f'SUMIFS(Traffic[replica_seconds],Traffic[scope],{c("cluster")},Traffic[scope_type],'
                             '"CLUSTER")'),
@@ -571,48 +577,45 @@ def write_top_costs(book, sheet, applications, everything):
 
     # Left: PROD application clusters of the criteria, by AKS cost (Criteria[cost_rank]).
     sheet["A11"], sheet["A11"].font = "PROD application clusters by AKS cost (S/ a month, with IGV)", BOLD
-    left = ["Rank", "Cluster", "App", "AKS today (S/)", "Container Apps (S/)", "Saving if moved (S/)", "Saving share",
-            "Destination", "Saving counted (S/)", "Stays on AKS because"]
+    left = ["Rank", "Cluster", "App", "BIA", "AKS today (S/)", "Saving share", "Destination", "Stays on AKS because"]
     at = f"MATCH({rank},Criteria[cost_rank],0)"
     get = lambda column: f"INDEX(Criteria[{column}],{at})"
     flag = lambda column, value: f'{get(column)}="{value}"'
-    # Container Apps is costed only for clusters that meet the criteria; the rest show "-" and why they stay.
+    # The saving share shows only for clusters that meet the criteria; the rest show "-" and why they stay.
     meets = f'OR({flag("group", "ACA")},{flag("group", "ACA_WITH_REVIEW")},{flag("group", "BELOW_MARGIN")})'
-    costed = lambda column: f'IF({meets},{get(column)},"-")'
     why = (f'IF({flag("decision", "NO_TRAFFIC")},"No traffic of its own",IF({flag("event_driven", "YES")},'
            f'"Event-driven",IF({flag("size_ok", "NO")},"A ""micro""-service over 4 vCPU / 8 GiB",'
            f'IF({flag("tps_ok", "NO")},"Busiest hour over max_tps",IF({flag("services_ok", "NO")},'
-           f'"Over max_services ""micro""-services",IF({flag("group", "BELOW_MARGIN")},'
-           f'"Saves less than min_saving",""))))))')
-    left_formulas = [rank, get("cluster"), get("cod_app"), get("aks_month_pen"), costed("aca_month_pen"),
-                     costed("saving_month_pen"), costed("saving_share"), get("group"),
-                     f'IF({flag("goes_to_aca", "YES")},{get("saving_month_pen")},0)', why]
+           f'"Over max_services ""micro""-services",IF({flag("bia_ok", "NO")},"BIA "&aks_from_bia&" or above",'
+           f'IF({flag("group", "BELOW_MARGIN")},"Saves less than min_saving","")))))))')
+    left_formulas = [rank, get("cluster"), get("cod_app"), get("bia"), get("aks_month_pen"),
+                     f'IF({meets},{get("saving_share")},"-")', get("group"), why]
     formula_table(sheet, "TopApplications", [(header, shown(value)) for header, value in zip(left, left_formulas)],
                   applications, top=head)
-    for column, fmt in ((4, PEN), (5, PEN), (6, PEN), (7, PCT), (9, PEN)):
+    for column, fmt in ((5, PEN), (6, PCT)):
         for row in range(head + 1, head + 1 + applications):
             sheet.cell(row=row, column=column).number_format = fmt
-    rows = f"$A${head + 1}:$J${head + applications}"
-    sheet.conditional_formatting.add(rows, FormulaRule(formula=[f'OR($H{head + 1}="ACA",$H{head + 1}="ACA_WITH_REVIEW")'],
+    rows = f"$A${head + 1}:$H${head + applications}"
+    sheet.conditional_formatting.add(rows, FormulaRule(formula=[f'OR($G{head + 1}="ACA",$G{head + 1}="ACA_WITH_REVIEW")'],
                                                        fill=GREEN))
-    sheet.conditional_formatting.add(rows, FormulaRule(formula=[f'$H{head + 1}="BELOW_MARGIN"'], fill=AMBER))
+    sheet.conditional_formatting.add(rows, FormulaRule(formula=[f'$G{head + 1}="BELOW_MARGIN"'], fill=AMBER))
+    counted = 'SUMIFS(Criteria[saving_month_pen],Criteria[goes_to_aca],"YES"'
     totals = [('="Top "&MIN(top_n,COUNT(Criteria[cost_rank]))&" shown"', "SUM(TopApplications[AKS today (S/)])",
-               "SUM(TopApplications[Saving counted (S/)])"),
-              ("All PROD application clusters", "SUM(Criteria[aks_month_pen])",
-               'SUMIFS(Criteria[saving_month_pen],Criteria[goes_to_aca],"YES")')]
-    sheet.cell(row=5, column=4, value="AKS today (S/)").font = BOLD
-    sheet.cell(row=5, column=9, value="Saving counted (S/)").font = BOLD
+               f'{counted},Criteria[cost_rank],"<="&top_n)'),
+              ("All PROD application clusters", "SUM(Criteria[aks_month_pen])", counted + ")")]
+    sheet.cell(row=5, column=5, value="AKS today (S/)").font = BOLD
+    sheet.cell(row=5, column=6, value="Saving counted (S/)").font = BOLD
     for row, (label, cost, saving) in enumerate(totals, start=6):
         sheet.cell(row=row, column=2, value=label).font = BOLD
-        sheet.cell(row=row, column=4, value="=" + cost).number_format = PEN
-        sheet.cell(row=row, column=9, value="=" + saving).number_format = PEN
+        sheet.cell(row=row, column=5, value="=" + cost).number_format = PEN
+        sheet.cell(row=row, column=6, value="=" + saving).number_format = PEN
     sheet.cell(row=8, column=2, value="Share of the shown in the PROD application cost")
-    sheet["D8"], sheet["D8"].number_format = "=IF(D7>0,D6/D7,0)", PCT
+    sheet["E8"], sheet["E8"].number_format = "=IF(E7>0,E6/E7,0)", PCT
     sheet.cell(row=9, column=2, value="Green: moves to Container Apps. Yellow: meets the criteria but saves less than "
-                                      "min_saving. \"-\": not costed, a criterion keeps it on AKS.")
+                                      "min_saving. \"-\": a criterion keeps it on AKS.")
 
     # Right: every AKS cluster, any environment or category (AllClusters comes sorted by cost).
-    start = 12  # column L
+    start = 10  # column J
     letter = lambda offset: get_column_letter(start + offset)
     sheet.cell(row=11, column=start, value="AKS clusters of every environment and category "
                                            "(S/ a month, with IGV)").font = BOLD
@@ -651,9 +654,9 @@ def write_top_costs(book, sheet, applications, everything):
         sheet.cell(row=row, column=start + 5, value="=" + formula).number_format = fmt
     sheet.cell(row=10, column=start + 1,
                value="Not evaluated: other environments and infrastructure clusters are outside the criteria.")
-    for column, width in zip("ABCDEFGHIJ", (6, 18, 7, 14, 15, 16, 11, 16, 16, 34)):
+    for column, width in zip("ABCDEFGH", (6, 18, 7, 10, 14, 18, 16, 34)):
         sheet.column_dimensions[column].width = width
-    sheet.column_dimensions["K"].width = 3
+    sheet.column_dimensions["I"].width = 3
     for offset, width in enumerate((6, 18, 12, 16, 7, 14, 12, 11, 16)):
         sheet.column_dimensions[letter(offset)].width = width
     sheet.freeze_panes = f"A{head + 1}"
