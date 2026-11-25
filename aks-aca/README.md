@@ -238,7 +238,13 @@ Container Insights; one stopped PROD cluster without metrics.
   - Replicas per hour = max(minimum, ceiling(TPS x traffic_share / concurrent_requests)): Container Apps adds a
     replica every `concurrent_requests` requests per second (HTTP scale rule, Azure default 10). The peak of an
     hour is its busiest 5 minutes; only minimum, average and peak are shown, never percentiles.
-    The figure presented is by peak (conservative); the Calculator shows by peak and by average side by side.
+    The figure presented is by peak (conservative). `sizing_basis` also takes BUSIEST_HOUR: each hour of the day at
+    its busiest occurrence in the month, replayed 5 minutes at a time (a bucket keeps the replicas of the one
+    before, as Container Apps waits 5 minutes to scale in), and AVERAGE. The Calculator shows the three side by
+    side and charts every 5 minutes of the busiest hour against the hour's peak and average.
+  - `exact_replica_seconds` (cluster_criteria_input.csv) replays every 5-minute bucket of the month with the
+    model's default variables: what Container Apps would bill, a reference for how conservative each sizing is.
+    Expect exact <= BUSIEST_HOUR <= PEAK; AVERAGE is the optimistic one.
   - A minimum of 0 replicas (`min_replicas_offhours` or `min_replicas_office`) lets Container Apps scale to
     zero: that hour is billed only for its 5-minute buckets that cannot be at zero (no traffic in the bucket nor
     in the one before, the 5-minute wait before it scales in). It needs `active_5min` in the metrics' hourly

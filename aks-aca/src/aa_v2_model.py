@@ -20,6 +20,9 @@ Container Apps cost of a cluster (US$ a month, list price):
   replicas(hour)  = max(minimum, ceil(TPS(hour) x TRAFFIC_SHARE / CONCURRENT_REQUESTS)) per "micro"-service, for each
                     hour of the day and day type; TPS is the hour's peak (busiest 5 minutes) or its average
                     (SIZING_BASIS); minimum = MIN_REPLICAS_OFFICE in office hours, MIN_REPLICAS_OFFHOURS otherwise.
+                    BUSIEST_HOUR instead replays, 5 minutes at a time, that hour's busiest occurrence in the month
+                    (the day it had the most requests): the hour's replicas are the average of its 12 buckets', and a
+                    bucket keeps the replicas of the one before (5 minutes before Container Apps scales in).
                     A minimum of 0 lets Container Apps scale to zero, so the hour is billed only for its 5-minute
                     buckets that cannot be at zero: x (12 - off buckets) / 12, off buckets of the day with the
                     fewest (PEAK) or their average (AVERAGE) (aa_cluster_snapshot.py says how they count).
@@ -82,15 +85,25 @@ def load(results):
 
 
 BUCKETS = 12  # 5-minute buckets in an hour
+BUSIEST_COLUMNS = [f"busiest_hour_5min_{minute:02d}" for minute in range(0, 60, 5)]
+SIZING_BASES = ("PEAK", "BUSIEST_HOUR", "AVERAGE")
+
+
+def need(tps, variables):
+    return math.ceil(tps * variables["traffic_share"] / variables["concurrent_requests"] - 1e-9)
 
 
 def replicas(row, variables):
     """Simulated replicas per "micro"-service at one hour of the profile (an average over the hour when the
     5-minute buckets at zero count)."""
+    minimum = variables["min_replicas_office"] if row["office"] in ("1", 1) else variables["min_replicas_offhours"]
+    if variables["sizing_basis"] == "BUSIEST_HOUR":  # zeros are in the buckets themselves
+        tps = [to_float(row.get(name)) or 0 for name in BUSIEST_COLUMNS]
+        return sum(max(minimum, need(max(now, before), variables))
+                   for now, before in zip(tps, tps[:1] + tps[:-1])) / BUCKETS
     peak = variables["sizing_basis"] == "PEAK"
     tps = to_float(row["tps_peak"] if peak else row["tps_avg"]) or 0
-    minimum = variables["min_replicas_office"] if row["office"] in ("1", 1) else variables["min_replicas_offhours"]
-    count = max(minimum, math.ceil(tps * variables["traffic_share"] / variables["concurrent_requests"] - 1e-9))
+    count = max(minimum, need(tps, variables))
     if minimum == 0:  # scale to zero allowed: the buckets without traffic are not billed
         off = to_float(row.get("off_5min_min" if peak else "off_5min_avg")) or 0
         return count * (BUCKETS - off) / BUCKETS
@@ -147,6 +160,9 @@ def evaluate(data, variables=None):
         aca_list = (compute + requests * variables["requests_buffer"] / 1e6 * prices["price_requests"]
                     + variables["environments_per_cluster"] * variables["hours_month"] * prices["price_lb_hour"])
         aca = aca_list * (1 - variables["bank_discount"]) * soles
+        exact = to_float(row.get("exact_replica_seconds"))  # reference, with the default variables
+        aca_exact = None if exact is None else \
+            (aca_list - compute + exact * unit[row["cluster"]]) * (1 - variables["bank_discount"]) * soles
         aks = (to_float(row["cost_month_usd"]) or 0) * soles
         saving = aks - aca
         share = saving / aks if aks else 0
@@ -159,6 +175,6 @@ def evaluate(data, variables=None):
             group = decision
         out.append(dict(row, decision=decision, reason=reason, replica_seconds=replica_seconds[row["cluster"]],
                         unit_usd_per_second=unit[row["cluster"]], aca_list_usd=aca_list, aca_month_pen=aca,
-                        aks_month_pen=aks, saving_month_pen=saving, saving_share=share, group=group,
+                        aks_month_pen=aks, saving_month_pen=saving, aca_exact_month_pen=aca_exact, saving_share=share, group=group,
                         goes_to_aca=group in ("ACA", "ACA_WITH_REVIEW")))
     return out

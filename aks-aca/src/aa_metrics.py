@@ -28,7 +28,8 @@ Outputs (in --output-dir):
                           AKS-backed PROD API (event-driven: their load is messages); apim_layer says which
   entry_points_hourly_profile.csv the same profile for those entry points
   apim_api_hourly.csv     APIM x API x Lima hour with traffic: requests in the hour, its busiest 5-minute bucket and
-                          which of its 12 buckets had traffic (active_5min, "1" or "0" from :00 to :55)
+                          which of its 12 buckets had traffic (active_5min, "1" or "0" from :00 to :55) and the
+                          requests of each (requests_5min, 12 numbers separated by ";")
   entry_points_hourly.csv the same hourly series for the entry points
   metrics_errors.csv
   metrics_summary.json
@@ -148,6 +149,7 @@ class ApiState:
         self.hours = defaultdict(float)          # (month, local hour start) -> requests
         self.hour_peaks = defaultdict(float)     # (month, local hour start) -> busiest 5-minute bucket in that hour
         self.hour_active = defaultdict(set)      # (month, local hour start) -> its buckets with traffic (0 to 11)
+        self.hour_buckets = defaultdict(lambda: [0.0] * (3600 // BUCKET_SECONDS))  # -> requests of each bucket
         self.profile = defaultdict(float)        # (day type, hour) -> requests
         self.in_run = False
         self.last = None
@@ -169,6 +171,7 @@ class ApiState:
         self.hour_peaks[(month, hour_start)] = max(self.hour_peaks[(month, hour_start)], requests)
         if requests > 0:
             self.hour_active[(month, hour_start)].add(local.minute * 60 // BUCKET_SECONDS)
+        self.hour_buckets[(month, hour_start)][local.minute * 60 // BUCKET_SECONDS] += requests
         self.profile[("weekday" if local.weekday() < 5 else "weekend", local.hour)] += requests
         active = requests > 0
         if office:
@@ -215,7 +218,8 @@ class ApiState:
                        "hour_start": hour_start.strftime("%Y-%m-%dT%H:00"), "requests": int(value),
                        "peak_5min_requests": int(self.hour_peaks[(month, hour_start)]),
                        "active_5min": "".join("1" if bucket in self.hour_active[(month, hour_start)] else "0"
-                                              for bucket in range(3600 // BUCKET_SECONDS))}
+                                              for bucket in range(3600 // BUCKET_SECONDS)),
+                       "requests_5min": ";".join(str(int(value)) for value in self.hour_buckets[(month, hour_start)])}
 
     def profile_rows(self, apim, api_id, day_counts):
         for (day_type, hour), value in sorted(self.profile.items()):

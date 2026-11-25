@@ -64,7 +64,8 @@ CLUSTER_COLUMNS = ["cluster", "cod_app", "clusters_of_app", "bia", "microservice
 CLUSTER_NUMBERS = {"clusters_of_app", "microservices", "microservices_app", "microservices_app_projected",
                    "microservices_over_aca_size", "requests_month", "busiest_hour_tps", "peak_tps", "cost_month_usd"}
 TRAFFIC_COLUMNS = ["scope", "scope_type", "day_type", "hour", "office", "days", "tps_min", "tps_avg", "tps_max_hour",
-                   "tps_peak", "replicas_today_avg", "replicas_today_max", "off_5min_min", "off_5min_avg"]
+                   "tps_peak", "replicas_today_avg", "replicas_today_max", "off_5min_min", "off_5min_avg"] + \
+    model.BUSIEST_COLUMNS
 SERVICE_COLUMNS = ["cluster", "cod_app", "namespace", "deployment", "cpu_request_vcpu", "mem_request_gib",
                    "replicas_today_office"]
 GROUPS = [("AKS", "Stays on AKS (criteria)"), ("BELOW_MARGIN", "Meets criteria, saves less than the margin"),
@@ -76,14 +77,16 @@ SCALE_TO_ZERO_NOTE = [
     "Scale to zero (a minimum of 0 replicas): Container Apps turns a \"micro\"-service off after 5 minutes "
     "without requests and on again with the next one (a few seconds of cold start).",
     "So an hour with traffic only part of the time is billed only for its 5-minute buckets with traffic or right "
-    "after it. By peak takes that hour's busiest day of the month (the fewest buckets off); by average, the "
-    "average day. With a minimum of 1 the hour is billed whole."]
+    "after it. By peak takes that hour's day with the fewest buckets off; by average, the average day; by busiest "
+    "hour, its own buckets. With a minimum of 1 the hour is billed whole."]
 HIDDEN_SHEETS = ["Data", "TrafficData", "LatencyData", "LatencyLayers", "AllClusters", "Lists"]
 TOP = 20  # rows of each Top costs table
 GREEN, AMBER = PatternFill("solid", fgColor="C6EFCE"), PatternFill("solid", fgColor="FFEB9C")
-BLOCK = 7  # Calculator: columns per day type (TPS min, average, peak, today, by peak, by average, chosen)
+BLOCK = 8  # Calculator: columns per day type (TPS min, average, peak, today, by peak, by busiest hour, by average,
+#            chosen)
+FIVE_MINUTES_COLUMN = 36  # Calculator: column AJ, right of the charts
 HOUR_LABEL_STEP = 4  # hours 0, 4, 8 ... 20 on the charts: office hours are 8:00 to 19:59
-LISTS = {"sizing_basis": '"PEAK,AVERAGE"',
+LISTS = {"sizing_basis": '"PEAK,BUSIEST_HOUR,AVERAGE"',
          "aks_from_bia": '"NONE,MUY ALTA,ALTA,MEDIA,BAJA"'}
 BIA_ORDER = '{"BAJA","MEDIA","ALTA","MUY ALTA"}'  # lowest first; SIN BIA and NONE match none  # variables picked from a list
 BUCKETS = 12  # 5-minute buckets in an hour
@@ -111,8 +114,9 @@ def write_variables(book, sheet, month, days):
          [("min_saving", model.DEFAULTS["min_saving"], "A cluster that meets the criteria moves only if it saves at "
                                                         "least this share of its AKS cost")]),
         ("Replicas from traffic", [
-            ("sizing_basis", model.DEFAULTS["sizing_basis"], "PEAK: busiest 5 minutes of each hour; AVERAGE: the "
-                                                             "hour's average"),
+            ("sizing_basis", model.DEFAULTS["sizing_basis"], "PEAK: busiest 5 minutes of each hour; BUSIEST_HOUR: "
+                                                             "each hour's busiest occurrence in the month, 5 minutes "
+                                                             "at a time; AVERAGE: the hour's average"),
             ("concurrent_requests", model.DEFAULTS["concurrent_requests"],
              "Requests per second per replica before Container Apps adds one (HTTP scale rule; Azure default 10)"),
             ("traffic_share", model.DEFAULTS["traffic_share"], "Share of the cluster's TPS each \"micro\"-service "
@@ -413,15 +417,27 @@ def zero_factor(minimum, off_min, off_avg, basis='sizing_basis="PEAK"'):
     return f'IF({minimum}=0,({BUCKETS}-IF({basis},{off_min},{off_avg}))/{BUCKETS},1)'
 
 
+def busiest_hour_replicas(minimum, cell):
+    """Replicas of the hour at its busiest occurrence in the month: the average of its 12 buckets of 5 minutes, each with
+    max(minimum, ceiling(TPS x traffic_share / concurrent_requests)), a bucket keeping the replicas of the one before
+    (5 minutes before Container Apps scales in). cell(column) is a bucket's TPS."""
+    columns = model.BUSIEST_COLUMNS
+    terms = [f"MAX({minimum},CEILING(MAX({cell(now)},{cell(before)})*traffic_share/concurrent_requests,1))"
+             for now, before in zip(columns, columns[:1] + columns[:-1])]
+    return f"({'+'.join(terms)})/{BUCKETS}"
+
+
 def write_traffic(sheet, count):
     """Traffic: the TrafficData query read row by row, and the replicas simulated each hour."""
     t = lambda column: r("Traffic", column)
     pulled = ["scope", "scope_type", "day_type", "hour", "office", "days", "tps_avg", "tps_peak", "off_5min_min",
-              "off_5min_avg"]
+              "off_5min_avg"] + model.BUSIEST_COLUMNS
     minimum = f'IF({t("office")}=1,min_replicas_office,min_replicas_offhours)'
     formulas = [(column, pull("TrafficData", column)) for column in pulled] + [
-        ("sim_replicas", f'MAX({minimum},CEILING(IF(sizing_basis="PEAK",{t("tps_peak")},{t("tps_avg")})*traffic_share/'
-                         f'concurrent_requests,1))*{zero_factor(minimum, t("off_5min_min"), t("off_5min_avg"))}'),
+        ("busiest_hour_replicas", busiest_hour_replicas(minimum, t)),
+        ("sim_replicas", f'IF(sizing_basis="BUSIEST_HOUR",{t("busiest_hour_replicas")},MAX({minimum},CEILING(IF('
+                         f'sizing_basis="PEAK",{t("tps_peak")},{t("tps_avg")})*traffic_share/concurrent_requests,1))*'
+                         f'{zero_factor(minimum, t("off_5min_min"), t("off_5min_avg"))})'),
         ("replica_seconds", f'{t("days")}*3600*{t("sim_replicas")}')]
     formula_table(sheet, "Traffic", formulas, count)
     widths(sheet, [header for header, _ in formulas])
@@ -515,11 +531,11 @@ def apart(chart):
         chart.legend.overlay = False
 
 
-def hour_axis(chart):
+def hour_axis(chart, step=HOUR_LABEL_STEP):
     """Show both axes (openpyxl 3.1 hides them by default), an hour label every HOUR_LABEL_STEP, whole numbers on
     the value axis and the legend below, none of them on the plot."""
     chart.x_axis.delete, chart.y_axis.delete = False, False
-    chart.x_axis.tickLblSkip = chart.x_axis.tickMarkSkip = HOUR_LABEL_STEP
+    chart.x_axis.tickLblSkip = chart.x_axis.tickMarkSkip = step
     chart.y_axis.number_format = "0"
     chart.legend = Legend()
     chart.legend.position = "b"
@@ -698,10 +714,10 @@ def write_calculator(sheet, default_scope):
 
     top = 13
     block_headers = ["TPS min", "TPS average", "TPS peak", "Replicas today", "Replicas by peak",
-                     "Replicas by average", "Chosen"]
+                     "Replicas by busiest hour", "Replicas by average", "Chosen"]
     headers = ["Hour"] + ["Weekday " + block_headers[0]] + block_headers[1:] + \
         ["Weekend " + block_headers[0]] + block_headers[1:]
-    sheet.cell(row=top - 1, column=1, value="Replicas per \"micro\"-service each hour (by peak and by average; "
+    sheet.cell(row=top - 1, column=1, value="Replicas per \"micro\"-service each hour (by peak, by busiest hour and by average; "
                                             "Chosen: yellow, change it; it starts as sizing_basis)").font = BOLD
     for column, header in enumerate(headers, start=1):
         sheet.cell(row=top, column=column, value=header).font = BOLD
@@ -717,22 +733,26 @@ def write_calculator(sheet, default_scope):
             minimum = f"IF(SUMIFS(TrafficData[office],{where})>0,min_replicas_office,min_replicas_offhours)"
             average, peak = (get_column_letter(2 + block + offset) for offset in (1, 2))
             off = {name: f"SUMIFS(TrafficData[{name}],{where})" for name in ("off_5min_min", "off_5min_avg")}
-            for offset, tps, basis in ((4, peak, "TRUE"), (5, average, "FALSE")):
+            for offset, tps, basis in ((4, peak, "TRUE"), (6, average, "FALSE")):
                 factor = zero_factor(minimum, off["off_5min_min"], off["off_5min_avg"], basis)
                 sheet.cell(row=row, column=2 + block + offset,
                            value=f"=MAX({minimum},CEILING({tps}{row}*traffic_share/concurrent_requests,1))*{factor}"
                            ).number_format = "0.##"
-            by_peak, by_average = (get_column_letter(2 + block + offset) for offset in (4, 5))
-            chosen = sheet.cell(row=row, column=8 + block,
-                                value=f'=IF(sizing_basis="PEAK",{by_peak}{row},{by_average}{row})')
+            traffic = f'Traffic[scope],$B$2,Traffic[day_type],"{day_type}",Traffic[hour],$A{row}'
+            sheet.cell(row=row, column=2 + block + 5,
+                       value=f"=SUMIFS(Traffic[busiest_hour_replicas],{traffic})").number_format = "0.##"
+            by_peak, by_busiest, by_average = (get_column_letter(2 + block + offset) for offset in (4, 5, 6))
+            chosen = sheet.cell(row=row, column=9 + block,
+                                value=f'=IF(sizing_basis="PEAK",{by_peak}{row},IF(sizing_basis="BUSIEST_HOUR",'
+                                      f'{by_busiest}{row},{by_average}{row}))')
             chosen.fill, chosen.number_format = EDITABLE, "0.##"
     last = top + 24
     cost_top = last + 2
     sheet.cell(row=cost_top, column=1, value="Monthly cost (US$ list price unless said)").font = BOLD
-    for column, header in ((2, "By peak"), (3, "By average"), (4, "Chosen")):
+    for column, header in ((2, "By peak"), (3, "By busiest hour"), (4, "By average"), (5, "Chosen")):
         sheet.cell(row=cost_top, column=column, value=header).font = BOLD
     seconds = lambda wd, we: f"(SUM({wd}{top + 1}:{wd}{last})*weekdays+SUM({we}{top + 1}:{we}{last})*weekend_days)*3600"
-    grid = {2: ("F", "M"), 3: ("G", "N"), 4: ("H", "O")}  # cost column -> its weekday and weekend replica columns
+    grid = {2: ("F", "N"), 3: ("G", "O"), 4: ("H", "P"), 5: ("I", "Q")}  # cost column -> its replica columns
     each = lambda formula: {column: formula(get_column_letter(column), column) for column in grid}
     meters = [("Replica-seconds per \"micro\"-service", each(lambda x, column: seconds(*grid[column])), "#,##0"),
               ("Compute (vCPU + memory)", each(lambda x, _: f"{x}{cost_top + 1}*$B$7"), USD),
@@ -751,10 +771,11 @@ def write_calculator(sheet, default_scope):
         for column, formula in formulas.items():
             sheet.cell(row=cost_top + offset, column=column, value="=" + formula).number_format = fmt
     sheet.cell(row=cost_top + len(meters) + 2, column=1,
-               value="By peak is the conservative figure (the one presented); by average, the optimistic one.")
+               value="By peak is the figure presented, the most conservative; by busiest hour replays each hour's "
+                     "busiest occurrence in the month 5 minutes at a time; by average is the optimistic one.")
     for offset, text in enumerate(SCALE_TO_ZERO_NOTE, start=3):
         sheet.cell(row=cost_top + len(meters) + offset, column=1, value=text)
-    for block, title, anchor in ((0, "Weekday TPS by hour", "Q2"), (BLOCK, "Weekend TPS by hour", "Q20")):
+    for block, title, anchor in ((0, "Weekday TPS by hour", "S2"), (BLOCK, "Weekend TPS by hour", "S20")):
         chart = LineChart()
         chart.title, chart.height, chart.width = title, 8, 16
         chart.y_axis.title, chart.x_axis.title = "TPS", "Hour"
@@ -769,17 +790,55 @@ def write_calculator(sheet, default_scope):
     replicas_chart.type, replicas_chart.title, replicas_chart.height, replicas_chart.width = \
         "col", "Chosen replicas per \"micro\"-service", 8, 16
     replicas_chart.y_axis.title, replicas_chart.x_axis.title = "Replicas", "Hour"
-    for column, name in ((8, "Weekday"), (8 + BLOCK, "Weekend")):
+    for column, name in ((9, "Weekday"), (9 + BLOCK, "Weekend")):
         replicas_chart.add_data(Reference(sheet, min_col=column, min_row=top + 1, max_row=last))
         replicas_chart.series[-1].tx = SeriesLabel(v=name)
     replicas_chart.set_categories(Reference(sheet, min_col=1, min_row=top + 1, max_row=last))
     hour_axis(replicas_chart)
-    sheet.add_chart(replicas_chart, "Q38")
+    sheet.add_chart(replicas_chart, "S38")
+    write_five_minutes(sheet, top)
     sheet.column_dimensions["A"].width = 40
-    for column in "BCDEFGHIJKLMNO":
+    for column in "BCDEFGHIJKLMNOPQ":
         sheet.column_dimensions[column].width = 13
 
 
+
+
+def write_five_minutes(sheet, top, left=FIVE_MINUTES_COLUMN):
+    """Every 5 minutes of the day: the TPS of each hour's busiest occurrence in the month next to the hour's peak and average (the
+    hour grid's), for weekday and weekend, and a chart of each."""
+    sheet.cell(row=top - 1, column=left, value="Every 5 minutes (busiest hour of the month for each hour)").font = BOLD
+    headers = ["Time", "Weekday busiest hour", "Weekday peak", "Weekday average", "Weekend busiest hour",
+               "Weekend peak", "Weekend average"]
+    for offset, header in enumerate(headers):
+        sheet.cell(row=top, column=left + offset, value=header).font = BOLD
+    for hour in range(24):
+        hour_row = top + 1 + hour
+        for bucket, name in enumerate(model.BUSIEST_COLUMNS):
+            row = top + 1 + hour * BUCKETS + bucket
+            sheet.cell(row=row, column=left, value=f"{hour:02d}:{bucket * 5:02d}")
+            for offset, (block, day_type) in enumerate(((0, "weekday"), (BLOCK, "weekend"))):
+                where = f'TrafficData[scope],$B$2,TrafficData[day_type],"{day_type}",TrafficData[hour],{hour}'
+                values = [f"=SUMIFS(TrafficData[{name}],{where})",
+                          f"=${get_column_letter(4 + block)}${hour_row}", f"=${get_column_letter(3 + block)}${hour_row}"]
+                for index, value in enumerate(values):
+                    sheet.cell(row=row, column=left + 1 + offset * 3 + index, value=value).number_format = "0.00"
+    last = top + 24 * BUCKETS
+    for offset, (title, anchor) in enumerate((("Weekday every 5 minutes: busiest hour, peak and average", "S56"),
+                                              ("Weekend every 5 minutes: busiest hour, peak and average", "S74"))):
+        chart = LineChart()
+        chart.title, chart.height, chart.width = title, 8, 24
+        chart.y_axis.title, chart.x_axis.title = "TPS", "Hour"
+        first = left + 1 + offset * 3
+        chart.add_data(Reference(sheet, min_col=first, max_col=first + 2, min_row=top + 1, max_row=last))
+        for series, name in zip(chart.series, ("Busiest hour", "Peak of the hour", "Average of the hour")):
+            series.tx = SeriesLabel(v=name)
+            series.smooth = False
+        chart.set_categories(Reference(sheet, min_col=left, min_row=top + 1, max_row=last))
+        hour_axis(chart, step=HOUR_LABEL_STEP * BUCKETS)
+        sheet.add_chart(chart, anchor)
+    for offset in range(len(headers)):
+        sheet.column_dimensions[get_column_letter(left + offset)].width = 12
 
 
 def write_criteria(sheet, count):

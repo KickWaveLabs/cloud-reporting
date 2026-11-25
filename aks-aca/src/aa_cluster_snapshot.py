@@ -22,6 +22,9 @@ Hourly profile per scope (cluster or application) and day type (weekday Monday t
                                     5 minutes of the hour (an upper bound: APIs do not peak at the same minute)
   replicas_today_avg / _max         Container Insights replicas per "micro"-service of the scope at that hour
                                     (average over its "micro"-services), when aks_workloads_hourly_profile.csv exists
+  busiest_hour_5min_00 ... _55      TPS of each 5-minute bucket (:00 to :55) of that hour's busiest occurrence in
+                                    the month (the day it had the most requests): the BUSIEST_HOUR sizing of the
+                                    model
   off_5min_min / off_5min_avg       5-minute buckets of that hour Container Apps could spend at zero replicas: no
                                     traffic in the bucket nor in the one before (the 5-minute cooldown before it
                                     scales in). A bucket has traffic when any API or entry point of the scope had a
@@ -31,7 +34,10 @@ Hourly profile per scope (cluster or application) and day type (weekday Monday t
 
 Outputs (in --output-dir, results/aa-cluster-snapshot by default):
   cluster_criteria_input.csv   PROD application cluster: application, BIA, "micro"-services (cluster and
-                               application), traffic layer and figures, cost, the inputs of every v2 criterion
+                               application), traffic layer and figures, cost, the inputs of every v2 criterion, and
+                               exact_replica_seconds: replica-seconds per "micro"-service Container Apps would run
+                               replaying every 5-minute bucket of the month with the model's default variables (a
+                               reference for how conservative each sizing is; it does not follow the workbook)
   traffic_hourly_profile.csv   scope x day type x hour, as above
   api_cluster_map.csv          PROD AKS API -> cluster and how it was attributed
   cluster_snapshot_summary.json
@@ -45,8 +51,11 @@ import re
 from collections import defaultdict
 from datetime import date, datetime
 
+import math
+
 import aa_common as aa
 import aa_k8s_snapshot as snap
+import aa_v2_model as model
 
 azure = aa.azure
 INGRESS_HOST = re.compile(r"^azingress(?P<code>[a-z0-9]+?)(?P<region>eu2|cu1|sc1)(?P<number>\d{2})\.")
@@ -103,6 +112,26 @@ def choose_layer(requests_by_layer):
 
 
 BUCKETS = 12  # 5-minute buckets in an hour
+BUSIEST_COLUMNS = [f"busiest_hour_5min_{minute:02d}" for minute in range(0, 60, 5)]
+
+
+def exact_replica_seconds(month, series, variables):
+    """Replica-seconds per "micro"-service of a scope in the month, replaying every 5-minute bucket with the HTTP
+    scale rule: replicas = max(minimum, ceiling(TPS x traffic_share / concurrent_requests)), where a bucket keeps
+    the replicas of the one before (5 minutes before Container Apps scales in)."""
+    total, previous_tps = 0.0, 0.0
+    for day in month_dates(month):
+        day_type = "weekday" if day.weekday() < 5 else "weekend"
+        for hour in range(24):
+            minimum = variables["min_replicas_office"] if is_office(day_type, hour) else \
+                variables["min_replicas_offhours"]
+            for requests in series.get((day, hour), (0, 0, [0.0] * BUCKETS))[2]:
+                tps = requests / 300
+                need = math.ceil(max(tps, previous_tps) * variables["traffic_share"] /
+                                 variables["concurrent_requests"] - 1e-9)
+                total += max(minimum, need) * 300
+                previous_tps = tps
+    return round(total)
 
 
 def month_dates(month):
@@ -130,14 +159,15 @@ def off_buckets(month, activity):
 def profile_rows(scope, scope_type, series, days, replicas, off):
     """24 x 2 rows for one scope from its hourly series {(date, hour): (requests, peak_5min)} and its off buckets."""
     by_slot = defaultdict(list)
-    for (day, hour), (requests, peak) in series.items():
-        by_slot[("weekday" if day.weekday() < 5 else "weekend", hour)].append((requests, peak))
+    for (day, hour), (requests, peak, buckets) in series.items():
+        by_slot[("weekday" if day.weekday() < 5 else "weekend", hour)].append((requests, peak, buckets))
     out = []
     for day_type in DAY_TYPES:
         for hour in range(24):
             values = by_slot.get((day_type, hour), [])
             count = days[day_type]
-            hourly = [requests for requests, _ in values] + [0] * max(count - len(values), 0)
+            hourly = [requests for requests, _, _ in values] + [0] * max(count - len(values), 0)
+            busiest = max(values, key=lambda value: value[0], default=(0, 0, [0] * BUCKETS))[2]
             today = replicas.get((day_type, hour), ("", ""))
             zero = off.get((day_type, hour)) or [0]
             out.append({"scope": scope, "scope_type": scope_type, "day_type": day_type, "hour": hour,
@@ -145,9 +175,10 @@ def profile_rows(scope, scope_type, series, days, replicas, off):
                         "tps_min": round(min(hourly) / 3600, 3) if hourly else 0,
                         "tps_avg": round(sum(hourly) / count / 3600, 3) if count else 0,
                         "tps_max_hour": round(max(hourly) / 3600, 3) if hourly else 0,
-                        "tps_peak": round(max((peak for _, peak in values), default=0) / 300, 3),
+                        "tps_peak": round(max((peak for _, peak, _ in values), default=0) / 300, 3),
                         "replicas_today_avg": today[0], "replicas_today_max": today[1],
-                        "off_5min_min": min(zero), "off_5min_avg": round(sum(zero) / len(zero), 2)})
+                        "off_5min_min": min(zero), "off_5min_avg": round(sum(zero) / len(zero), 2),
+                        **{name: round(value / 300, 3) for name, value in zip(BUSIEST_COLUMNS, busiest)}})
     return out
 
 
@@ -234,14 +265,17 @@ def main():
         cluster_id, code, layer = api_map.get((row["apim"], row["api_id"]), ("", "", ""))
         moment = datetime.strptime(row["hour_start"], "%Y-%m-%dT%H:%M")
         key = (moment.date(), moment.hour)
-        values = (snap.to_float(row["requests"]) or 0, snap.to_float(row["peak_5min_requests"]) or 0)
+        values = (snap.to_float(row["requests"]) or 0, snap.to_float(row["peak_5min_requests"]) or 0,
+                  [snap.to_float(value) or 0 for value in row["requests_5min"].split(";")] if
+                  row.get("requests_5min") else [0.0] * BUCKETS)
         mask = sum(1 << bucket for bucket, flag in enumerate(row.get("active_5min") or "1" * BUCKETS) if flag == "1")
         for scope in {cluster_id, code} - {""}:
             activity[scope][key] |= mask
         for scope, chosen in ((cluster_id, cluster_layer.get(cluster_id)), (code, app_layer.get(code))):
             if scope and layer and layer == chosen:
-                previous = series[scope].get(key, (0, 0))
-                series[scope][key] = (previous[0] + values[0], previous[1] + values[1])
+                previous = series[scope].get(key, (0, 0, [0.0] * BUCKETS))
+                series[scope][key] = (previous[0] + values[0], previous[1] + values[1],
+                                      [a + b for a, b in zip(previous[2], values[2])])
 
     # Replicas per "micro"-service by hour of day (Container Insights), averaged over the scope's "micro"-services.
     service_scope = {}
@@ -304,7 +338,9 @@ def main():
             "peak_tps": round(peak.get(row["cluster"], 0), 3) if layer else "",
             "event_driven": "YES" if aa.event_driven(layer) else "NO",
             "cost_month_usd": round(cost.get(cluster_id, 0), 2), "month": cost_month,
-            "no_traffic_reason": reason})
+            "no_traffic_reason": reason,
+            "exact_replica_seconds": exact_replica_seconds(month, series.get(cluster_id, {}), model.DEFAULTS)
+            if layer else ""})
     output = azure.Output(args.output_dir, ",")
     output.csv("cluster_criteria_input.csv", out)
     output.csv("traffic_hourly_profile.csv", profile)
