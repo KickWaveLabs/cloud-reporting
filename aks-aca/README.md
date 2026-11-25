@@ -98,8 +98,8 @@ python aks-aca/src/aa_workbook.py
 python aks-aca/src/aa_deck.py        # after opening the workbook in Excel and saving it
 python aks-aca/src/aa_deck_exec.py
 python aks-aca/src/aa_criteria_workbook.py
-python aks-aca/src/aa_criteria_workbook_v2.py   # criteria v2, after aa_cluster_snapshot.py
-python aks-aca/src/aa_deck_exec_v2.py           # corporate deck v2
+python aks-aca/src/aa_criteria_workbook_v2.py   # criteria v2, after aa_cluster_snapshot.py (--criteria v3 for v3)
+python aks-aca/src/aa_deck_exec_v2.py           # corporate deck v2 (--criteria v3 for v3)
 ```
 
 | Step | Scope by default | Time on 2026-11-10 | Check |
@@ -221,7 +221,7 @@ Subscriptions with "POC" in their name are left out by the inventory, so every l
 (`--include-poc` keeps them). Expected gaps with a Reader account (2026-11-10): 4 PROD clusters without
 Container Insights; one stopped PROD cluster without metrics.
 
-### Criteria v1 and v2
+### Criteria v1, v2 and v3
 
 - **v1** is frozen at git tag `v1` (2026-11-24): `aa_deck_exec.py` and `aa_criteria_workbook.py`, one row per
   application, Container Apps costed with today's office replicas. To rebuild it exactly: `git checkout v1`, copy
@@ -250,6 +250,16 @@ Container Insights; one stopped PROD cluster without metrics.
     in the one before, the 5-minute wait before it scales in). It needs `active_5min` in the metrics' hourly
     files, so rerun `aa_metrics.py` and `aa_cluster_snapshot.py` after updating.
   - The saving margin (`min_saving`, 10% by default) is applied at the end, not as a criterion.
+- **v2** is tagged `v2` (2026-11-25). **v3** is the same model, scripts and variables with other defaults
+  (`aa_v2_model.PRESETS["v3"]`, chosen with `--criteria v3` on the workbook and deck scripts; files end in `_v3`):
+  - `sizing_basis` BUSIEST_HOUR;
+  - `capacity_from_today`: the TPS one replica handles today on AKS at the peak hour (`tps_per_replica_today` in
+    the hourly profile) x `capacity_safety` (70%), never below `concurrent_requests`;
+  - `size_from_usage`: each "micro"-service's CPU and memory used per replica today x `usage_headroom` (2), never
+    above its request;
+  - `environment_fee`: the Dedicated plan management hour per environment (private endpoint or planned
+    maintenance), which lowers the saving.
+  Every switch can be turned on or off in either workbook's Variables.
 
 ## Tracing a figure
 

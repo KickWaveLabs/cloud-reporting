@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Write the criteria workbook v2: one row per PROD application cluster, a summary per application, the traffic of
+"""Write the criteria workbook v2 or v3 (--criteria; v3 is v2 with the PRESETS["v3"] defaults of aa_v2_model.py): one row per PROD application cluster, a summary per application, the traffic of
 each hour and a calculator where the replicas of every hour can be chosen.
 
 Same rules and cost model as aa_v2_model.py, written as Excel formulas over the same inputs (the module's docstring
@@ -64,10 +64,10 @@ CLUSTER_COLUMNS = ["cluster", "cod_app", "clusters_of_app", "bia", "microservice
 CLUSTER_NUMBERS = {"clusters_of_app", "microservices", "microservices_app", "microservices_app_projected",
                    "microservices_over_aca_size", "requests_month", "busiest_hour_tps", "peak_tps", "cost_month_usd"}
 TRAFFIC_COLUMNS = ["scope", "scope_type", "day_type", "hour", "office", "days", "tps_min", "tps_avg", "tps_max_hour",
-                   "tps_peak", "replicas_today_avg", "replicas_today_max", "off_5min_min", "off_5min_avg"] + \
+                   "tps_peak", "replicas_today_avg", "replicas_today_max", "off_5min_min", "off_5min_avg", "tps_per_replica_today"] + \
     model.BUSIEST_COLUMNS
 SERVICE_COLUMNS = ["cluster", "cod_app", "namespace", "deployment", "cpu_request_vcpu", "mem_request_gib",
-                   "replicas_today_office"]
+                   "replicas_today_office", "cpu_used_vcpu", "mem_used_gib"]
 GROUPS = [("AKS", "Stays on AKS (criteria)"), ("BELOW_MARGIN", "Meets criteria, saves less than the margin"),
           ("ACA_WITH_REVIEW", "ACA, with review"), ("ACA", "Candidate to ACA"),
           ("IN_USE", "In use, not measured"), ("NOT_IN_USE", "Not in use"), ("IN_DEVELOPMENT", "In development")]
@@ -86,7 +86,8 @@ BLOCK = 8  # Calculator: columns per day type (TPS min, average, peak, today, by
 #            chosen)
 FIVE_MINUTES_COLUMN = 36  # Calculator: column AJ, right of the charts
 HOUR_LABEL_STEP = 4  # hours 0, 4, 8 ... 20 on the charts: office hours are 8:00 to 19:59
-LISTS = {"sizing_basis": '"PEAK,BUSIEST_HOUR,AVERAGE"',
+LISTS = {"sizing_basis": '"PEAK,BUSIEST_HOUR,AVERAGE"', "capacity_from_today": '"NO,YES"',
+         "size_from_usage": '"NO,YES"', "environment_fee": '"NO,YES"',
          "aks_from_bia": '"NONE,MUY ALTA,ALTA,MEDIA,BAJA"'}
 BIA_ORDER = '{"BAJA","MEDIA","ALTA","MUY ALTA"}'  # lowest first; SIN BIA and NONE match none  # variables picked from a list
 BUCKETS = 12  # 5-minute buckets in an hour
@@ -104,7 +105,7 @@ def number(value):
     return model.to_float(value) if value not in ("", None) else None
 
 
-def write_variables(book, sheet, month, days):
+def write_variables(book, sheet, month, days, price_env_hour):
     blocks = [
         ("Criteria", [("max_tps", model.DEFAULTS["max_tps"], "Busiest hour up to this TPS (average of the hour)"),
                       ("max_services", model.DEFAULTS["max_services"], "Up to this many \"micro\"-services per cluster"),
@@ -126,14 +127,27 @@ def write_variables(book, sheet, month, days):
                                                                            "start)"),
             ("min_replicas_offhours", model.DEFAULTS["min_replicas_offhours"], "Minimum replicas per "
                                                                                "\"micro\"-service, the rest. 0 lets "
-                                                                               "it scale to zero: see the note below")]),
+                                                                               "it scale to zero: see the note below"),
+            ("capacity_from_today", model.DEFAULTS["capacity_from_today"],
+             "YES: TPS per replica = what one replica handles today on AKS (peak hour) x capacity_safety, never below "
+             "concurrent_requests (criteria v3)"),
+            ("capacity_safety", model.DEFAULTS["capacity_safety"], "Share of today's TPS per replica taken as capacity")]),
         ("Container Apps", [("requests_buffer", model.DEFAULTS["requests_buffer"], "Extra on the requests of the month"),
                             ("environments_per_cluster", model.DEFAULTS["environments_per_cluster"],
                              "Environments (one load balancer each) per cluster moved"),
                             ("hours_month", model.DEFAULTS["hours_month"], "Hours billed for the load balancer"),
                             ("min_vcpu", model.DEFAULTS["min_vcpu"], "Smallest replica in vCPU"),
                             ("vcpu_step", model.DEFAULTS["vcpu_step"], "Sizes go up in steps of this many vCPU"),
-                            ("gib_per_vcpu", model.DEFAULTS["gib_per_vcpu"], "GiB per vCPU")]),
+                            ("gib_per_vcpu", model.DEFAULTS["gib_per_vcpu"], "GiB per vCPU"),
+                            ("size_from_usage", model.DEFAULTS["size_from_usage"],
+                             "YES: each \"micro\"-service's CPU and memory = its use per replica today x "
+                             "usage_headroom, never above its request (criteria v3)"),
+                            ("usage_headroom", model.DEFAULTS["usage_headroom"], "Times today's use kept as size"),
+                            ("environment_fee", model.DEFAULTS["environment_fee"],
+                             "YES: add the Dedicated plan management fee per environment (private endpoint or planned "
+                             "maintenance; criteria v3)"),
+                            ("price_env_hour", price_env_hour, "Dedicated plan management, US$ per environment hour "
+                                                               "(Azure Retail Prices)")]),
         ("Money", [("bank_discount", model.DEFAULTS["bank_discount"], "Bank's discount on Azure list prices"),
                    ("igv", model.DEFAULTS["igv"], "IGV"), ("exchange_rate", model.DEFAULTS["exchange_rate"],
                                                          "Soles per US$")]),
@@ -150,7 +164,7 @@ def write_variables(book, sheet, month, days):
             sheet.cell(row=row, column=1, value=label)
             cell = sheet.cell(row=row, column=2, value=value)
             cell.fill = EDITABLE
-            if label in ("bank_discount", "igv", "min_saving", "traffic_share"):
+            if label in ("bank_discount", "igv", "min_saving", "traffic_share", "capacity_safety"):
                 cell.number_format = PCT
             sheet.cell(row=row, column=3, value=comment)
             if label in SOURCES:
@@ -216,7 +230,8 @@ def traffic_rows(profile):
 def service_rows(services, clusters):
     code = {row["cluster_id"]: row["cod_app"] for row in clusters}
     rows = [[row["cluster"], code[row["cluster_id"]], row["namespace"], row["deployment"],
-             number(row["cpu_request_vcpu"]), number(row["mem_request_gib"]), number(row["ci_replicas_avg_office"])]
+             number(row["cpu_request_vcpu"]), number(row["mem_request_gib"]), number(row["ci_replicas_avg_office"]),
+             number(row["ci_cpu_used_per_replica"]), number(row["ci_mem_used_gib_per_replica"])]
             for row in services if row["environment"] == "PROD"]
     return sorted(rows, key=lambda values: (values[0], values[3]))
 
@@ -313,13 +328,13 @@ in
 
 
 def query_services(folder):
-    numbers = ["cpu_request_vcpu", "mem_request_gib", "replicas_today_office"]
+    numbers = ["cpu_request_vcpu", "mem_request_gib", "replicas_today_office", "cpu_used_vcpu", "mem_used_gib"]
     return v1wb.query_head(folder) + f'''    Deployments = ReadCsv("aa-k8s-snapshot", "deployment_snapshot.csv"),
     Clusters = Table.SelectColumns(ReadCsv("aa-cluster-snapshot", "cluster_criteria_input.csv"), {{"cluster_id", "cod_app"}}),
     // Each PROD "micro"-service of a cluster of the v2 criteria, with the cluster's application
     MicroServices = Table.RemoveColumns(Table.SelectRows(Deployments, each [microservice] = "YES" and [environment] = "PROD"), {{"cod_app"}}, MissingField.Ignore),
     Joined = Table.ExpandTableColumn(Table.NestedJoin(MicroServices, {{"cluster_id"}}, Clusters, {{"cluster_id"}}, "c", JoinKind.Inner), "c", {{"cod_app"}}),
-    Renamed = Table.RenameColumns(Joined, {{{{"ci_replicas_avg_office", "replicas_today_office"}}}}),
+    Renamed = Table.RenameColumns(Joined, {{{{"ci_replicas_avg_office", "replicas_today_office"}}, {{"ci_cpu_used_per_replica", "cpu_used_vcpu"}}, {{"ci_mem_used_gib_per_replica", "mem_used_gib"}}}}),
     Columns = Table.SelectColumns(Renamed, {{{m_list(SERVICE_COLUMNS)}}}),
     Typed = {m_typed("Columns", numbers)},
     Sorted = Table.Sort(Typed, {{{{"cluster", Order.Ascending}}, {{"deployment", Order.Ascending}}}})
@@ -417,12 +432,19 @@ def zero_factor(minimum, off_min, off_avg, basis='sizing_basis="PEAK"'):
     return f'IF({minimum}=0,({BUCKETS}-IF({basis},{off_min},{off_avg}))/{BUCKETS},1)'
 
 
-def busiest_hour_replicas(minimum, cell):
+def capacity(today):
+    """TPS per replica: concurrent_requests, or with capacity_from_today today's TPS per replica x capacity_safety,
+    never below concurrent_requests."""
+    return (f'IF(AND(capacity_from_today="YES",N({today})>0),MAX(concurrent_requests,{today}*capacity_safety),'
+            'concurrent_requests)')
+
+
+def busiest_hour_replicas(minimum, cell, per_replica):
     """Replicas of the hour at its busiest occurrence in the month: the average of its 12 buckets of 5 minutes, each with
     max(minimum, ceiling(TPS x traffic_share / concurrent_requests)), a bucket keeping the replicas of the one before
     (5 minutes before Container Apps scales in). cell(column) is a bucket's TPS."""
     columns = model.BUSIEST_COLUMNS
-    terms = [f"MAX({minimum},CEILING(MAX({cell(now)},{cell(before)})*traffic_share/concurrent_requests,1))"
+    terms = [f"MAX({minimum},CEILING(MAX({cell(now)},{cell(before)})*traffic_share/{per_replica},1))"
              for now, before in zip(columns, columns[:1] + columns[:-1])]
     return f"({'+'.join(terms)})/{BUCKETS}"
 
@@ -431,12 +453,13 @@ def write_traffic(sheet, count):
     """Traffic: the TrafficData query read row by row, and the replicas simulated each hour."""
     t = lambda column: r("Traffic", column)
     pulled = ["scope", "scope_type", "day_type", "hour", "office", "days", "tps_avg", "tps_peak", "off_5min_min",
-              "off_5min_avg"] + model.BUSIEST_COLUMNS
+              "off_5min_avg", "tps_per_replica_today"] + model.BUSIEST_COLUMNS
     minimum = f'IF({t("office")}=1,min_replicas_office,min_replicas_offhours)'
     formulas = [(column, pull("TrafficData", column)) for column in pulled] + [
-        ("busiest_hour_replicas", busiest_hour_replicas(minimum, t)),
+        ("capacity", capacity(t("tps_per_replica_today"))),
+        ("busiest_hour_replicas", busiest_hour_replicas(minimum, t, t("capacity"))),
         ("sim_replicas", f'IF(sizing_basis="BUSIEST_HOUR",{t("busiest_hour_replicas")},MAX({minimum},CEILING(IF('
-                         f'sizing_basis="PEAK",{t("tps_peak")},{t("tps_avg")})*traffic_share/concurrent_requests,1))*'
+                         f'sizing_basis="PEAK",{t("tps_peak")},{t("tps_avg")})*traffic_share/{t("capacity")},1))*'
                          f'{zero_factor(minimum, t("off_5min_min"), t("off_5min_avg"))})'),
         ("replica_seconds", f'{t("days")}*3600*{t("sim_replicas")}')]
     formula_table(sheet, "Traffic", formulas, count)
@@ -447,7 +470,12 @@ def service_cost(match):
     """US$ per second of one replica of each "micro"-service where match (an array condition on Services) holds:
     Container Apps size = the largest of the CPU request, memory / gib_per_vcpu and min_vcpu, up to vcpu_step (MAX
     written as (a+b+|a-b|)/2 so SUMPRODUCT applies it row by row)."""
-    cpu, mem = "Services[cpu_request_vcpu]", "Services[mem_request_gib]/gib_per_vcpu"
+    # With size_from_usage the request comes down to the use x usage_headroom when lower (and the use is known):
+    # request - (switch) x (use > 0) x max(0, request - use x headroom), all arithmetic for SUMPRODUCT.
+    lower = lambda request, used: (f'({request}-(size_from_usage="YES")*({used}>0)*(({request}-{used}*usage_headroom)'
+                                   f'+ABS({request}-{used}*usage_headroom))/2)')
+    cpu = lower("Services[cpu_request_vcpu]", "Services[cpu_used_vcpu]")
+    mem = lower("Services[mem_request_gib]", "Services[mem_used_gib]") + "/gib_per_vcpu"
     larger = f"(({cpu})+({mem})+ABS(({cpu})-({mem})))/2"
     size = f"CEILING(({larger}+min_vcpu+ABS({larger}-min_vcpu))/2,vcpu_step)"
     return f"SUMPRODUCT(({match})*{size}*(price_vcpu+gib_per_vcpu*price_gib))"
@@ -474,7 +502,8 @@ def criteria_formulas():
         ("usd_per_second", service_cost(f'Services[cluster]={c("cluster")}')),
         ("aca_list_usd", f'{c("replica_seconds")}*{c("usd_per_second")}+IF({c("event_driven")}="YES",0,'
                          f'N({c("requests_month")}))*requests_buffer/1000000*price_requests'
-                         '+environments_per_cluster*hours_month*price_lb_hour'),
+                         '+environments_per_cluster*hours_month*(price_lb_hour+IF(environment_fee="YES",'
+                         'price_env_hour,0))'),
         ("aca_month_pen", f'{c("aca_list_usd")}*(1-bank_discount)*(1+igv)*exchange_rate'),
         ("aks_month_pen", f'N({c("cost_month_usd")})*(1+igv)*exchange_rate'),
         ("saving_month_pen", f'{c("aks_month_pen")}-{c("aca_month_pen")}'),
@@ -736,7 +765,8 @@ def write_calculator(sheet, default_scope):
             for offset, tps, basis in ((4, peak, "TRUE"), (6, average, "FALSE")):
                 factor = zero_factor(minimum, off["off_5min_min"], off["off_5min_avg"], basis)
                 sheet.cell(row=row, column=2 + block + offset,
-                           value=f"=MAX({minimum},CEILING({tps}{row}*traffic_share/concurrent_requests,1))*{factor}"
+                           value=f"=MAX({minimum},CEILING({tps}{row}*traffic_share/"
+                                 f"{capacity(f'SUMIFS(TrafficData[tps_per_replica_today],{where})')},1))*{factor}"
                            ).number_format = "0.##"
             traffic = f'Traffic[scope],$B$2,Traffic[day_type],"{day_type}",Traffic[hour],$A{row}'
             sheet.cell(row=row, column=2 + block + 5,
@@ -758,7 +788,8 @@ def write_calculator(sheet, default_scope):
               ("Compute (vCPU + memory)", each(lambda x, _: f"{x}{cost_top + 1}*$B$7"), USD),
               ("Requests", each(lambda x, _: "N($B$8)*requests_buffer/1000000*price_requests"), USD),
               ("Environment (load balancer)",
-               each(lambda x, _: "$B$6*environments_per_cluster*hours_month*price_lb_hour"), USD),
+               each(lambda x, _: "$B$6*environments_per_cluster*hours_month*(price_lb_hour+IF(environment_fee="
+                                 '"YES",price_env_hour,0))'), USD),
               ("Total list price", each(lambda x, _: f"SUM({x}{cost_top + 2}:{x}{cost_top + 4})"), USD),
               ("Container Apps with discount and IGV (S/)",
                each(lambda x, _: f"{x}{cost_top + 5}*(1-bank_discount)*(1+igv)*exchange_rate"), PEN),
@@ -1003,7 +1034,7 @@ def write_latency(book, sheet, app_count, default_app):
         sheet.column_dimensions[column].width = width
 
 
-def build(results, output):
+def build(results, output, criteria="v2"):
     data = model.load(results)
     clusters = data["clusters"]
     days = {row["day_type"]: int(row["days"]) for row in data["profile"]}
@@ -1015,7 +1046,7 @@ def build(results, output):
     for index, name in enumerate(names):
         sheets[name] = book.active if index == 0 else book.create_sheet(name)
     sheets["Results"].title = "Results"
-    write_variables(book, sheets["Variables"], month, days)
+    write_variables(book, sheets["Variables"], month, days, data["prices"]["price_env_hour"])
     v1wb.write_prices(book, sheets["Prices"], v1wb.prices_rows(results))
     clusters_data = cluster_rows(clusters)
     traffic_data = traffic_rows(data["profile"])
@@ -1057,22 +1088,26 @@ def build(results, output):
         ("Lists", "Scopes", "Scopes", query_scopes(folder), ["scope"]),
         ("Apps", "AppList", "AppList", query_apps(folder), ["cod_app"]),
         ("AllClusters", "AllClusters", "AllClusters", query_all_clusters(folder), ALL_CLUSTER_COLUMNS)])
-    aa.azure.LOG.info("Wrote %s (%d clusters, 8 Power Query connections to %s)", output, len(clusters), folder)
+    aa.azure.LOG.info("Wrote %s (criteria %s, %d clusters, 8 Power Query connections to %s)", output, criteria,
+                      len(clusters), folder)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--results", default=aa.RESULTS_DIR, help="Folder with the aa-<source> result folders")
+    parser.add_argument("--criteria", choices=sorted(model.PRESETS), default="v2",
+                        help="Default values of the variables: criteria v2 or v3 (aa_v2_model.PRESETS)")
     parser.add_argument("--output", default=None,
-                        help="Output .xlsx. Default: aks_aca_criteria_v2.xlsx in the newest reports/<date>-aks-aca")
+                        help="Output .xlsx. Default: aks_aca_criteria_<criteria>.xlsx in the newest reports/<date>-aks-aca")
     args = parser.parse_args()
     aa.azure.setup_logging(False)
+    model.use(args.criteria)
     output = args.output
     if not output:
         folders = sorted(glob.glob(os.path.join(aa.TOPIC_DIR, "reports", "*-aks-aca")))
         folder = folders[-1] if folders else os.path.join(aa.TOPIC_DIR, "reports", "aks-aca")
-        output = os.path.join(folder, "aks_aca_criteria_v2.xlsx")
-    build(args.results, output)
+        output = os.path.join(folder, f"aks_aca_criteria_{args.criteria}.xlsx")
+    build(args.results, output, args.criteria)
 
 
 if __name__ == "__main__":

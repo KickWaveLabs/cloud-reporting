@@ -22,6 +22,9 @@ Hourly profile per scope (cluster or application) and day type (weekday Monday t
                                     5 minutes of the hour (an upper bound: APIs do not peak at the same minute)
   replicas_today_avg / _max         Container Insights replicas per "micro"-service of the scope at that hour
                                     (average over its "micro"-services), when aks_workloads_hourly_profile.csv exists
+  tps_per_replica_today             TPS one replica of each "micro"-service handles today on AKS: the scope's peak hour
+                                    TPS / its replicas today at that hour (the same on every row of the scope); the
+                                    criteria v3 size Container Apps replicas with it
   busiest_hour_5min_00 ... _55      TPS of each 5-minute bucket (:00 to :55) of that hour's busiest occurrence in
                                     the month (the day it had the most requests): the BUSIEST_HOUR sizing of the
                                     model
@@ -179,6 +182,11 @@ def profile_rows(scope, scope_type, series, days, replicas, off):
                         "replicas_today_avg": today[0], "replicas_today_max": today[1],
                         "off_5min_min": min(zero), "off_5min_avg": round(sum(zero) / len(zero), 2),
                         **{name: round(value / 300, 3) for name, value in zip(BUSIEST_COLUMNS, busiest)}})
+    measured = [row for row in out if snap.to_float(row["replicas_today_avg"])]
+    top = max(measured, key=lambda row: row["tps_peak"], default=None)
+    per_replica = round(top["tps_peak"] / snap.to_float(top["replicas_today_avg"]), 3) if top else ""
+    for row in out:
+        row["tps_per_replica_today"] = per_replica
     return out
 
 

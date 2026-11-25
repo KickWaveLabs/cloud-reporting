@@ -32,6 +32,13 @@ Container Apps cost of a cluster (US$ a month, list price):
                     size x (price per vCPU-s + GIB_PER_VCPU x price per GiB-s); size as v1 (aca_size)
   requests        = requests of the month x REQUESTS_BUFFER / 1e6 x price per million (0 when event-driven)
   environment     = ENVIRONMENTS_PER_CLUSTER x HOURS_MONTH x Standard load balancer hour
+  (+ ENVIRONMENT_FEE: ENVIRONMENTS_PER_CLUSTER x HOURS_MONTH x Dedicated plan management hour, charged when the
+   environment has a private endpoint or planned maintenance)
+Criteria v3 is this model with the PRESETS["v3"] values (use("v3")): each hour's busiest occurrence replayed every 5
+minutes; replicas sized by what one replica handles today on AKS (CAPACITY_FROM_TODAY: TPS per replica at the peak
+hour x CAPACITY_SAFETY, never below CONCURRENT_REQUESTS); each "micro"-service's size from its measured use
+(SIZE_FROM_USAGE: CPU and memory used per replica x USAGE_HEADROOM, never above its request); and the environment
+fee. v2 keeps them all off.
 With the bank's discount and IGV in soles: x (1 - BANK_DISCOUNT) x (1 + IGV) x EXCHANGE_RATE.
 """
 
@@ -47,14 +54,27 @@ DEFAULTS = {
     "concurrent_requests": 10, "traffic_share": 1.0, "sizing_basis": "PEAK",
     "min_replicas_office": 1, "min_replicas_offhours": 1,
     "aks_from_bia": "NONE",
+    "capacity_from_today": "NO", "capacity_safety": 0.7, "size_from_usage": "NO", "usage_headroom": 2.0,
+    "environment_fee": "NO",
     "requests_buffer": v1.REQUESTS_BUFFER, "environments_per_cluster": 1, "hours_month": v1.HOURS_MONTH,
     "min_vcpu": v1.ACA_MIN_VCPU, "vcpu_step": 0.25, "gib_per_vcpu": 2,
     "bank_discount": v1.BANK_DISCOUNT, "igv": v1.IGV, "exchange_rate": v1.EXCHANGE_RATE,
 }
+BASE_DEFAULTS = dict(DEFAULTS)
 CRITICAL_BIA = ("MUY ALTA", "ALTA")
 BIA_LEVELS = ["BAJA", "MEDIA", "ALTA", "MUY ALTA"]  # lowest first; SIN BIA is below them all
 PRICE_KEYS = {"price_vcpu": "aca_vcpu_active_s", "price_gib": "aca_mem_active_gib_s",
-              "price_requests": "aca_requests_million", "price_lb_hour": "lb_standard_rules_hour"}
+              "price_requests": "aca_requests_million", "price_lb_hour": "lb_standard_rules_hour",
+              "price_env_hour": "aca_env_management_hour"}
+PRESETS = {"v2": {}, "v3": {"sizing_basis": "BUSIEST_HOUR", "capacity_from_today": "YES", "size_from_usage": "YES",
+                            "environment_fee": "YES"}}
+
+
+def use(criteria):
+    """Make DEFAULTS those of criteria v2 or v3 (the deck and the workbook read DEFAULTS)."""
+    DEFAULTS.update(BASE_DEFAULTS)
+    DEFAULTS.update(PRESETS[criteria])
+    return criteria
 GROUP_OF_REASON = {"IN_DEVELOPMENT": "IN_DEVELOPMENT", "IN_USE_NOT_MEASURED": "IN_USE"}
 
 
@@ -62,8 +82,14 @@ def to_float(value):
     return v1.to_float(value)
 
 
-def size_vcpu(cpu, mem_gib, variables):
-    """vCPU of the smallest Container Apps replica that covers the request (as v1, with the variables)."""
+def size_vcpu(cpu, mem_gib, variables, cpu_used=None, mem_used=None):
+    """vCPU of the smallest Container Apps replica that covers the request (as v1, with the variables); with
+    size_from_usage, the request comes down to the measured use x usage_headroom when that is lower."""
+    if variables["size_from_usage"] == "YES":
+        if cpu_used:
+            cpu = min(cpu or 0, cpu_used * variables["usage_headroom"])
+        if mem_used:
+            mem_gib = min(mem_gib or 0, mem_used * variables["usage_headroom"])
     step = variables["vcpu_step"]
     need = max(cpu or 0, (mem_gib or 0) / variables["gib_per_vcpu"], variables["min_vcpu"])
     return math.ceil(need / step - 1e-9) * step
@@ -89,8 +115,17 @@ BUSIEST_COLUMNS = [f"busiest_hour_5min_{minute:02d}" for minute in range(0, 60, 
 SIZING_BASES = ("PEAK", "BUSIEST_HOUR", "AVERAGE")
 
 
-def need(tps, variables):
-    return math.ceil(tps * variables["traffic_share"] / variables["concurrent_requests"] - 1e-9)
+def capacity(row, variables):
+    """TPS per replica before Container Apps adds one: concurrent_requests, or with capacity_from_today what one
+    replica handles today on AKS x capacity_safety, never below concurrent_requests."""
+    today = to_float(row.get("tps_per_replica_today"))
+    if variables["capacity_from_today"] == "YES" and today:
+        return max(variables["concurrent_requests"], today * variables["capacity_safety"])
+    return variables["concurrent_requests"]
+
+
+def need(tps, variables, per_replica):
+    return math.ceil(tps * variables["traffic_share"] / per_replica - 1e-9)
 
 
 def replicas(row, variables):
@@ -99,11 +134,11 @@ def replicas(row, variables):
     minimum = variables["min_replicas_office"] if row["office"] in ("1", 1) else variables["min_replicas_offhours"]
     if variables["sizing_basis"] == "BUSIEST_HOUR":  # zeros are in the buckets themselves
         tps = [to_float(row.get(name)) or 0 for name in BUSIEST_COLUMNS]
-        return sum(max(minimum, need(max(now, before), variables))
+        return sum(max(minimum, need(max(now, before), variables, capacity(row, variables)))
                    for now, before in zip(tps, tps[:1] + tps[:-1])) / BUCKETS
     peak = variables["sizing_basis"] == "PEAK"
     tps = to_float(row["tps_peak"] if peak else row["tps_avg"]) or 0
-    count = max(minimum, need(tps, variables))
+    count = max(minimum, need(tps, variables, capacity(row, variables)))
     if minimum == 0:  # scale to zero allowed: the buckets without traffic are not billed
         off = to_float(row.get("off_5min_min" if peak else "off_5min_avg")) or 0
         return count * (BUCKETS - off) / BUCKETS
@@ -144,7 +179,8 @@ def evaluate(data, variables=None):
     prices = data["prices"]
     unit = defaultdict(float)  # cluster -> US$ per second of one replica of every "micro"-service
     for row in data["services"]:
-        size = size_vcpu(to_float(row["cpu_request_vcpu"]), to_float(row["mem_request_gib"]), variables)
+        size = size_vcpu(to_float(row["cpu_request_vcpu"]), to_float(row["mem_request_gib"]), variables,
+                         to_float(row.get("ci_cpu_used_per_replica")), to_float(row.get("ci_mem_used_gib_per_replica")))
         unit[data["names"][row["cluster_id"]]] += size * (prices["price_vcpu"] + variables["gib_per_vcpu"] *
                                                           prices["price_gib"])
     replica_seconds = defaultdict(float)
@@ -158,7 +194,9 @@ def evaluate(data, variables=None):
         requests = 0 if row["event_driven"] == "YES" else (to_float(row["requests_month"]) or 0)
         compute = replica_seconds[row["cluster"]] * unit[row["cluster"]]
         aca_list = (compute + requests * variables["requests_buffer"] / 1e6 * prices["price_requests"]
-                    + variables["environments_per_cluster"] * variables["hours_month"] * prices["price_lb_hour"])
+                    + variables["environments_per_cluster"] * variables["hours_month"] * (
+                        prices["price_lb_hour"] + (prices["price_env_hour"] if variables["environment_fee"] == "YES"
+                                                   else 0)))
         aca = aca_list * (1 - variables["bank_discount"]) * soles
         exact = to_float(row.get("exact_replica_seconds"))  # reference, with the default variables
         aca_exact = None if exact is None else \

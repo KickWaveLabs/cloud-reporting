@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Build the corporate deck v2 from the criteria v2 model (aa_v2_model.py): the decision per cluster and the
-Container Apps cost from each hour's traffic.
+"""Build the corporate deck v2 or v3 (--criteria) from the criteria model (aa_v2_model.py; v3 is v2 with its
+PRESETS["v3"] defaults): the decision per cluster and the Container Apps cost from each hour's traffic.
 
 Slides 1 and 2 are v1's (aa_deck_exec.py, frozen at tag v1). Then:
   3  hypothesis, with the real example costed by the v2 model
@@ -8,8 +8,8 @@ Slides 1 and 2 are v1's (aa_deck_exec.py, frozen at tag v1). Then:
   5  how a cluster is sized: the example's traffic by hour (min / average / peak) and its replicas
   6  result per cluster (groups of the v2 workbook's Results sheet)
   7  saving: what moving the clusters of the ACA groups saves a month and a year
-Reads only results/ (run aa_cluster_snapshot.py first). Output: aks_aca_corporate_v2.pptx in the newest
-reports/<date>-aks-aca folder (or --output); next to it, cluster_decisions_v2.csv with every cluster's figures.
+Reads only results/ (run aa_cluster_snapshot.py first). Output: aks_aca_corporate_<criteria>.pptx in the newest
+reports/<date>-aks-aca folder (or --output); next to it, cluster_decisions_<criteria>.csv with every cluster's figures.
 """
 
 import argparse
@@ -45,6 +45,27 @@ SIZING_SOURCES = ("Escalado de Container Apps (1 réplica más por cada 10 solic
                   "para evitar el arranque en frío: Microsoft Learn.")
 
 
+CRITERIA = {"name": "v2"}  # set by main (--criteria)
+
+
+def sizing(where):
+    """How replicas are sized, in the slides' words: v2's sentences as presented, v3's for its sizing."""
+    per = model.DEFAULTS["concurrent_requests"]
+    texts = {
+        "v2": {"example": f"1 por cada {per} TPS de cada hora, mínimo 1 por {MICRO_ONE}.",
+               "criteria": f"1 réplica por cada {per} TPS en el pico de cada hora (regla de escalado de Azure), mínimo "
+                           f"1 por {MICRO_ONE}.",
+               "traffic": f"Réplicas = 1 por cada {per} TPS del pico de la hora, mínimo 1.",
+               "cost": f"Según el tráfico de cada hora: 1 por cada {per} TPS, mínimo 1"},
+        "v3": {"example": f"cada 5 minutos con la capacidad por réplica medida hoy, mínimo 1 por {MICRO_ONE}.",
+               "criteria": f"Cada 5 minutos de la hora más cargada del mes, con lo que hoy atiende una réplica en AKS "
+                           f"(al menos {per} TPS, regla de escalado de Azure); mínimo 1 por {MICRO_ONE}.",
+               "traffic": f"Réplicas cada 5 minutos de la hora más cargada del mes, con la capacidad medida hoy (al "
+                          f"menos {per} TPS por réplica), mínimo 1.",
+               "cost": "Cada 5 min según el tráfico y la capacidad medida; mínimo 1"}}
+    return texts[CRITERIA["name"]][where]
+
+
 def pen(value):
     """Soles already with IGV -> 'S/ 1.234'."""
     return f"S/ {value:,.0f}".replace(",", ".")
@@ -75,8 +96,7 @@ def slide_hypothesis(deck, estate, apps, scaling, results, example, source):
     for shape in slide.shapes:
         if shape.has_text_frame and shape.text_frame.text.startswith("Con IGV."):
             shape.text_frame.paragraphs[0].runs[0].text = (
-                f"Con IGV. Container Apps con réplicas según su tráfico: 1 por cada {model.DEFAULTS['concurrent_requests']} "
-                f"TPS de cada hora, mínimo 1 por {MICRO_ONE}. Mínimo de referencia: S/ 2.124 un cluster AKS de 4 "
+                f"Con IGV. Container Apps con réplicas según su tráfico: {sizing('example')} Mínimo de referencia: S/ 2.124 un cluster AKS de 4 "
                 f"servidores; S/ 117 un {MICRO_ONE} en Container Apps encendido todo el mes.")
             for run in shape.text_frame.paragraphs[0].runs[1:]:
                 run.text = ""
@@ -92,8 +112,7 @@ def slide_criteria(deck, source):
                           title, meaning)
     v1.condition_card(slide, Inches(0.6), Inches(2.7), Inches(12.1), Inches(1.2), "3", v1.YELLOW,
                       "Réplicas según su tráfico, hora por hora",
-                      [f"1 réplica por cada {model.DEFAULTS['concurrent_requests']} TPS en el pico de cada hora (regla "
-                       f"de escalado de Azure), mínimo 1 por {MICRO_ONE}."], oval=False)
+                      [sizing("criteria")], oval=False)
     v1.box(slide, Inches(0.6), Inches(4.1), Inches(5.9), Inches(1.5), d.LIGHT)
     d.text_box(slide, Inches(0.85), Inches(4.2), Inches(5.5), Inches(0.4), "Siempre se queda en AKS si:", size=15,
                bold=True, color=d.NAVY)
@@ -133,8 +152,7 @@ def slide_traffic(deck, example, profile, source):
           f"al mes en Container Apps ({int(example['microservices'])} {MICRO}); hoy {pen(example['aks_month_pen'])}",
           value_color=d.GREEN, value_size=24)
     d.text_box(slide, Inches(0.6), Inches(6.15), Inches(12.1), Inches(0.5),
-               f"Réplicas = 1 por cada {model.DEFAULTS['concurrent_requests']} TPS del pico de la hora, mínimo 1. "
-               "En AKS hoy las réplicas no siguen al tráfico.", size=11, color=d.GREY, italic=True)
+               f"{sizing('traffic')} En AKS hoy las réplicas no siguen al tráfico.", size=11, color=d.GREY, italic=True)
 
 
 def slide_distribution(deck, rows, month, source):
@@ -188,13 +206,15 @@ def slide_cost(deck, rows, source):
     how = [["Cómo se paga", "AKS", "Container Apps"],
            ["Cobro", "Servidores completos (VM) las 24 horas", "vCPU-segundo y GB-segundo de las réplicas encendidas"],
            ["Réplicas", "Las que se configuran, haya o no tráfico",
-            f"Según el tráfico de cada hora: 1 por cada {model.DEFAULTS['concurrent_requests']} TPS, mínimo 1"],
+            sizing("cost")],
            ["Descuento", "Reservas de 3 años en las VM", f"{d.percent(model.DEFAULTS['bank_discount'])} del banco"]]
     d.table(slide, Inches(0.6), Inches(2.6), Inches(12.1), how, [0.18, 0.37, 0.45], row_height=0.45, size=12)
     d.note_box(slide, Inches(0.6), Inches(4.85), Inches(12.1), Inches(0.75),
                f"Incluye los clusters \"con revisión\": el ahorro firme es el de los candidatos. Los que cumplen pero "
-               f"ahorran menos de {d.percent(model.DEFAULTS['min_saving'])} se quedan en AKS. Detalle por cluster en el "
-               "Excel de criterios v2.", size=11)
+               f"ahorran menos de {d.percent(model.DEFAULTS['min_saving'])} se quedan en AKS. "
+               + ("Incluye el cargo por entorno con endpoint privado y el tamaño de cada réplica según su uso real. "
+                  if CRITERIA["name"] == "v3" else "")
+               + f"Detalle por cluster en el Excel de criterios {CRITERIA['name']}.", size=11)
     d.note_box(slide, Inches(0.6), Inches(5.75), Inches(12.1), Inches(0.6),
                "Beneficio adicional sin monto: menos clusters que actualizar y mantener (horas-hombre de los equipos).",
                size=11)
@@ -203,10 +223,13 @@ def slide_cost(deck, rows, source):
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--results", default=aa.RESULTS_DIR, help="Folder with the aa-<source> result folders")
+    parser.add_argument("--criteria", choices=sorted(model.PRESETS), default="v2",
+                        help="Criteria v2 or v3 (aa_v2_model.PRESETS)")
     parser.add_argument("--output", default=None,
-                        help="Output .pptx. Default: aks_aca_corporate_v2.pptx in the newest reports/<date>-aks-aca")
+                        help="Output .pptx. Default: aks_aca_corporate_<criteria>.pptx in the newest reports/<date>-aks-aca")
     args = parser.parse_args()
     aa.azure.setup_logging(False)
+    CRITERIA["name"] = model.use(args.criteria)
     data = model.load(args.results)
     rows = model.evaluate(data)
     estate, apps, scaling = v1.read_estate(args.results), v1.read_applications(args.results), v1.read_scaling(args.results)
@@ -230,12 +253,13 @@ def main():
     slide_distribution(deck, rows, estate["month"], f"{traffic} {v1.MONEY_NOTE}")
     slide_cost(deck, rows, f"{measured} Precios de lista: Azure Retail Prices API. {v1.MONEY_NOTE}")
     reports = sorted(glob.glob(os.path.join(aa.TOPIC_DIR, "reports", "*-aks-aca")))
-    output = args.output or os.path.join(reports[-1] if reports else aa.TOPIC_DIR, "aks_aca_corporate_v2.pptx")
+    output = args.output or os.path.join(reports[-1] if reports else aa.TOPIC_DIR,
+                                         f"aks_aca_corporate_{args.criteria}.pptx")
     deck.save(output)
     columns = ["cluster", "cod_app", "group", "decision", "reason", "microservices", "traffic_layer",
                "busiest_hour_tps", "peak_tps", "aks_month_pen", "aca_month_pen", "saving_month_pen", "saving_share"]
     aa.azure.Output(os.path.dirname(os.path.abspath(output)), ",").csv(
-        "cluster_decisions_v2.csv",
+        f"cluster_decisions_{args.criteria}.csv",
         [{key: (round(row[key], 4) if isinstance(row[key], float) else row[key]) for key in columns} for row in rows])
     aa.azure.LOG.info("Wrote %s (%d slides)", output, len(deck.slides))
 
