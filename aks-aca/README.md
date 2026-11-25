@@ -232,7 +232,7 @@ Container Insights; one stopped PROD cluster without metrics.
     cluster and application) in `results/aa-cluster-snapshot/`.
   - `aa_v2_model.py` holds the rules and the cost model (its docstring explains them); `aa_deck_exec_v2.py`
     builds `aks_aca_corporate_v2.pptx` from it, and `aa_criteria_workbook_v2.py` writes the same rules as Excel
-    formulas in `aks_aca_criteria_v2.xlsx` (Results, Criteria per cluster, Apps, Calculator with the replicas of
+    formulas in `aks_aca_criteria_v2.xlsx` (Results, Top costs, Criteria per cluster, Apps, Calculator with the replicas of
     every hour editable, Latency simulator, Traffic, Services, Prices, Variables). With the default variables the
     workbook and the deck give the same figures.
   - Replicas per hour = max(minimum, ceiling(TPS x traffic_share / concurrent_requests)): Container Apps adds a
