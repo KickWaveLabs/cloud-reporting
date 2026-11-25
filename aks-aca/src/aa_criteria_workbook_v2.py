@@ -554,107 +554,108 @@ def write_results(sheet):
 
 
 
-def write_top_costs(sheet):
-    """Two tables side by side: the TOP most expensive PROD application clusters (Criteria) with their saving, and
-    the TOP most expensive AKS clusters of every environment and category (AllClusters), plus the totals."""
+def write_top_costs(book, sheet, applications, everything):
+    """Two tables side by side, the most expensive first: every PROD application cluster of the criteria with its
+    Container Apps cost and saving, and every AKS cluster of any environment or category (AllClusters). The yellow
+    top_n cell says how many rows show; the totals sit above, so the lists can grow down to every cluster."""
     sheet["A1"], sheet["A1"].font = "Top costs: where the AKS money is", Font(bold=True, size=14)
+    sheet["A3"], sheet["A3"].font = "Show the top", BOLD
+    sheet["C3"], sheet["C3"].fill = TOP, EDITABLE
+    sheet["D3"] = f"clusters of each list (most expensive first; {max(applications, everything)} or more shows all)"
+    v1wb.define(book, "top_n", "'Top costs'!$C$3")
     soles = "(1+igv)*exchange_rate"
-    head, first, last = 4, 5, 4 + TOP
-    # Left: PROD application clusters of the criteria.
-    sheet["A3"], sheet["A3"].font = f"Top {TOP} PROD application clusters by AKS cost (S/ a month, with IGV)", BOLD
+    head = 12
+    rank = f"ROW()-{head}"
+    shown = lambda value: f'IF({rank}>top_n,"",IFERROR({value},""))'
+
+    # Left: PROD application clusters of the criteria, by AKS cost (Criteria[cost_rank]).
+    sheet["A11"], sheet["A11"].font = "PROD application clusters by AKS cost (S/ a month, with IGV)", BOLD
     left = ["Rank", "Cluster", "App", "AKS today (S/)", "Container Apps (S/)", "Saving if moved (S/)", "Saving share",
             "Destination", "Saving counted (S/)", "Stays on AKS because"]
-    for row in range(first, last + 1):
-        at = f"MATCH($A{row},Criteria[cost_rank],0)"
-        get = lambda column: f"INDEX(Criteria[{column}],{at})"
-        flag = lambda column, value: f'{get(column)}="{value}"'
-        why = (f'IF({flag("decision", "NO_TRAFFIC")},"No traffic of its own",IF({flag("event_driven", "YES")},'
-               f'"Event-driven",IF({flag("size_ok", "NO")},"A ""micro""-service over 4 vCPU / 8 GiB",'
-               f'IF({flag("tps_ok", "NO")},"Busiest hour over max_tps",IF({flag("services_ok", "NO")},'
-               f'"Over max_services ""micro""-services",IF({flag("group", "BELOW_MARGIN")},'
-               f'"Saves less than min_saving",""))))))')
-        # Container Apps is costed only for clusters that meet the criteria; the rest show "-" and why they stay.
-        meets = f'OR({flag("group", "ACA")},{flag("group", "ACA_WITH_REVIEW")},{flag("group", "BELOW_MARGIN")})'
-        costed = lambda column: f'IF({meets},{get(column)},"-")'
-        values = [row - head, get("cluster"), get("cod_app"), get("aks_month_pen"), costed("aca_month_pen"),
-                  costed("saving_month_pen"), costed("saving_share"), get("group"),
-                  f'IF({flag("goes_to_aca", "YES")},{get("saving_month_pen")},0)', why]
-        for column, value in enumerate(values, start=1):
-            cell = sheet.cell(row=row, column=column, value=value if column == 1 else f"=IFERROR({value},\"\")")
-            cell.number_format = PEN if column in (4, 5, 6, 9) else PCT if column == 7 else "General"
-    for column, header in enumerate(left, start=1):
-        sheet.cell(row=head, column=column, value=header).font = BOLD
-    v1wb.plain_table(sheet, "TopApplications", f"A{head}:J{last}")
-    totals = [(f"Top {TOP}", f"SUM(D{first}:D{last})", f"SUM(I{first}:I{last})"),
+    at = f"MATCH({rank},Criteria[cost_rank],0)"
+    get = lambda column: f"INDEX(Criteria[{column}],{at})"
+    flag = lambda column, value: f'{get(column)}="{value}"'
+    # Container Apps is costed only for clusters that meet the criteria; the rest show "-" and why they stay.
+    meets = f'OR({flag("group", "ACA")},{flag("group", "ACA_WITH_REVIEW")},{flag("group", "BELOW_MARGIN")})'
+    costed = lambda column: f'IF({meets},{get(column)},"-")'
+    why = (f'IF({flag("decision", "NO_TRAFFIC")},"No traffic of its own",IF({flag("event_driven", "YES")},'
+           f'"Event-driven",IF({flag("size_ok", "NO")},"A ""micro""-service over 4 vCPU / 8 GiB",'
+           f'IF({flag("tps_ok", "NO")},"Busiest hour over max_tps",IF({flag("services_ok", "NO")},'
+           f'"Over max_services ""micro""-services",IF({flag("group", "BELOW_MARGIN")},'
+           f'"Saves less than min_saving",""))))))')
+    left_formulas = [rank, get("cluster"), get("cod_app"), get("aks_month_pen"), costed("aca_month_pen"),
+                     costed("saving_month_pen"), costed("saving_share"), get("group"),
+                     f'IF({flag("goes_to_aca", "YES")},{get("saving_month_pen")},0)', why]
+    formula_table(sheet, "TopApplications", [(header, shown(value)) for header, value in zip(left, left_formulas)],
+                  applications, top=head)
+    for column, fmt in ((4, PEN), (5, PEN), (6, PEN), (7, PCT), (9, PEN)):
+        for row in range(head + 1, head + 1 + applications):
+            sheet.cell(row=row, column=column).number_format = fmt
+    rows = f"$A${head + 1}:$J${head + applications}"
+    sheet.conditional_formatting.add(rows, FormulaRule(formula=[f'OR($H{head + 1}="ACA",$H{head + 1}="ACA_WITH_REVIEW")'],
+                                                       fill=GREEN))
+    sheet.conditional_formatting.add(rows, FormulaRule(formula=[f'$H{head + 1}="BELOW_MARGIN"'], fill=AMBER))
+    totals = [('="Top "&MIN(top_n,COUNT(Criteria[cost_rank]))&" shown"', "SUM(TopApplications[AKS today (S/)])",
+               "SUM(TopApplications[Saving counted (S/)])"),
               ("All PROD application clusters", "SUM(Criteria[aks_month_pen])",
                'SUMIFS(Criteria[saving_month_pen],Criteria[goes_to_aca],"YES")')]
-    for offset, (label, cost, saving) in enumerate(totals, start=2):
-        row = last + offset
+    sheet.cell(row=5, column=4, value="AKS today (S/)").font = BOLD
+    sheet.cell(row=5, column=9, value="Saving counted (S/)").font = BOLD
+    for row, (label, cost, saving) in enumerate(totals, start=6):
         sheet.cell(row=row, column=2, value=label).font = BOLD
         sheet.cell(row=row, column=4, value="=" + cost).number_format = PEN
-        sheet.cell(row=row, column=8, value="Saving counted").font = BOLD
         sheet.cell(row=row, column=9, value="=" + saving).number_format = PEN
-    sheet.cell(row=last + 4, column=2, value=f"Share of the top {TOP} in the PROD application cost")
-    sheet.cell(row=last + 4, column=4, value=f"=IF(D{last + 3}>0,D{last + 2}/D{last + 3},0)").number_format = PCT
-    rows = f"$A${first}:$J${last}"
-    sheet.conditional_formatting.add(rows, FormulaRule(formula=[f'OR($H{first}="ACA",$H{first}="ACA_WITH_REVIEW")'],
-                                                       fill=GREEN))
-    sheet.conditional_formatting.add(rows, FormulaRule(formula=[f'$H{first}="BELOW_MARGIN"'], fill=AMBER))
-    notes = ["Green: moves to Container Apps (meets the criteria and saves at least min_saving).",
-             "Yellow: meets the criteria but saves less than min_saving, so it stays on AKS.",
-             "Container Apps is costed only for clusters that meet the criteria (\"-\" otherwise); Saving counted is "
-             "0 when the cluster stays."]
-    for offset, text in enumerate(notes, start=6):
-        sheet.cell(row=last + offset, column=2, value=text)
+    sheet.cell(row=8, column=2, value="Share of the shown in the PROD application cost")
+    sheet["D8"], sheet["D8"].number_format = "=IF(D7>0,D6/D7,0)", PCT
+    sheet.cell(row=9, column=2, value="Green: moves to Container Apps. Yellow: meets the criteria but saves less than "
+                                      "min_saving. \"-\": not costed, a criterion keeps it on AKS.")
 
-    # Right: every AKS cluster, any environment or category.
+    # Right: every AKS cluster, any environment or category (AllClusters comes sorted by cost).
     start = 12  # column L
     letter = lambda offset: get_column_letter(start + offset)
-    sheet.cell(row=3, column=start, value=f"Top {TOP} AKS clusters of every environment and category "
-                                          "(S/ a month, with IGV)").font = BOLD
+    sheet.cell(row=11, column=start, value="AKS clusters of every environment and category "
+                                           "(S/ a month, with IGV)").font = BOLD
     right = ["Rank", "Cluster", "Environment", "Category", "App", "AKS cost (S/)", "In the criteria", "Saving share",
              "Destination"]
-    for row in range(first, last + 1):
-        k = f"${letter(0)}{row}"
-        at = f"MATCH(${letter(1)}{row},Criteria[cluster],0)"
-        inside = f'${letter(6)}{row}="YES"'
-        values = [row - head, f"INDEX(AllClusters[cluster],{k})", f"INDEX(AllClusters[environment],{k})",
-                  f"INDEX(AllClusters[category],{k})", f'INDEX(AllClusters[cod_app],{k})&""',
-                  f"INDEX(AllClusters[cost_month_usd],{k})*{soles}",
-                  f'IF(COUNTIF(Criteria[cluster],${letter(1)}{row})>0,"YES","NO")',
-                  f'IF(AND({inside},OR(INDEX(Criteria[group],{at})="ACA",INDEX(Criteria[group],{at})="ACA_WITH_REVIEW",'
-                  f'INDEX(Criteria[group],{at})="BELOW_MARGIN")),INDEX(Criteria[saving_share],{at}),"-")',
-                  f'IF({inside},INDEX(Criteria[group],{at}),"Not evaluated")']
-        for offset, value in enumerate(values):
-            cell = sheet.cell(row=row, column=start + offset,
-                              value=value if offset == 0 else f'=IFERROR({value},"")')
-            cell.number_format = PEN if offset == 5 else PCT if offset == 7 else "General"
-    for offset, header in enumerate(right):
-        sheet.cell(row=head, column=start + offset, value=header).font = BOLD
-    v1wb.plain_table(sheet, "TopAllClusters", f"{letter(0)}{head}:{letter(8)}{last}")
-    rows = f"${letter(0)}${first}:${letter(8)}${last}"
+    name = f"INDEX(AllClusters[cluster],{rank})"
+    at = f"MATCH({name},Criteria[cluster],0)"
+    group = f"INDEX(Criteria[group],{at})"
+    inside = f"COUNTIF(Criteria[cluster],{name})>0"
+    right_formulas = [rank, name, f"INDEX(AllClusters[environment],{rank})", f"INDEX(AllClusters[category],{rank})",
+                      f'INDEX(AllClusters[cod_app],{rank})&""', f"INDEX(AllClusters[cost_month_usd],{rank})*{soles}",
+                      f'IF({inside},"YES","NO")',
+                      f'IF({inside},IF(OR({group}="ACA",{group}="ACA_WITH_REVIEW",{group}="BELOW_MARGIN"),'
+                      f'INDEX(Criteria[saving_share],{at}),"-"),"-")',
+                      f'IF({inside},{group},"Not evaluated")']
+    formula_table(sheet, "TopAllClusters", [(header, shown(value)) for header, value in zip(right, right_formulas)],
+                  everything, top=head, left=start)
+    for offset, fmt in ((5, PEN), (7, PCT)):
+        for row in range(head + 1, head + 1 + everything):
+            sheet.cell(row=row, column=start + offset).number_format = fmt
+    rows = f"${letter(0)}${head + 1}:${letter(8)}${head + everything}"
     sheet.conditional_formatting.add(rows, FormulaRule(
-        formula=[f'OR(${letter(8)}{first}="ACA",${letter(8)}{first}="ACA_WITH_REVIEW")'], fill=GREEN))
-    sheet.conditional_formatting.add(rows, FormulaRule(formula=[f'${letter(8)}{first}="BELOW_MARGIN"'], fill=AMBER))
+        formula=[f'OR(${letter(8)}{head + 1}="ACA",${letter(8)}{head + 1}="ACA_WITH_REVIEW")'], fill=GREEN))
+    sheet.conditional_formatting.add(rows, FormulaRule(formula=[f'${letter(8)}{head + 1}="BELOW_MARGIN"'], fill=AMBER))
     all_cost = f"SUM(AllClusters[cost_month_usd])*{soles}"
-    app_cost = f'SUMIFS(AllClusters[cost_month_usd],AllClusters[environment],"PROD",AllClusters[category],"APPLICATION")*{soles}'
+    app_cost = (f'SUMIFS(AllClusters[cost_month_usd],AllClusters[environment],"PROD",AllClusters[category],'
+                f'"APPLICATION")*{soles}')
+    saving = 'SUMIFS(Criteria[saving_month_pen],Criteria[goes_to_aca],"YES")'
     summary = [("All AKS clusters (S/ a month)", all_cost, PEN),
                ("PROD application clusters (the criteria)", app_cost, PEN),
                ("Their share of the AKS bill", f"IF({all_cost}>0,{app_cost}/({all_cost}),0)", PCT),
-               ("Saving counted (S/ a month)", f'SUMIFS(Criteria[saving_month_pen],Criteria[goes_to_aca],"YES")', PEN),
-               ("Saving counted, share of the AKS bill",
-                f'IF({all_cost}>0,SUMIFS(Criteria[saving_month_pen],Criteria[goes_to_aca],"YES")/({all_cost}),0)',
-                PCT)]
-    for offset, (label, formula, fmt) in enumerate(summary, start=2):
-        sheet.cell(row=last + offset, column=start + 1, value=label).font = BOLD
-        sheet.cell(row=last + offset, column=start + 5, value="=" + formula).number_format = fmt
-    sheet.cell(row=last + 8, column=start + 1,
+               ("Saving counted (S/ a month)", saving, PEN),
+               ("Saving counted, share of the AKS bill", f"IF({all_cost}>0,{saving}/({all_cost}),0)", PCT)]
+    for row, (label, formula, fmt) in enumerate(summary, start=5):
+        sheet.cell(row=row, column=start + 1, value=label).font = BOLD
+        sheet.cell(row=row, column=start + 5, value="=" + formula).number_format = fmt
+    sheet.cell(row=10, column=start + 1,
                value="Not evaluated: other environments and infrastructure clusters are outside the criteria.")
     for column, width in zip("ABCDEFGHIJ", (6, 18, 7, 14, 15, 16, 11, 16, 16, 34)):
         sheet.column_dimensions[column].width = width
     sheet.column_dimensions["K"].width = 3
     for offset, width in enumerate((6, 18, 12, 16, 7, 14, 12, 11, 16)):
         sheet.column_dimensions[letter(offset)].width = width
+    sheet.freeze_panes = f"A{head + 1}"
 
 
 def write_calculator(sheet, default_scope):
@@ -957,12 +958,13 @@ def build(results, output):
     write_query_table(sheets["LatencyData"], "LatencyData", LATENCY_APP_COLUMNS, latency_apps)
     write_query_table(sheets["LatencyLayers"], "LatencyLayers", LATENCY_LAYER_COLUMNS, latency_layers)
     write_query_table(sheets["Lists"], "Scopes", ["scope"], [[scope] for scope in scopes])
-    write_query_table(sheets["AllClusters"], "AllClusters", ALL_CLUSTER_COLUMNS, all_cluster_rows(results))
+    all_clusters = all_cluster_rows(results)
+    write_query_table(sheets["AllClusters"], "AllClusters", ALL_CLUSTER_COLUMNS, all_clusters)
     write_traffic(sheets["Traffic"], len(traffic_data))
     write_criteria(sheets["Criteria"], len(clusters_data))
     write_apps(sheets["Apps"], codes)
     write_results(sheets["Results"])
-    write_top_costs(sheets["Top costs"])
+    write_top_costs(book, sheets["Top costs"], len(clusters_data), len(all_clusters))
     example = next((row["cluster"] for row in clusters if row["cod_app"] == deck.EXAMPLE_APP), clusters[0]["cluster"])
     write_calculator(sheets["Calculator"], example)
     latency_default = deck.EXAMPLE_APP if any(row[0] == deck.EXAMPLE_APP for row in latency_apps) else \
