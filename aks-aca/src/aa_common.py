@@ -6,6 +6,9 @@ office-hours calendar and the Azure Monitor metrics call.
 """
 
 import csv
+import gzip
+import hashlib
+import json
 import os
 import re
 from datetime import date, datetime, timedelta, timezone
@@ -241,6 +244,52 @@ def results_path(*parts):
     return os.path.join(RESULTS_DIR, *parts)
 
 
+class QueryCache:
+    """Answers of read-only queries over a finished time window, kept on disk (gzip JSON) so a rerun or a resumed run
+    does not ask Azure again. The key is a hash of everything that defines the query (resource, query text, window,
+    parameters), so a changed query is asked again. A window that ends less than CACHE_SETTLE ago is never cached:
+    late data may still arrive. Failed queries raise before anything is written, so they are retried next run.
+    Delete the _cache folder, or pass --no-cache, to ask everything again."""
+
+    def __init__(self, folder, enabled=True):
+        self.folder, self.enabled = folder, enabled
+        self.hits = self.misses = 0
+
+    def get(self, parts, window_end, run):
+        if not self.enabled or window_end > datetime.now(timezone.utc) - CACHE_SETTLE:
+            return run()
+        key = hashlib.sha256(json.dumps(parts, sort_keys=True, default=str).encode()).hexdigest()[:32]
+        path = os.path.join(self.folder, key[:2], key + ".json.gz")
+        if os.path.exists(path):
+            with gzip.open(path, "rt", encoding="utf-8") as handle:
+                self.hits += 1
+                return json.load(handle)
+        value = run()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        partial = f"{path}.{os.getpid()}.tmp"
+        with gzip.open(partial, "wt", encoding="utf-8") as handle:
+            json.dump(value, handle)
+        os.replace(partial, path)
+        self.misses += 1
+        return value
+
+    def summary(self):
+        return {"enabled": self.enabled, "hits": self.hits, "queried": self.misses}
+
+
+CACHE_SETTLE = timedelta(hours=6)
+
+
+def add_cache_argument(parser):
+    parser.add_argument("--no-cache", action="store_true",
+                        help="Ask Azure again for every query, ignoring and not writing <output-dir>/_cache")
+    return parser
+
+
+def query_cache(args):
+    return QueryCache(os.path.join(args.output_dir, "_cache"), enabled=not args.no_cache)
+
+
 def read_csv(path):
     if not os.path.exists(path):
         return []
@@ -348,8 +397,10 @@ def get_metrics(ctx, resource_id, names, start, end, interval, aggregation, metr
         params["$filter"] = metric_filter
     if top:
         params["top"] = str(top)
-    body = ctx.arm_get(f"{resource_id}/providers/Microsoft.Insights/metrics", METRICS_API, params)
-    return body.get("value", [])
+    url = f"{resource_id}/providers/Microsoft.Insights/metrics"
+    fetch = lambda: ctx.arm_get(url, METRICS_API, params).get("value", [])
+    cache = getattr(ctx, "query_cache", None)  # set by scripts that cache (aa_metrics.py)
+    return cache.get(("metrics", resource_id.lower(), METRICS_API, params), end, fetch) if cache else fetch()
 
 
 def get_metrics_split(ctx, resource_id, names, start, end, interval, aggregation, metric_filter="", top=None):

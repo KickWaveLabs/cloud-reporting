@@ -80,9 +80,10 @@ COUNTERS = {
 class LogsClient:
     """Resource-scoped Log Analytics queries with GET, retries on 429/5xx and evidence of each call."""
 
-    def __init__(self, ctx, pause):
+    def __init__(self, ctx, pause, cache=None):
         self.ctx = ctx
         self.pause = pause
+        self.cache = cache
         self.session = requests.Session()
         self._token = None
 
@@ -91,7 +92,14 @@ class LogsClient:
             self._token = self.ctx.credential.get_token(LOGS_SCOPE)
         return self._token.token
 
-    def query(self, resource_id, kql, timespan):
+    def query(self, resource_id, kql, timespan, window_end=None):
+        """Rows of one query; with a cache and window_end, a finished window comes from disk when asked before."""
+        if self.cache is None or window_end is None:
+            return self._query(resource_id, kql, timespan)
+        return self.cache.get(("logs", resource_id.lower(), " ".join(kql.split()), timespan), window_end,
+                              lambda: self._query(resource_id, kql, timespan))
+
+    def _query(self, resource_id, kql, timespan):
         url = f"{LOGS_ENDPOINT}{resource_id}/query"
         params = {"query": " ".join(kql.split()), "timespan": timespan}
         for attempt in range(1, 7):
@@ -159,6 +167,7 @@ def main():
     parser.add_argument("--end", default=None, help="Last day (YYYY-MM-DD, Lima). Default: last day of last month")
     parser.add_argument("--clusters", default="", help="Comma-separated cluster names. Default: clusters in --environments")
     parser.add_argument("--pause", type=float, default=2.0, help="Seconds between Log Analytics queries")
+    aa.add_cache_argument(parser)
     args = parser.parse_args()
     azure.setup_logging(args.verbose)
     start, end = aa.metrics_window(args.start, args.end)
@@ -179,7 +188,7 @@ def main():
     for name in without:
         ctx.errors.add("container-insights", name, "inventory", code="NotEnabled",
                        message="Container Insights add-on is not enabled on this cluster")
-    client = LogsClient(ctx, args.pause)
+    client = LogsClient(ctx, args.pause, aa.query_cache(args))
     workloads, services, coverage = [], [], []
     started = time.monotonic()
     for number, cluster in enumerate(clusters, 1):  # sequential: Log Analytics allows few concurrent queries per user
@@ -188,13 +197,13 @@ def main():
         for month, begin, finish in month_windows(start, end):
             timespan = f"{aa.iso_z(begin)}/{aa.iso_z(finish)}"
             kql = WORKLOADS_QUERY.format(start=aa.iso_z(begin), end=aa.iso_z(finish), workload=WORKLOAD_NAME)
-            rows = ctx.try_arm("ci-workloads", cluster["name"], client.query, cluster["id"], kql, timespan)
+            rows = ctx.try_arm("ci-workloads", cluster["name"], client.query, cluster["id"], kql, timespan, finish)
             workloads.extend(workload_rows(cluster, rows or []))
             coverage.append({"cluster": cluster["name"], "cluster_id": cluster["id"].lower(), "month": month, "rows": len(rows or []),
                              "status": "ERROR" if rows is None else ("EMPTY" if not rows else "OK")})
         kql = SERVICES_QUERY.format(start=aa.iso_z(start), end=aa.iso_z(end))
         rows = ctx.try_arm("ci-services", cluster["name"], client.query, cluster["id"], kql,
-                           f"{aa.iso_z(start)}/{aa.iso_z(end)}")
+                           f"{aa.iso_z(start)}/{aa.iso_z(end)}", end)
         for row in rows or []:
             services.append({"cluster": cluster["name"], "cluster_id": cluster["id"].lower(), "environment": cluster["environment"],
                              "namespace": row["Namespace"], "service": row["ServiceName"],
@@ -216,6 +225,7 @@ def main():
         "clusters_queried": [row["name"] for row in clusters],
         "clusters_without_container_insights": without,
         "coverage": azure.count_by(coverage, "status"),
+        "cache": client.cache.summary(),
     }))
 
 

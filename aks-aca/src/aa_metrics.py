@@ -298,6 +298,7 @@ def main():
     parser.add_argument("--top", type=int, default=2000, help="Max APIs per APIM metrics call")
     parser.add_argument("--cooldown", type=int, default=300,
                         help="Seconds a Container App replica stays up after the last request (scale rule cooldown)")
+    aa.add_cache_argument(parser)
     parser.set_defaults(arm_rps=2.0, workers=2)
     args = parser.parse_args()
     azure.setup_logging(args.verbose)
@@ -327,6 +328,7 @@ def main():
                     and layer_of[row["name"]] in layers)]
 
     ctx = azure.AzureContext(args)
+    ctx.query_cache = aa.query_cache(args)  # every metrics GET of a finished window (aa.get_metrics)
     azure.LOG.info("Window %s to %s (UTC); %d clusters, %d APIM", aa.iso_z(start), aa.iso_z(end), len(clusters), len(services))
     output = azure.Output(args.output_dir, args.delimiter)
 
@@ -374,6 +376,7 @@ def main():
     output.csv("metrics_errors.csv", ctx.errors.rows, azure.ErrorLog.FIELDS)
     output.json("metrics_summary.json", azure.run_metadata(ctx, {
         "window_utc": {"from": aa.iso_z(start), "to": aa.iso_z(end)},
+        "cache": ctx.query_cache.summary(),
         "office_hours": "Monday-Friday 08:00-20:00 America/Lima (UTC-5), holidays not excluded",
         "cooldown_seconds": args.cooldown,
         "clusters": [row["name"] for row in clusters],

@@ -2,8 +2,8 @@
 """Actual monthly cost of each AKS cluster, Container Apps environment and App Service plan, by resource and meter.
 
 Uses the Cost Management query API at subscription scope, only on subscriptions that have AKS, Container
-Apps or App Service. One query per subscription and family (AKS/ACA, App Service), cached on disk so a
-rerun resumes after throttling. App Service and Functions cover PROD only by default
+Apps or App Service. One query per subscription and family (AKS/ACA, App Service), cached on disk
+(aa.QueryCache, from COST_SETTLE after the period ends) so a rerun resumes after throttling. App Service and Functions cover PROD only by default
 (--app-service-environments), since the deck only shows the PROD estate.
 
 Default cost type is AmortizedCost: node VMs covered by reservations or savings plans show 0 in
@@ -22,15 +22,17 @@ Outputs (in --output-dir):
   cost_summary.json     period, subscriptions queried and every request body
 """
 
-import json
 import os
 import time
+from datetime import datetime, timedelta, timezone
 
 import aa_common as aa
 
 azure = aa.azure
 
 WEB_TYPES = ("microsoft.web/serverfarms", "microsoft.web/sites", "microsoft.web/sites/slots")
+# Days after the end of the period before its cost is cached: Cost Management keeps adding late usage meanwhile.
+COST_SETTLE = timedelta(days=5)
 
 
 def last_month():
@@ -115,6 +117,7 @@ def main():
                         help="AmortizedCost spreads reservations and savings plans over the resources that use them")
     parser.add_argument("--app-service-environments", default="PROD",
                         help="Environments whose App Service and Functions plans are costed ('ALL', or 'NONE' to skip)")
+    aa.add_cache_argument(parser)
     args = parser.parse_args()
     azure.setup_logging(args.verbose)
     start, end = last_month()
@@ -144,21 +147,19 @@ def main():
     web_by_resource = web_owners(plans, sites)
     families = {
         "containers": {"subscriptions": sorted({row["subscription_id"] for row in clusters + aca_envs}),
-                       "types": [aa.AKS_TYPE] + list(aa.ACA_TYPES), "cache": f"{args.cost_type}_{start}_{end}"},
+                       "types": [aa.AKS_TYPE] + list(aa.ACA_TYPES)},
         "app_service": {"subscriptions": sorted({row["subscription_id"] for row in plans + sites}),
-                        "types": list(WEB_TYPES), "cache": f"web_{args.cost_type}_{start}_{end}"},
+                        "types": list(WEB_TYPES)},
     }
 
     ctx = azure.AzureContext(args)
     period = {"type": args.cost_type, "timeframe": "Custom", "timePeriod": {"from": start, "to": end}}
 
+    cache = aa.query_cache(args)
+    # Cost of a closed month still moves for a few days (late usage, amortization): cache it only after that.
+    settled = datetime.strptime(end, "%Y-%m-%d").replace(tzinfo=timezone.utc) + COST_SETTLE
+
     def fetch(family, sub_id):
-        cache_dir = os.path.join(args.output_dir, "_cache", families[family]["cache"])
-        os.makedirs(cache_dir, exist_ok=True)
-        cache_file = os.path.join(cache_dir, f"{sub_id}.json")
-        if os.path.exists(cache_file):
-            with open(cache_file, encoding="utf-8") as handle:
-                return json.load(handle)
         filters = [{"dimensions": {"name": "ResourceType", "operator": "In", "values": families[family]["types"]}}]
         if family == "containers":
             groups = sorted({group for (sub, group) in by_group if sub == sub_id.lower()})
@@ -173,15 +174,12 @@ def main():
                          {"type": "Dimension", "name": "Meter"}],
             "filter": {"or": filters} if len(filters) > 1 else filters[0],
         })
-        result = ctx.try_arm(f"cost-by-resource-{family}", sub_id, azure.cost_query, ctx, sub_id, body)
-        if result is None:
-            return None
-        columns, rows = result
-        payload = [dict(zip(columns, row)) for row in rows]
-        with open(cache_file, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle)
-        time.sleep(args.pause)
-        return payload
+
+        def ask():
+            columns, rows = azure.cost_query(ctx, sub_id, body)
+            time.sleep(args.pause)
+            return [dict(zip(columns, row)) for row in rows]
+        return ctx.try_arm(f"cost-by-resource-{family}", sub_id, cache.get, ("cost", sub_id.lower(), body), settled, ask)
 
     jobs = [(family, sub_id) for family in families for sub_id in families[family]["subscriptions"]]
     results = ctx.parallel(lambda job: fetch(*job), jobs, label="cost", workers=args.cost_workers)
@@ -211,6 +209,7 @@ def main():
     output.json("cost_summary.json", azure.run_metadata(ctx, {
         "period": {"from": start, "to": end},
         "cost_type": args.cost_type,
+        "cache": cache.summary(),
         "subscriptions_queried": len(families["containers"]["subscriptions"]),
         "app_service_subscriptions_queried": len(families["app_service"]["subscriptions"]),
         "app_service_environments": sorted(web_environments) if web_environments is not None else "ALL",

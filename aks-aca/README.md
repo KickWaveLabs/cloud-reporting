@@ -137,12 +137,16 @@ python aks-aca/src/aa_criteria_workbook.py
    workspace retention; `ci_coverage.csv` shows empty months.
 6. `aa_cost.py` without dates takes the last full month. Keep the same period as the metrics: the
    measured node discount only uses months that both sources cover end to end.
-   It caches each subscription in `results/aa-cost/_cache/<type>_<from>_<to>/` (AKS and ACA) and
-   `web_<type>_<from>_<to>/` (App Service); rerun it to resume after throttling (429), delete the folder
-   to fetch again. App Service needs an inventory from 2026-11-17 or later (`runtime` and `plan_id`
+   App Service needs an inventory from 2026-11-17 or later (`runtime` and `plan_id`
    columns); pass `--app-service-environments NONE` to skip it.
-7. `aa_prices.py` needs no sign-in.
-8. `aa_k8s_snapshot.py` needs no sign-in either. It reads the platform team's `reportHpa*` and
+7. `aa_metrics.py`, `aa_container_insights.py` and `aa_cost.py` keep each answer of a finished window in
+   `results/<source>/_cache/` (`aa.QueryCache`, gzip JSON keyed by a hash of the resource, query and window), so a
+   rerun or a resumed run only asks what is missing: failed queries and changed queries are asked again. Metrics
+   and Container Insights cache a window 6 hours after it ends; cost, 5 days after the period ends (late usage).
+   `--no-cache` asks everything again; deleting the folder does the same for good. `cache` in each summary JSON
+   counts hits and queries.
+8. `aa_prices.py` needs no sign-in.
+9. `aa_k8s_snapshot.py` needs no sign-in either. It reads the platform team's `reportHpa*` and
    `reportDeployment*` exports (CSV with `;` or XLSX) from `.local/aks-aca-inputs/` (`--inputs` for another
    folder), keeps only the columns it needs and joins them with the Container Insights history by cluster
    id, namespace and deployment. The exports hold one day of configuration, so pass that day with
@@ -162,25 +166,25 @@ python aks-aca/src/aa_criteria_workbook.py
    in `application_snapshot.csv`, entry points included), so no call is counted twice.
    `Traffic_profile` classifies each API as OFFICE, EXTENDED or 24x7 from `apim_hourly_profile.csv`; the
    windows and threshold are editable cells, so reclassifying needs no new Azure query.
-9. Optional: `aa_signals.py` checks the other side of the usage figures: hours with unschedulable pods
+10. Optional: `aa_signals.py` checks the other side of the usage figures: hours with unschedulable pods
    per cluster (only clusters with the autoscaler emit the metric), OOMKilled containers per workload,
    stack and memory per replica split into app and Istio sidecar (last 7 days), and APIM backend latency
    per API and month (the same APIM layers and environments as `aa_metrics.py`; `apim_layer` on every row). It runs on its own after the inventory and writes to
    `results/aa-signals/`; the workbook does not read it yet.
-10. Optional: `aa_microservice_history.py` counts the microservices running in each PROD cluster on the 1st and
+11. Optional: `aa_microservice_history.py` counts the microservices running in each PROD cluster on the 1st and
     the 15th of each month (10:00-11:00 Lima) from Container Insights, as far back as the workspace keeps. It
     writes to `results/aa-history/`, which no script clears: each run adds the missing days and keeps the rest,
     so run it at least once a month. `aa_k8s_snapshot.py` adds one row per export day to the same folder. The
     workbook's `Microservice_history` sheet and slide 4 of the technical deck show the trend and the applications
     that grew the most.
-11. `aa_workbook.py` writes `reports/<date>-aks-aca/aks_aca_comparison.xlsx`. Add a `README.md` next to
+12. `aa_workbook.py` writes `reports/<date>-aks-aca/aks_aca_comparison.xlsx`. Add a `README.md` next to
     it with the scope and gaps of the run (see `reports/2026-11-10-aks-aca/README.md` on the machine that
     ran it).
-12. Optional: `aa_deck.py` builds `aks_aca_deck.pptx`, the technical presentation for architects (diagnosis,
+13. Optional: `aa_deck.py` builds `aks_aca_deck.pptx`, the technical presentation for architects (diagnosis,
     technical criteria, strategic front, proposal and annex; 20 slides, native charts, text in Spanish) from the
     workbook's calculated values and `results/` (signals, and node and workload usage for the CPU vs memory
     slide). Open the workbook in Excel and save it first. Its figures are a draft to check.
-13. `aa_deck_exec.py` builds `aks_aca_corporate.pptx`, the corporate deck (slides 1 to 6, text in Spanish, amounts in
+14. `aa_deck_exec.py` builds `aks_aca_corporate.pptx`, the corporate deck (slides 1 to 6, text in Spanish, amounts in
     soles with IGV) for a non-technical forum: ways to build an application (runtimes as acronyms, with a legend),
     AKS in PROD (clusters, applications, "micro"-services, monthly and annual cost of PROD plus non-PROD; Azure icon
     from `assets/icons/`), the hypothesis (three signs with a sentence each, motivation, minimum AKS vs Container
@@ -191,7 +195,7 @@ python aks-aca/src/aa_criteria_workbook.py
     month. It reads only `results/` (including `application_snapshot.csv`), so it needs no saved workbook. AKS
     takes the discount measured on its node VMs (reservations included); `--aks-discount 0.60` fixes it by hand.
     Container Apps takes the bank's 30%.
-14. `aa_criteria_workbook.py` writes `aks_aca_criteria.xlsx` next to the deck, plain Excel in six sheets: `Results`
+15. `aa_criteria_workbook.py` writes `aks_aca_criteria.xlsx` next to the deck, plain Excel in six sheets: `Results`
     (one row per destination in clusters and applications, as the result slide, and an editable chart), `Criteria` (one row per application:
     data, conditions, decision, off-hours replicas (nights and weekends) — 1 by default, write 0 to let one scale to zero — and its monthly
     cost on AKS and Container Apps in soles), `Calculator` (one application meter by meter, in the format of the
