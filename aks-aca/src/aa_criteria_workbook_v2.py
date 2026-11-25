@@ -57,6 +57,14 @@ GROUPS = [("AKS", "Stays on AKS (criteria)"), ("BELOW_MARGIN", "Meets criteria, 
           ("ACA_WITH_REVIEW", "ACA, with review"), ("ACA", "Candidate to ACA"),
           ("IN_USE", "In use, not measured"), ("NOT_IN_USE", "Not in use"), ("IN_DEVELOPMENT", "In development")]
 LAYERS = ["UX", "BS", "CORE", "MAINFRAME"]
+# Official sources of the sizing rule, linked next to their variables.
+SOURCES = {
+    "concurrent_requests": "https://learn.microsoft.com/azure/container-apps/scale-app#http",
+    "min_replicas_office": "https://learn.microsoft.com/azure/architecture/example-scenario/serverless/"
+                           "microservices-with-container-apps-dapr#considerations",
+    "min_replicas_offhours": "https://learn.microsoft.com/azure/architecture/example-scenario/serverless/"
+                             "microservices-with-container-apps-dapr#considerations",
+}
 
 
 def number(value):
@@ -78,7 +86,8 @@ def write_variables(book, sheet, month, days):
             ("traffic_share", model.DEFAULTS["traffic_share"], "Share of the cluster's TPS each \"micro\"-service "
                                                                "receives (1 = all of it, conservative)"),
             ("min_replicas_office", model.DEFAULTS["min_replicas_office"], "Minimum replicas per \"micro\"-service, "
-                                                                           "weekdays 8:00-20:00"),
+                                                                           "weekdays 8:00-20:00 (1 avoids the cold "
+                                                                           "start)"),
             ("min_replicas_offhours", model.DEFAULTS["min_replicas_offhours"], "Minimum replicas per "
                                                                                "\"micro\"-service, the rest")]),
         ("Container Apps", [("requests_buffer", model.DEFAULTS["requests_buffer"], "Extra on the requests of the month"),
@@ -107,6 +116,9 @@ def write_variables(book, sheet, month, days):
             if label in ("bank_discount", "igv", "min_saving", "traffic_share"):
                 cell.number_format = PCT
             sheet.cell(row=row, column=3, value=comment)
+            if label in SOURCES:
+                link = sheet.cell(row=row, column=4, value="Microsoft Learn")
+                link.hyperlink, link.style = SOURCES[label], "Hyperlink"
             v1wb.define(book, label, f"Variables!$B${row}")
             if label == "sizing_basis":
                 validation = DataValidation(type="list", formula1='"PEAK,AVERAGE"', allow_blank=False)
@@ -114,7 +126,7 @@ def write_variables(book, sheet, month, days):
                 validation.add(cell.coordinate)
             row += 1
         row += 1
-    for column, width in zip("ABC", (26, 12, 90)):
+    for column, width in zip("ABCD", (26, 12, 90, 16)):
         sheet.column_dimensions[column].width = width
 
 

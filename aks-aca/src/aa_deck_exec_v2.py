@@ -39,6 +39,11 @@ GROUPS = {
     "IN_DEVELOPMENT": ("En desarrollo", "Aún no sale a producción", d.SOFT),
 }
 MOVABLE = ("ACA", "ACA_WITH_REVIEW")
+# Official sources of the sizing rule, quoted on the slides that use it.
+SCALE_RULE_URL = "learn.microsoft.com/azure/container-apps/scale-app#http"
+MIN_REPLICA_URL = "learn.microsoft.com/azure/architecture/example-scenario/serverless/microservices-with-container-apps-dapr"
+SIZING_SOURCES = (f"Escalado de Container Apps: 1 réplica más por cada 10 solicitudes por segundo ({SCALE_RULE_URL}). "
+                  f"Mínimo 1 réplica para evitar el arranque en frío ({MIN_REPLICA_URL}).")
 
 
 def pen(value):
@@ -161,9 +166,13 @@ def slide_distribution(deck, rows, month, source):
     v1.stat_card(slide, Inches(0.45) + 2 * (card_w + gap), top, card_w, Inches(1.25), "Nuevo: ACA",
                  f"{d.number(moving)} clusters", f"pasan a Container Apps ({d.percent(d.share_of(moving, total))})",
                  d.WHITE, fill=d.CARD, text_color=d.SOFT)
+    below = groups["BELOW_MARGIN"]["clusters"]
+    note = (f"{d.number(below)} {'cluster cumple' if below == 1 else 'clusters cumplen'} las condiciones pero "
+            f"{'ahorra' if below == 1 else 'ahorran'} menos del {d.percent(model.DEFAULTS['min_saving'])}: "
+            f"{'se queda' if below == 1 else 'se quedan'} en AKS. " if below else "")
     d.text_box(slide, Inches(0.45), Inches(6.35), Inches(12.4), Inches(0.4),
-               f"Costo AKS de {v1.month_label(month)}, con IGV. Un cluster es una fila; una aplicación puede tener "
-               "clusters en grupos distintos.", size=9, color=d.GREY)
+               f"{note}Costo AKS de {v1.month_label(month)}, con IGV. Una aplicación puede tener clusters en grupos "
+               "distintos.", size=10 if below else 9, bold=bool(below), color=d.NAVY if below else d.GREY)
 
 
 def slide_cost(deck, rows, source):
@@ -217,9 +226,8 @@ def main():
     v1.slide_estate(deck, estate, apps, f"{measured} {v1.MONEY_NOTE}")
     slide_hypothesis(deck, estate, apps, scaling, args.results, example,
                      f"{measured} Mínimos: calculadora de precios de Azure (East US 2, precios de lista). {v1.MONEY_NOTE}")
-    slide_criteria(deck, "Referencia: lineamiento ADT_019 del banco; regla de escalado HTTP de Container Apps "
-                         "(Microsoft Learn).")
-    slide_traffic(deck, example, data["profile"], f"{traffic} {v1.MONEY_NOTE}")
+    slide_criteria(deck, f"Referencia: lineamiento ADT_019 del banco. {SIZING_SOURCES}")
+    slide_traffic(deck, example, data["profile"], f"{traffic} {SIZING_SOURCES} {v1.MONEY_NOTE}")
     slide_distribution(deck, rows, estate["month"], f"{traffic} {v1.MONEY_NOTE}")
     slide_cost(deck, rows, f"{measured} Precios de lista: Azure Retail Prices API. {v1.MONEY_NOTE}")
     reports = sorted(glob.glob(os.path.join(aa.TOPIC_DIR, "reports", "*-aks-aca")))
