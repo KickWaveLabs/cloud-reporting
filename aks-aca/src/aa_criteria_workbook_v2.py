@@ -72,6 +72,7 @@ GROUPS = [("AKS", "Stays on AKS (criteria)"), ("BELOW_MARGIN", "Meets criteria, 
           ("IN_USE", "In use, not measured"), ("NOT_IN_USE", "Not in use"), ("IN_DEVELOPMENT", "In development")]
 LAYERS = ["UX", "BS", "CORE", "MAINFRAME"]
 ALL_CLUSTER_COLUMNS = ["cluster", "environment", "category", "cod_app", "cost_month_usd"]
+HIDDEN_SHEETS = ["Data", "TrafficData", "LatencyData", "LatencyLayers", "AllClusters", "Lists"]
 TOP = 20  # rows of each Top costs table
 GREEN, AMBER = PatternFill("solid", fgColor="C6EFCE"), PatternFill("solid", fgColor="FFEB9C")
 BLOCK = 7  # Calculator: columns per day type (TPS min, average, peak, today, by peak, by average, chosen)
@@ -970,6 +971,8 @@ def build(results, output):
     latency_default = deck.EXAMPLE_APP if any(row[0] == deck.EXAMPLE_APP for row in latency_apps) else \
         (latency_apps[0][0] if latency_apps else "")
     write_latency(book, sheets["Latency"], len(latency_apps), latency_default)
+    for name in HIDDEN_SHEETS:  # raw query output: the visible sheets read it
+        sheets[name].sheet_state = "hidden"
     book.calculation.fullCalcOnLoad = True
     os.makedirs(os.path.dirname(os.path.abspath(output)), exist_ok=True)
     book.save(output)
