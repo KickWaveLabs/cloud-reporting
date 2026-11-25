@@ -421,6 +421,31 @@ def hpa_rows(rows, history, inventory, taken_on):
     return out
 
 
+REQUEST_FIELDS = ("cpu_request_m", "cpu_limit_m", "mem_request_mb", "mem_limit_mb")
+
+
+def pod_requests(rows):
+    """One row per deployment. The export repeats a deployment once per container of its pod (an application container
+    plus, for example, a 50m / 64Mi helper), so the pod's request is their sum: Container Insights measures that sum.
+    Identical rows (platform pods listed once per replica or node, such as istiod) count once."""
+    grouped = {}
+    for row in rows:
+        key = (cluster_key(row), row["namespace"], row["deployment"])
+        values = tuple(str(row[field]) for field in REQUEST_FIELDS)
+        entry = grouped.setdefault(key, {"row": dict(row), "seen": set()})
+        if values in entry["seen"]:
+            continue
+        if entry["seen"]:
+            for field in REQUEST_FIELDS:
+                first, extra = to_float(entry["row"][field]), to_float(row[field])
+                entry["row"][field] = "" if first is None and extra is None else (first or 0) + (extra or 0)
+        entry["seen"].add(values)
+    merged = sum(len(entry["seen"]) > 1 for entry in grouped.values())
+    azure.LOG.info("Deployment export: %d rows, %d deployments (%d with several containers added up)", len(rows),
+                   len(grouped), merged)
+    return [entry["row"] for entry in grouped.values()]
+
+
 def deployment_rows(rows, history, inventory, hpas, clusters_with_ci, nodes):
     by_deployment = {(cluster_key(row), row["namespace"], row["deployment"]): row for row in hpas}
     out = []
@@ -1011,8 +1036,8 @@ def main():
     shared_names = sorted(name for name, ids in ids_by_name.items() if len(ids) > 1)
 
     hpas = hpa_rows(select(read_rows(hpa_path), HPA_COLUMNS, hpa_path, ids_by_name), history, inventory, taken_on)
-    deployments = deployment_rows(select(read_rows(deployment_path), DEPLOYMENT_COLUMNS, deployment_path, ids_by_name),
-                                  history, inventory, hpas, clusters_with_ci, nodes)
+    exported = select(read_rows(deployment_path), DEPLOYMENT_COLUMNS, deployment_path, ids_by_name)
+    deployments = deployment_rows(pod_requests(exported), history, inventory, hpas, clusters_with_ci, nodes)
     for rows in (hpas, deployments):
         for row in rows:
             row.pop("trend_max_export", None)

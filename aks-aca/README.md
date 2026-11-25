@@ -149,7 +149,8 @@ python aks-aca/src/aa_criteria_workbook.py
 9. `aa_k8s_snapshot.py` needs no sign-in either. It reads the platform team's `reportHpa*` and
    `reportDeployment*` exports (CSV with `;` or XLSX) from `.local/aks-aca-inputs/` (`--inputs` for another
    folder), keeps only the columns it needs and joins them with the Container Insights history by cluster
-   id, namespace and deployment. The exports hold one day of configuration, so pass that day with
+   id, namespace and deployment. The deployment export lists a deployment once per container of its pod; the
+   snapshot adds them up (identical rows count once). The exports hold one day of configuration, so pass that day with
    `--snapshot-date`. Run it after `aa_container_insights.py` and `aa_metrics.py` (node size per cluster).
    `ValTrend` in the HPA export covers the last 30 days in ~11-hour averages; the replica history of the
    period comes from Container Insights.
