@@ -20,9 +20,9 @@ Container Apps cost of a cluster (US$ a month, list price):
   replicas(hour)  = max(minimum, ceil(TPS(hour) x TRAFFIC_SHARE / CONCURRENT_REQUESTS)) per "micro"-service, for each
                     hour of the day and day type; TPS is the hour's peak (busiest 5 minutes) or its average
                     (SIZING_BASIS); minimum = MIN_REPLICAS_OFFICE in office hours, MIN_REPLICAS_OFFHOURS otherwise.
-                    With COUNT_ZERO_5MIN on and a minimum of 0, the hour is billed only for its 5-minute buckets
-                    that cannot be at zero: x (12 - off buckets) / 12, off buckets of the day with the fewest
-                    (PEAK) or their average (AVERAGE); off by default (aa_cluster_snapshot.py says how they count).
+                    A minimum of 0 lets Container Apps scale to zero, so the hour is billed only for its 5-minute
+                    buckets that cannot be at zero: x (12 - off buckets) / 12, off buckets of the day with the
+                    fewest (PEAK) or their average (AVERAGE) (aa_cluster_snapshot.py says how they count).
                     Container Apps adds a replica each CONCURRENT_REQUESTS requests per second (HTTP scale rule,
                     default 10: requests of the last 15 s / 15).
   compute         = sum over hours of days x 3600 x replicas(hour) x sum over "micro"-services of
@@ -42,7 +42,7 @@ import aa_deck_exec as v1
 DEFAULTS = {
     "max_tps": 100, "max_services": 15, "min_saving": 0.10,
     "concurrent_requests": 10, "traffic_share": 1.0, "sizing_basis": "PEAK",
-    "min_replicas_office": 1, "min_replicas_offhours": 1, "count_zero_5min": "NO",
+    "min_replicas_office": 1, "min_replicas_offhours": 1,
     "aks_from_bia": "NONE",
     "requests_buffer": v1.REQUESTS_BUFFER, "environments_per_cluster": 1, "hours_month": v1.HOURS_MONTH,
     "min_vcpu": v1.ACA_MIN_VCPU, "vcpu_step": 0.25, "gib_per_vcpu": 2,
@@ -91,7 +91,7 @@ def replicas(row, variables):
     tps = to_float(row["tps_peak"] if peak else row["tps_avg"]) or 0
     minimum = variables["min_replicas_office"] if row["office"] in ("1", 1) else variables["min_replicas_offhours"]
     count = max(minimum, math.ceil(tps * variables["traffic_share"] / variables["concurrent_requests"] - 1e-9))
-    if variables["count_zero_5min"] == "YES" and minimum == 0:
+    if minimum == 0:  # scale to zero allowed: the buckets without traffic are not billed
         off = to_float(row.get("off_5min_min" if peak else "off_5min_avg")) or 0
         return count * (BUCKETS - off) / BUCKETS
     return count

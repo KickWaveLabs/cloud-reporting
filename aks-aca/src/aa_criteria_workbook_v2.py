@@ -72,12 +72,18 @@ GROUPS = [("AKS", "Stays on AKS (criteria)"), ("BELOW_MARGIN", "Meets criteria, 
           ("IN_USE", "In use, not measured"), ("NOT_IN_USE", "Not in use"), ("IN_DEVELOPMENT", "In development")]
 LAYERS = ["UX", "BS", "CORE", "MAINFRAME"]
 ALL_CLUSTER_COLUMNS = ["cluster", "environment", "category", "cod_app", "cost_month_usd"]
+SCALE_TO_ZERO_NOTE = [
+    "Scale to zero (a minimum of 0 replicas): Container Apps turns a \"micro\"-service off after 5 minutes "
+    "without requests and on again with the next one (a few seconds of cold start).",
+    "So an hour with traffic only part of the time is billed only for its 5-minute buckets with traffic or right "
+    "after it. By peak takes that hour's busiest day of the month (the fewest buckets off); by average, the "
+    "average day. With a minimum of 1 the hour is billed whole."]
 HIDDEN_SHEETS = ["Data", "TrafficData", "LatencyData", "LatencyLayers", "AllClusters", "Lists"]
 TOP = 20  # rows of each Top costs table
 GREEN, AMBER = PatternFill("solid", fgColor="C6EFCE"), PatternFill("solid", fgColor="FFEB9C")
 BLOCK = 7  # Calculator: columns per day type (TPS min, average, peak, today, by peak, by average, chosen)
 HOUR_LABEL_STEP = 4  # hours 0, 4, 8 ... 20 on the charts: office hours are 8:00 to 19:59
-LISTS = {"sizing_basis": '"PEAK,AVERAGE"', "count_zero_5min": '"NO,YES"',
+LISTS = {"sizing_basis": '"PEAK,AVERAGE"',
          "aks_from_bia": '"NONE,MUY ALTA,ALTA,MEDIA,BAJA"'}
 BIA_ORDER = '{"BAJA","MEDIA","ALTA","MUY ALTA"}'  # lowest first; SIN BIA and NONE match none  # variables picked from a list
 BUCKETS = 12  # 5-minute buckets in an hour
@@ -115,10 +121,8 @@ def write_variables(book, sheet, month, days):
                                                                            "weekdays 8:00-20:00 (1 avoids the cold "
                                                                            "start)"),
             ("min_replicas_offhours", model.DEFAULTS["min_replicas_offhours"], "Minimum replicas per "
-                                                                               "\"micro\"-service, the rest"),
-            ("count_zero_5min", model.DEFAULTS["count_zero_5min"],
-             "YES: in hours whose minimum is 0, bill only the 5-minute buckets that cannot be at zero (no traffic "
-             "in the bucket nor the one before); PEAK takes the day with the fewest, AVERAGE their average")]),
+                                                                               "\"micro\"-service, the rest. 0 lets "
+                                                                               "it scale to zero: see the note below")]),
         ("Container Apps", [("requests_buffer", model.DEFAULTS["requests_buffer"], "Extra on the requests of the month"),
                             ("environments_per_cluster", model.DEFAULTS["environments_per_cluster"],
                              "Environments (one load balancer each) per cluster moved"),
@@ -155,6 +159,9 @@ def write_variables(book, sheet, month, days):
                 validation.add(cell.coordinate)
             row += 1
         row += 1
+    sheet.cell(row=row, column=1, value="Note").font = BOLD
+    for offset, text in enumerate(SCALE_TO_ZERO_NOTE, start=1):
+        sheet.cell(row=row + offset, column=1, value=text)
     for column, width in zip("ABCD", (26, 12, 90, 16)):
         sheet.column_dimensions[column].width = width
 
@@ -401,9 +408,9 @@ def write_query_table(sheet, name, columns, rows):
 
 
 def zero_factor(minimum, off_min, off_avg, basis='sizing_basis="PEAK"'):
-    """Share of the hour billed: 1, or the 5-minute buckets that cannot be at zero when count_zero_5min is on and
-    the hour's minimum is 0 (the day with the fewest off buckets for the peak, their average for the average)."""
-    return (f'IF(AND(count_zero_5min="YES",{minimum}=0),({BUCKETS}-IF({basis},{off_min},{off_avg}))/{BUCKETS},1)')
+    """Share of the hour billed: 1, or, when the hour's minimum is 0 (scale to zero allowed), its 5-minute buckets
+    that cannot be at zero (the day with the fewest off buckets for the peak, their average for the average)."""
+    return f'IF({minimum}=0,({BUCKETS}-IF({basis},{off_min},{off_avg}))/{BUCKETS},1)'
 
 
 def write_traffic(sheet, count):
@@ -745,6 +752,8 @@ def write_calculator(sheet, default_scope):
             sheet.cell(row=cost_top + offset, column=column, value="=" + formula).number_format = fmt
     sheet.cell(row=cost_top + len(meters) + 2, column=1,
                value="By peak is the conservative figure (the one presented); by average, the optimistic one.")
+    for offset, text in enumerate(SCALE_TO_ZERO_NOTE, start=3):
+        sheet.cell(row=cost_top + len(meters) + offset, column=1, value=text)
     for block, title, anchor in ((0, "Weekday TPS by hour", "Q2"), (BLOCK, "Weekend TPS by hour", "Q20")):
         chart = LineChart()
         chart.title, chart.height, chart.width = title, 8, 16

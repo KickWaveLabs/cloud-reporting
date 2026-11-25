@@ -27,7 +27,7 @@ Hourly profile per scope (cluster or application) and day type (weekday Monday t
                                     scales in). A bucket has traffic when any API or entry point of the scope had a
                                     request, whatever its layer. _min: the day with the fewest (goes with the peak),
                                     _avg: the average over the month's days. 0 to 12; only used when the model's
-                                    count_zero_5min is on and the hour's minimum is 0 replicas.
+                                    the hour's minimum is 0 replicas (scale to zero allowed).
 
 Outputs (in --output-dir, results/aa-cluster-snapshot by default):
   cluster_criteria_input.csv   PROD application cluster: application, BIA, "micro"-services (cluster and

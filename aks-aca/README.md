@@ -239,9 +239,10 @@ Container Insights; one stopped PROD cluster without metrics.
     replica every `concurrent_requests` requests per second (HTTP scale rule, Azure default 10). The peak of an
     hour is its busiest 5 minutes; only minimum, average and peak are shown, never percentiles.
     The figure presented is by peak (conservative); the Calculator shows by peak and by average side by side.
-  - `count_zero_5min` (off by default) bills an hour whose minimum is 0 replicas only for its 5-minute buckets
-    that cannot be at zero (no traffic in the bucket nor in the one before). It needs `active_5min` in the
-    metrics' hourly files, so rerun `aa_metrics.py` and `aa_cluster_snapshot.py` after updating.
+  - A minimum of 0 replicas (`min_replicas_offhours` or `min_replicas_office`) lets Container Apps scale to
+    zero: that hour is billed only for its 5-minute buckets that cannot be at zero (no traffic in the bucket nor
+    in the one before, the 5-minute wait before it scales in). It needs `active_5min` in the metrics' hourly
+    files, so rerun `aa_metrics.py` and `aa_cluster_snapshot.py` after updating.
   - The saving margin (`min_saving`, 10% by default) is applied at the end, not as a criterion.
 
 ## Tracing a figure
