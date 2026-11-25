@@ -142,6 +142,7 @@ ADT_MAX_TPS, ADT_MAX_ACTIVE_HOURS = 100, 10
 # Container Apps it would stay warm around the clock, which ADT_019 rules out (never warm 24/7).
 OFFHOURS_ACTIVE_MAX = 0.5
 ACTIVE_HOUR_SHARE = 0.1
+EVENT_DRIVEN_REASON = "Event-driven: traffic is Event Hubs / Service Bus messages, not TPS; stays on AKS"
 CRITICAL_BIA = ("MUY ALTA", "ALTA")
 
 
@@ -712,9 +713,13 @@ def adt_runtime(app):
     """Runtime the ADT_019 tree gives an application, with the reasons; see docs/adt-019-runtime.md.
 
     An application without PROD traffic in the month is INSUFFICIENT_DATA: nothing measured to decide on, so it stays
-    out of the migration list (new cluster, still in development, or not integrated yet) until it has traffic."""
+    out of the migration list (new cluster, still in development, or not integrated yet) until it has traffic. An
+    event-driven application (traffic only on Event Hubs / Service Bus, aa.event_driven) stays on AKS: its figures are
+    messages, not TPS, so the tree's thresholds cannot be tested."""
     if app["traffic_status"] != "MEASURED":
         return "INSUFFICIENT_DATA", insufficient_reason(app)
+    if aa.event_driven(app["traffic_layer"]):
+        return "AKS", EVENT_DRIVEN_REASON
     if app["busiest_hour_tps"] != "" and app["busiest_hour_tps"] > ADT_MAX_TPS:
         return "AKS", f"Busiest hour above {ADT_MAX_TPS} TPS"
     expected = max(app["microservices"], app["microservices_projected"] or 0)

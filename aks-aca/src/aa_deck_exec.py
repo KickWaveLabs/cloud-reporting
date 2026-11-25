@@ -502,18 +502,25 @@ def apps_label(count):
 
 def criteria(row):
     """The conditions of slide 4 for one application_snapshot row, and where it goes:
-    NO_TRAFFIC (no PROD traffic measured), AKS (fails condition 1 or 2), ACA_WITH_REVIEW (meets both, but is critical or
-    grows past MAX_MICROSERVICES with DESA) or ACA. aa_criteria_workbook.py writes the same tests as Excel formulas."""
+    NO_TRAFFIC (no PROD traffic measured), AKS (event-driven, or fails condition 1 or 2), ACA_WITH_REVIEW (meets both,
+    but is critical or grows past MAX_MICROSERVICES with DESA) or ACA. An event-driven application (aa.event_driven)
+    has traffic, but in messages: condition 1 is not tested (tps_known false) and it stays on AKS.
+    aa_criteria_workbook.py writes the same tests as Excel formulas."""
     measured = row.get("traffic_status") == "MEASURED" and row.get("busiest_hour_tps", "") != ""
+    event_driven = measured and aa.event_driven(row.get("traffic_layer"))
     microservices = int(to_float(row.get("microservices")) or 0)
     projected = int(to_float(row.get("microservices_projected")) or 0)
     out = {"has_traffic": measured,
-           "tps_ok": measured and (to_float(row["busiest_hour_tps"]) or 0) <= MAX_TPS,
+           "event_driven": event_driven,
+           "tps_known": measured and not event_driven,
+           "tps_ok": measured and not event_driven and (to_float(row["busiest_hour_tps"]) or 0) <= MAX_TPS,
            "size_ok": microservices <= MAX_MICROSERVICES,
            "critical": row.get("bia") in CRITICAL_BIA,
            "growing": projected > MAX_MICROSERVICES >= microservices}
     if not measured:
         out["decision"] = "NO_TRAFFIC"
+    elif event_driven:
+        out["decision"] = "AKS"
     elif not (out["tps_ok"] and out["size_ok"]):
         out["decision"] = "AKS"
     else:
@@ -570,7 +577,7 @@ def slide_criteria(deck, source):
 
 # Groups of the distribution slide, in plain words for a non-technical audience: (label, what it means, colour).
 DISTRIBUTION_GROUPS = {
-    "AKS": ("Se queda en AKS", f"Más de 100 TPS o más de 15 {MICRO}", d.NAVY),
+    "AKS": ("Se queda en AKS", f"Más de 100 TPS, más de 15 {MICRO} o solo consume eventos", d.NAVY),
     "ACA_WITH_REVIEW": ("Container Apps, con revisión", "Cumple, pero es crítica o está creciendo", d.ORANGE),
     "ACA": ("Candidata a Container Apps", f"Hasta 100 TPS y hasta 15 {MICRO}", d.GREEN),
     "IN_USE": ("En uso, sin medición", "Tiene uso, pero su tráfico no se ve", d.STEEL),
@@ -639,7 +646,8 @@ def slide_distribution(deck, apps, estate, results, source):
     conditions each group meets, where it goes and what it costs on AKS today; and the comparison in applications
     (today all on AKS, then how many stay and how many go to Container Apps). Replaces the funnel slide."""
     month = month_label(estate["month"])
-    groups = defaultdict(lambda: {"apps": [], "clusters": 0, "today": 0.0, "fails_tps": 0, "fails_size": 0})
+    groups = defaultdict(lambda: {"apps": [], "clusters": 0, "today": 0.0, "fails_tps": 0, "fails_size": 0,
+                                  "event_driven": 0})
     developing = []
     for row in apps:
         key = distribution_group(row)
@@ -652,7 +660,8 @@ def slide_distribution(deck, apps, estate, results, source):
         entry["clusters"] += int(to_float(row.get("clusters")) or 1)
         entry["today"] += today
         clusters = int(to_float(row.get("clusters")) or 1)
-        entry["fails_tps"] += clusters if test["has_traffic"] and not test["tps_ok"] else 0
+        entry["fails_tps"] += clusters if test["tps_known"] and not test["tps_ok"] else 0
+        entry["event_driven"] += clusters if test["event_driven"] else 0
         entry["fails_size"] += clusters if not test["size_ok"] else 0
     movable = sum(len(groups[key]["apps"]) for key in MOVABLE)
     movable_clusters = sum(groups[key]["clusters"] for key in MOVABLE)
@@ -726,6 +735,11 @@ def slide_distribution(deck, apps, estate, results, source):
     notes = [f"Número en rojo: clusters que no cumplen la condición. Costo AKS de {month}, con IGV."]
     single = sum(int(to_float(row.get("clusters")) or 1) for row in apps if row["possible_monolith"] == "YES")
     extra = []
+    events = groups["AKS"]["event_driven"]
+    if events:
+        extra.append(f"{d.number(events)} {'cluster solo consume' if events == 1 else 'clusters solo consumen'} "
+                     "eventos (Event Hubs / Service Bus): su tráfico son mensajes, no TPS, y se "
+                     f"{'queda' if events == 1 else 'quedan'} en AKS")
     if single:
         extra.append(f"{d.number(single)} clusters con un solo {MICRO_ONE} podrían ir a App Service")
     if extra:
@@ -834,7 +848,8 @@ def aca_breakdown(results, apps, month, prices, ratio, region="eastus2", offhour
     for app in apps:
         entry = per_app[app["cod_app"]]
         test = criteria(app)
-        requests = (to_float(app["requests_month"]) or 0) * REQUESTS_BUFFER
+        # Container Apps bills HTTP requests; an event-driven application's requests_month counts messages, not billed.
+        requests = 0 if test["event_driven"] else (to_float(app["requests_month"]) or 0) * REQUESTS_BUFFER
         compute_cost = (entry["vcpu_s"] + entry["offhours_vcpu_s"]) * price("aca_vcpu_active_s")
         memory_cost = (entry["gib_s"] + entry["offhours_gib_s"]) * price("aca_mem_active_gib_s")
         offhours_cost = (entry["offhours_vcpu_s"] * price("aca_vcpu_active_s")
@@ -844,7 +859,8 @@ def aca_breakdown(results, apps, month, prices, ratio, region="eastus2", offhour
         total = compute_cost + memory_cost + requests_cost + environment_cost
         aks = to_float(app["cost_month_usd"]) or 0
         out.append({"cod_app": app["cod_app"], "decision": test["decision"],
-                    "peak_hour_tps_ok": yes_no(test["tps_ok"], test["has_traffic"]),
+                    "event_driven": yes_no(test["event_driven"]),
+                    "peak_hour_tps_ok": yes_no(test["tps_ok"], test["tps_known"]),
                     "microservices_ok": yes_no(test["size_ok"]), "critical": yes_no(test["critical"]),
                     "growing": yes_no(test["growing"]), "adt_runtime_reference": app["adt_runtime"], "month": month,
                     "microservices": entry["microservices"], "replicas_office": round(entry["replicas"], 2),

@@ -111,6 +111,13 @@ APPLICATION_TRAFFIC_ORDER = TRAFFIC_LAYERS + GATEWAY_LAYERS + QUEUE_LAYERS
 # traffic" would keep a residue: UX served through a self-hosted gateway reports almost nothing to Azure Monitor.
 PRIMARY_LAYER = TRAFFIC_LAYERS[0]
 FALLBACK_LAYERS = APPLICATION_TRAFFIC_ORDER[1:]
+
+
+def event_driven(traffic_layer):
+    """True when an application's traffic is measured on its Event Hubs / Service Bus namespace (no API on APIM).
+    Those figures are messages entering the namespace, not HTTP calls: the 100 TPS rule cannot be tested on them and
+    Container Apps would not bill them as requests. Such an application stays on AKS (owner's rule, 2026-11-24)."""
+    return (traffic_layer or "").strip().upper() in QUEUE_LAYERS
 APP_SERVICE_SUFFIX, CONTAINER_APPS_SUFFIX = ".azurewebsites.net", ".azurecontainerapps.io"
 
 

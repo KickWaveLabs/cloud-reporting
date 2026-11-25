@@ -274,21 +274,29 @@ def criteria_formulas():
     r = lambda column: f"Criteria[[#This Row],[{column}]]"
     offhours_vcpu = 'IF(offhours_rate="IDLE",price_vcpu_idle,price_vcpu)'
     offhours_gib = 'IF(offhours_rate="IDLE",price_gib_idle,price_gib)'
+    event_layers = ",".join(f'{r("traffic_layer")}="{layer}"' for layer in aa.QUEUE_LAYERS)
     return [
         ("has_traffic", f'IF(AND({r("traffic_status")}="MEASURED",ISNUMBER({r("busiest_hour_tps")})),"YES","NO")'),
-        ("tps_ok", f'IF({r("has_traffic")}="NO","-",IF({r("busiest_hour_tps")}<=max_tps,"YES","NO"))'),
+        # Event-driven (aa.event_driven): traffic only on Event Hubs / Service Bus, in messages, so the TPS rule is not
+        # tested ("-") and the application stays on AKS.
+        ("event_driven", f'IF(AND({r("has_traffic")}="YES",OR({event_layers})),"YES","NO")'),
+        ("tps_ok", f'IF(OR({r("has_traffic")}="NO",{r("event_driven")}="YES"),"-",'
+                   f'IF({r("busiest_hour_tps")}<=max_tps,"YES","NO"))'),
         ("services_ok", f'IF(N({r("microservices")})<=max_services,"YES","NO")'),
         ("critical", f'IF(OR({r("bia")}="MUY ALTA",{r("bia")}="ALTA"),"YES","NO")'),
         ("growing", f'IF(AND(N({r("microservices_projected")})>max_services,N({r("microservices")})<=max_services),'
                     '"YES","NO")'),
-        ("decision", f'IF({r("has_traffic")}="NO","NO_TRAFFIC",IF(OR({r("tps_ok")}="NO",{r("services_ok")}="NO"),'
-                     f'"AKS",IF(OR({r("critical")}="YES",{r("growing")}="YES"),"ACA_WITH_REVIEW","ACA")))'),
+        ("decision", f'IF({r("has_traffic")}="NO","NO_TRAFFIC",IF(OR({r("event_driven")}="YES",{r("tps_ok")}="NO",'
+                     f'{r("services_ok")}="NO"),"AKS",IF(OR({r("critical")}="YES",{r("growing")}="YES"),'
+                     '"ACA_WITH_REVIEW","ACA")))'),
         ("group", f'IF({r("decision")}<>"NO_TRAFFIC",{r("decision")},IF({r("no_traffic_reason")}="IN_DEVELOPMENT",'
                   f'"IN_DEVELOPMENT",IF({r("no_traffic_reason")}="IN_USE_NOT_MEASURED","IN_USE","NOT_IN_USE")))'),
         ("offhours_replicas", "offhours_replicas"),
+        # Container Apps bills HTTP requests: an event-driven application's requests_month counts messages.
+        ("billed_requests", f'IF({r("event_driven")}="YES",0,N({r("requests_month")}))'),
         ("aca_list_usd", f"N({r('vcpu_office')})*office_seconds*(price_vcpu+gib_per_vcpu*price_gib)"
                          f"+{r('offhours_replicas')}*N({r('vcpu_one_replica_each')})*offhours_seconds*({offhours_vcpu}"
-                         f"+gib_per_vcpu*{offhours_gib})+N({r('requests_month')})*requests_buffer/1000000*price_requests"
+                         f"+gib_per_vcpu*{offhours_gib})+{r('billed_requests')}*requests_buffer/1000000*price_requests"
                          "+environments_per_app*hours_month*price_lb_hour"),
         ("aca_month_pen", f"{r('aca_list_usd')}*(1-bank_discount)*(1+igv)*exchange_rate"),
         ("aks_month_pen", f"N({r('cost_month_usd')})*(1+igv)*exchange_rate"),
@@ -378,6 +386,9 @@ def write_results(sheet):
     plain_table(sheet, "Results", f"A3:I{total}")
     sheet.cell(row=total + 1, column=1,
                value="Fail columns count applications. In development: not in PROD yet, so not evaluated.")
+    sheet.cell(row=total + 2, column=1,
+               value='="Event-driven applications kept on AKS (Event Hubs / Service Bus messages, not TPS): "'
+                     '&COUNTIFS(Criteria[event_driven],"YES")')
     chart = BarChart()
     chart.type, chart.style, chart.title = "col", 10, "Clusters per destination"
     chart.legend = Legend()
@@ -438,7 +449,7 @@ def write_calculator(sheet, default_app):
     sheet.cell(row=6, column=4, value="MONTH").font = BOLD
     month = [("days (12h)", "=office_seconds/3600/12"), ("hours", "=office_seconds/3600"),
              ("seconds", "=office_seconds"), ("off-hours seconds", "=offhours_seconds"),
-             ("Requests(M)", f"=N({app('requests_month')})*requests_buffer/1000000")]
+             ("Requests(M)", f"={app('billed_requests')}*requests_buffer/1000000")]
     for column, (header, formula) in enumerate(month, start=1):
         sheet.cell(row=7, column=column, value=header)
         sheet.cell(row=8, column=column, value=formula).number_format = "#,##0.00"
