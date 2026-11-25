@@ -39,11 +39,10 @@ GROUPS = {
     "IN_DEVELOPMENT": ("En desarrollo", "Aún no sale a producción", d.SOFT),
 }
 MOVABLE = ("ACA", "ACA_WITH_REVIEW")
-# Official sources of the sizing rule, quoted on the slides that use it.
-SCALE_RULE_URL = "learn.microsoft.com/azure/container-apps/scale-app#http"
-MIN_REPLICA_URL = "learn.microsoft.com/azure/architecture/example-scenario/serverless/microservices-with-container-apps-dapr"
-SIZING_SOURCES = (f"Escalado de Container Apps: 1 réplica más por cada 10 solicitudes por segundo ({SCALE_RULE_URL}). "
-                  f"Mínimo 1 réplica para evitar el arranque en frío ({MIN_REPLICA_URL}).")
+# Sources of the sizing rule, named on the slides that use it; the links are in the v2 workbook (Variables), since
+# the corporate deck carries no URLs.
+SIZING_SOURCES = ("Escalado de Container Apps (1 réplica más por cada 10 solicitudes por segundo) y mínimo de 1 réplica "
+                  "para evitar el arranque en frío: Microsoft Learn.")
 
 
 def pen(value):
