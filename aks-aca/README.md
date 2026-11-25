@@ -257,9 +257,9 @@ Container Insights; one stopped PROD cluster without metrics.
     the hourly profile) x `capacity_safety` (70%), never below `concurrent_requests`;
   - `size_from_usage`: each "micro"-service's CPU and memory used per replica today x `usage_headroom` (2), never
     above its request;
-  - `environment_fee`: the Dedicated plan management hour per environment (private endpoint or planned
-    maintenance), which lowers the saving.
-  Every switch can be turned on or off in either workbook's Variables.
+  Every switch can be turned on or off in either workbook's Variables. `environment_fee` (the Dedicated plan
+  management hour per environment, charged with a private endpoint or planned maintenance) is off in both until a
+  private endpoint is confirmed.
 
 ## Tracing a figure
 

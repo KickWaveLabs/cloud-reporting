@@ -212,8 +212,9 @@ def slide_cost(deck, rows, source):
     d.note_box(slide, Inches(0.6), Inches(4.85), Inches(12.1), Inches(0.75),
                f"Incluye los clusters \"con revisión\": el ahorro firme es el de los candidatos. Los que cumplen pero "
                f"ahorran menos de {d.percent(model.DEFAULTS['min_saving'])} se quedan en AKS. "
-               + ("Incluye el cargo por entorno con endpoint privado y el tamaño de cada réplica según su uso real. "
-                  if CRITERIA["name"] == "v3" else "")
+               + ("Incluye el tamaño de cada réplica según su uso real. " if CRITERIA["name"] == "v3" else "")
+               + ("Incluye el cargo por entorno con endpoint privado. "
+                  if model.DEFAULTS["environment_fee"] == "YES" else "")
                + f"Detalle por cluster en el Excel de criterios {CRITERIA['name']}.", size=11)
     d.note_box(slide, Inches(0.6), Inches(5.75), Inches(12.1), Inches(0.6),
                "Beneficio adicional sin monto: menos clusters que actualizar y mantener (horas-hombre de los equipos).",

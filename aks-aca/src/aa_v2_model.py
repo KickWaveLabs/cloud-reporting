@@ -37,8 +37,8 @@ Container Apps cost of a cluster (US$ a month, list price):
 Criteria v3 is this model with the PRESETS["v3"] values (use("v3")): each hour's busiest occurrence replayed every 5
 minutes; replicas sized by what one replica handles today on AKS (CAPACITY_FROM_TODAY: TPS per replica at the peak
 hour x CAPACITY_SAFETY, never below CONCURRENT_REQUESTS); each "micro"-service's size from its measured use
-(SIZE_FROM_USAGE: CPU and memory used per replica x USAGE_HEADROOM, never above its request); and the environment
-fee. v2 keeps them all off.
+(SIZE_FROM_USAGE: CPU and memory used per replica x USAGE_HEADROOM, never above its request). v2 keeps them all off;
+ENVIRONMENT_FEE is off in both (a switch for when a private endpoint is confirmed).
 With the bank's discount and IGV in soles: x (1 - BANK_DISCOUNT) x (1 + IGV) x EXCHANGE_RATE.
 """
 
@@ -66,8 +66,7 @@ BIA_LEVELS = ["BAJA", "MEDIA", "ALTA", "MUY ALTA"]  # lowest first; SIN BIA is b
 PRICE_KEYS = {"price_vcpu": "aca_vcpu_active_s", "price_gib": "aca_mem_active_gib_s",
               "price_requests": "aca_requests_million", "price_lb_hour": "lb_standard_rules_hour",
               "price_env_hour": "aca_env_management_hour"}
-PRESETS = {"v2": {}, "v3": {"sizing_basis": "BUSIEST_HOUR", "capacity_from_today": "YES", "size_from_usage": "YES",
-                            "environment_fee": "YES"}}
+PRESETS = {"v2": {}, "v3": {"sizing_basis": "BUSIEST_HOUR", "capacity_from_today": "YES", "size_from_usage": "YES"}}
 
 
 def use(criteria):
