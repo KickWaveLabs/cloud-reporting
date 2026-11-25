@@ -33,6 +33,7 @@ from collections import defaultdict
 from openpyxl import Workbook
 from openpyxl.chart import BarChart, LineChart, Reference
 from openpyxl.chart.label import DataLabelList
+from openpyxl.chart.layout import Layout, ManualLayout
 from openpyxl.chart.legend import Legend
 from openpyxl.chart.series import SeriesLabel
 from openpyxl.styles import Alignment, Font, PatternFill
@@ -432,12 +433,31 @@ def value_labels():
     return labels
 
 
+def apart(chart):
+    """Keep the title, axis titles and legend beside the plot. Excel draws them on it when the plot area is left to
+    its automatic layout, so the plot gets a fixed inner box with room for each (fractions of the chart)."""
+    left = 0.1 if chart.y_axis.title is not None else 0.06
+    top = 0.13 if chart.title is not None else 0.05
+    bottom = 0.27 if chart.x_axis.title is not None else 0.12
+    right = 0.3 if chart.legend is not None and chart.legend.position == "r" else 0.04
+    chart.layout = Layout(manualLayout=ManualLayout(layoutTarget="inner", xMode="edge", yMode="edge", x=left, y=top,
+                                                    w=1 - left - right, h=1 - top - bottom))
+    for title in (chart.title, chart.x_axis.title, chart.y_axis.title):
+        if title is not None:
+            title.overlay = False
+    if chart.legend is not None:
+        chart.legend.overlay = False
+
+
 def hour_axis(chart):
-    """Show both axes (openpyxl 3.1 hides them by default), an hour label every HOUR_LABEL_STEP and the legend below."""
+    """Show both axes (openpyxl 3.1 hides them by default), an hour label every HOUR_LABEL_STEP, whole numbers on
+    the value axis and the legend below, none of them on the plot."""
     chart.x_axis.delete, chart.y_axis.delete = False, False
     chart.x_axis.tickLblSkip = chart.x_axis.tickMarkSkip = HOUR_LABEL_STEP
+    chart.y_axis.number_format = "0"
     chart.legend = Legend()
     chart.legend.position = "b"
+    apart(chart)
 
 
 def write_results(sheet):
@@ -470,6 +490,7 @@ def write_results(sheet):
     chart.set_categories(Reference(sheet, min_col=1, min_row=4, max_row=3 + len(GROUPS)))
     chart.legend = Legend()
     chart.legend.position = "r"
+    apart(chart)
     chart.x_axis.delete = True  # the legend names each bar
     chart.y_axis.delete = False
     chart.dataLabels = value_labels()
