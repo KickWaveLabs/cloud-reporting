@@ -96,10 +96,8 @@ python aks-aca/src/aa_signals.py   # optional; after aa_metrics.py
 python aks-aca/src/aa_microservice_history.py   # optional; at least once a month, keeps a growing history
 python aks-aca/src/aa_workbook.py
 python aks-aca/src/aa_deck.py        # after opening the workbook in Excel and saving it
-python aks-aca/src/aa_deck_exec.py
-python aks-aca/src/aa_criteria_workbook.py
-python aks-aca/src/aa_criteria_workbook_v2.py   # criteria v2, after aa_cluster_snapshot.py (--criteria v3 for v3)
-python aks-aca/src/aa_deck_exec_v2.py           # corporate deck v2 (--criteria v3 for v3)
+python aks-aca/src/aa_criteria_workbook.py   # --criteria v1 | v2 (default) | v3; v2 and v3 after aa_cluster_snapshot.py
+python aks-aca/src/aa_deck_exec.py           # --criteria v1 | v2 (default) | v3
 ```
 
 | Step | Scope by default | Time on 2026-11-10 | Check |
@@ -188,7 +186,7 @@ python aks-aca/src/aa_deck_exec_v2.py           # corporate deck v2 (--criteria 
     technical criteria, strategic front, proposal and annex; 20 slides, native charts, text in Spanish) from the
     workbook's calculated values and `results/` (signals, and node and workload usage for the CPU vs memory
     slide). Open the workbook in Excel and save it first. Its figures are a draft to check.
-14. `aa_deck_exec.py` builds `aks_aca_corporate.pptx`, the corporate deck (slides 1 to 6, text in Spanish, amounts in
+14. `aa_deck_exec_v1.py` (`aa_deck_exec.py --criteria v1`) builds `aks_aca_corporate_v1.pptx`, the v1 corporate deck (slides 1 to 6, text in Spanish, amounts in
     soles with IGV) for a non-technical forum: ways to build an application (runtimes as acronyms, with a legend),
     AKS in PROD (clusters, applications, "micro"-services, monthly and annual cost of PROD plus non-PROD; Azure icon
     from `assets/icons/`), the hypothesis (three signs with a sentence each, motivation, minimum AKS vs Container
@@ -199,7 +197,7 @@ python aks-aca/src/aa_deck_exec_v2.py           # corporate deck v2 (--criteria 
     month. It reads only `results/` (including `application_snapshot.csv`), so it needs no saved workbook. AKS
     takes the discount measured on its node VMs (reservations included); `--aks-discount 0.60` fixes it by hand.
     Container Apps takes the bank's 30%.
-15. `aa_criteria_workbook.py` writes `aks_aca_criteria.xlsx` next to the deck, plain Excel in six sheets: `Results`
+15. `aa_criteria_workbook_v1.py` (`aa_criteria_workbook.py --criteria v1`) writes `aks_aca_criteria_v1.xlsx` next to the deck, plain Excel in six sheets: `Results`
     (one row per destination in clusters and applications, as the result slide, and an editable chart), `Criteria` (one row per application:
     data, conditions, decision, off-hours replicas (nights and weekends) — 1 by default, write 0 to let one scale to zero — and its monthly
     cost on AKS and Container Apps in soles), `Calculator` (one application meter by meter, in the format of the
@@ -223,15 +221,16 @@ Container Insights; one stopped PROD cluster without metrics.
 
 ### Criteria v1, v2 and v3
 
-- **v1** is frozen at git tag `v1` (2026-11-24): `aa_deck_exec.py` and `aa_criteria_workbook.py`, one row per
-  application, Container Apps costed with today's office replicas. To rebuild it exactly: `git checkout v1`, copy
-  `.local/v1-data/results` over `results/` and run the two scripts.
+- One script per artifact: `aa_deck_exec.py` and `aa_criteria_workbook.py`, with `--criteria v1|v2|v3`; files end
+  in `_v1`, `_v2` or `_v3`. v1's code is in `aa_deck_exec_v1.py` and `aa_criteria_workbook_v1.py`.
+- **v1** (git tag `v1`, 2026-11-24): one row per application, Container Apps costed with today's office replicas.
+  To rebuild it: `--criteria v1 --results .local/v1-data/results` on both scripts.
 - **v2** works per cluster, with a summary per application, and costs Container Apps from each hour's traffic:
   - `aa_cluster_snapshot.py` attributes every PROD AKS API to its cluster and writes `cluster_criteria_input.csv`
     and `traffic_hourly_profile.csv` (min / average / peak TPS by weekday or weekend and Lima hour, for every
     cluster and application) in `results/aa-cluster-snapshot/`.
-  - `aa_v2_model.py` holds the rules and the cost model (its docstring explains them); `aa_deck_exec_v2.py`
-    builds `aks_aca_corporate_v2.pptx` from it, and `aa_criteria_workbook_v2.py` writes the same rules as Excel
+  - `aa_v2_model.py` holds the rules and the cost model (its docstring explains them); `aa_deck_exec.py`
+    builds `aks_aca_corporate_v2.pptx` from it, and `aa_criteria_workbook.py` writes the same rules as Excel
     formulas in `aks_aca_criteria_v2.xlsx` (Results, Top costs, Criteria per cluster, Apps, Calculator with the replicas of
     every hour editable, Latency simulator, Traffic, Services, Prices, Variables). With the default variables the
     workbook and the deck give the same figures.

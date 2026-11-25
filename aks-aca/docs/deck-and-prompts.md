@@ -47,7 +47,7 @@ that knows TPS, CPU, RAM and time to market. The technical deck stays as backup 
   Runtime counts only take what existed in the measured month (`existed_at_measurement`).
   From 2026-11-22 every count of the bank's deployed services is written "micro"-servicios on the slides.
   Per-application detail (one column per condition, cost and saving): `aks_aca_criteria.xlsx`
-  (`aa_criteria_workbook.py`).
+  (`aa_criteria_workbook_v1.py`).
 - Traffic classes (office, extended, 24x7) stay in the technical deck until another architect validates them.
 
 ## Plan (2026-11-11)

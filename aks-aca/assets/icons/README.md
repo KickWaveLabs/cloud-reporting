@@ -2,7 +2,7 @@
 
 Official Azure Architecture Icons (Microsoft), taken from the copies draw.io ships in
 `jgraph/drawio/src/main/webapp/img/lib/azure2/` and rasterised to 256 px PNG with `rsvg-convert`.
-`aa_deck_exec.py` puts them on slide 2 of the corporate deck.
+`aa_deck_exec_v1.py` puts them on slide 2 of the corporate deck.
 
 | File | Source SVG |
 |---|---|

@@ -1,6 +1,6 @@
 """Criteria v2 model: the decision and the Container Apps cost of each PROD application cluster.
 
-One source for the v2 deck (aa_deck_exec_v2.py); the v2 workbook (aa_criteria_workbook_v2.py) writes the same rules
+One source for the v2 and v3 deck (aa_deck_exec.py); the workbook (aa_criteria_workbook.py) writes the same rules
 as Excel formulas over the same inputs, so both give the same figures with the default variables.
 
 Decision of a cluster, in order (the first that applies):
@@ -47,7 +47,7 @@ import os
 from collections import defaultdict
 
 import aa_common as aa
-import aa_deck_exec as v1
+import aa_deck_exec_v1 as v1
 
 DEFAULTS = {
     "max_tps": 100, "max_services": 15, "min_saving": 0.10,
