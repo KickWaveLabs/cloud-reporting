@@ -98,6 +98,8 @@ python aks-aca/src/aa_workbook.py
 python aks-aca/src/aa_deck.py        # after opening the workbook in Excel and saving it
 python aks-aca/src/aa_deck_exec.py
 python aks-aca/src/aa_criteria_workbook.py
+python aks-aca/src/aa_criteria_workbook_v2.py   # criteria v2, after aa_cluster_snapshot.py
+python aks-aca/src/aa_deck_exec_v2.py           # corporate deck v2
 ```
 
 | Step | Scope by default | Time on 2026-11-10 | Check |
@@ -218,6 +220,25 @@ with `--output-dir .local/<name>` so `results/` is not overwritten.
 Subscriptions with "POC" in their name are left out by the inventory, so every later step skips them
 (`--include-poc` keeps them). Expected gaps with a Reader account (2026-11-10): 4 PROD clusters without
 Container Insights; one stopped PROD cluster without metrics.
+
+### Criteria v1 and v2
+
+- **v1** is frozen at git tag `v1` (2026-11-24): `aa_deck_exec.py` and `aa_criteria_workbook.py`, one row per
+  application, Container Apps costed with today's office replicas. To rebuild it exactly: `git checkout v1`, copy
+  `.local/v1-data/results` over `results/` and run the two scripts.
+- **v2** works per cluster, with a summary per application, and costs Container Apps from each hour's traffic:
+  - `aa_cluster_snapshot.py` attributes every PROD AKS API to its cluster and writes `cluster_criteria_input.csv`
+    and `traffic_hourly_profile.csv` (min / average / peak TPS by weekday or weekend and Lima hour, for every
+    cluster and application) in `results/aa-cluster-snapshot/`.
+  - `aa_v2_model.py` holds the rules and the cost model (its docstring explains them); `aa_deck_exec_v2.py`
+    builds `aks_aca_corporate_v2.pptx` from it, and `aa_criteria_workbook_v2.py` writes the same rules as Excel
+    formulas in `aks_aca_criteria_v2.xlsx` (Results, Criteria per cluster, Apps, Calculator with the replicas of
+    every hour editable, Latency simulator, Traffic, Services, Prices, Variables). With the default variables the
+    workbook and the deck give the same figures.
+  - Replicas per hour = max(minimum, ceiling(TPS x traffic_share / concurrent_requests)): Container Apps adds a
+    replica every `concurrent_requests` requests per second (HTTP scale rule, Azure default 10). The peak of an
+    hour is its busiest 5 minutes; only minimum, average and peak are shown, never percentiles.
+  - The saving margin (`min_saving`, 10% by default) is applied at the end, not as a criterion.
 
 ## Tracing a figure
 
