@@ -8,8 +8,9 @@ explains them); with the default variables both give the same figures. Sheets:
   Criteria    one row per cluster: data, criteria, decision, Container Apps cost from traffic, saving, group
   Apps        one row per application: its clusters, how many move, cost today and after
   Calculator  pick a cluster or an application (B2): traffic by hour (min / average / peak, weekday and weekend, as
-              charts), replicas per "micro"-service each hour (today, simulated from traffic, chosen: editable) and
-              the monthly cost meter by meter on AKS and on Container Apps
+              charts), replicas per "micro"-service each hour (today; simulated by peak and by average; chosen:
+              editable) and the monthly cost meter by meter on AKS and on Container Apps, by peak, by average and
+              chosen
   Latency     the UX -> BS -> Core -> mainframe chain: how much a request takes with each layer on AKS or Container
               Apps for the chosen application, a drawing of the chain and the measured latency per application;
               every parameter can be changed (to validate with the architecture team)
@@ -65,6 +66,7 @@ GROUPS = [("AKS", "Stays on AKS (criteria)"), ("BELOW_MARGIN", "Meets criteria, 
           ("ACA_WITH_REVIEW", "ACA, with review"), ("ACA", "Candidate to ACA"),
           ("IN_USE", "In use, not measured"), ("NOT_IN_USE", "Not in use"), ("IN_DEVELOPMENT", "In development")]
 LAYERS = ["UX", "BS", "CORE", "MAINFRAME"]
+BLOCK = 7  # Calculator: columns per day type (TPS min, average, peak, today, by peak, by average, chosen)
 HOUR_LABEL_STEP = 4  # hours 0, 4, 8 ... 20 on the charts: office hours are 8:00 to 19:59
 # Official sources of the sizing rule, linked next to their variables.
 SOURCES = {
@@ -530,52 +532,60 @@ def write_calculator(sheet, default_scope):
     sheet["B9"].number_format = PEN
 
     top = 13
-    headers = ["Hour", "Weekday TPS min", "TPS average", "TPS peak", "Replicas today", "Simulated", "Chosen",
-               "Weekend TPS min", "TPS average", "TPS peak", "Replicas today", "Simulated", "Chosen"]
-    sheet.cell(row=top - 1, column=1, value="Replicas per \"micro\"-service each hour (Chosen: yellow, change it; "
-                                            "it starts as Simulated)").font = BOLD
+    block_headers = ["TPS min", "TPS average", "TPS peak", "Replicas today", "Replicas by peak",
+                     "Replicas by average", "Chosen"]
+    headers = ["Hour"] + ["Weekday " + block_headers[0]] + block_headers[1:] + \
+        ["Weekend " + block_headers[0]] + block_headers[1:]
+    sheet.cell(row=top - 1, column=1, value="Replicas per \"micro\"-service each hour (by peak and by average; "
+                                            "Chosen: yellow, change it; it starts as sizing_basis)").font = BOLD
     for column, header in enumerate(headers, start=1):
         sheet.cell(row=top, column=column, value=header).font = BOLD
-    source = lambda field: "Traffic" if field == "sim_replicas" else "TrafficData"
-    fields = [("tps_min", "0.00"), ("tps_avg", "0.00"), ("tps_peak", "0.00"), ("replicas_today_avg", "0.0"),
-              ("sim_replicas", "0")]
+    fields = [("tps_min", "0.00"), ("tps_avg", "0.00"), ("tps_peak", "0.00"), ("replicas_today_avg", "0.0")]
     for hour in range(24):
         row = top + 1 + hour
         sheet.cell(row=row, column=1, value=hour)
-        for block, day_type in ((0, "weekday"), (6, "weekend")):
+        for block, day_type in ((0, "weekday"), (BLOCK, "weekend")):
+            where = f'TrafficData[scope],$B$2,TrafficData[day_type],"{day_type}",TrafficData[hour],$A{row}'
             for offset, (field, fmt) in enumerate(fields):
-                cell = sheet.cell(row=row, column=2 + block + offset,
-                                  value=f'=SUMIFS({source(field)}[{field}],{source(field)}[scope],$B$2,'
-                                        f'{source(field)}[day_type],"{day_type}",{source(field)}[hour],$A{row})')
+                cell = sheet.cell(row=row, column=2 + block + offset, value=f"=SUMIFS(TrafficData[{field}],{where})")
                 cell.number_format = fmt
-            simulated = get_column_letter(6 + block)
-            chosen = sheet.cell(row=row, column=7 + block, value=f"={simulated}{row}")
+            minimum = f"IF(SUMIFS(TrafficData[office],{where})>0,min_replicas_office,min_replicas_offhours)"
+            average, peak = (get_column_letter(2 + block + offset) for offset in (1, 2))
+            for offset, tps in ((4, peak), (5, average)):
+                sheet.cell(row=row, column=2 + block + offset,
+                           value=f"=MAX({minimum},CEILING({tps}{row}*traffic_share/concurrent_requests,1))"
+                           ).number_format = "0"
+            by_peak, by_average = (get_column_letter(2 + block + offset) for offset in (4, 5))
+            chosen = sheet.cell(row=row, column=8 + block,
+                                value=f'=IF(sizing_basis="PEAK",{by_peak}{row},{by_average}{row})')
             chosen.fill, chosen.number_format = EDITABLE, "0"
     last = top + 24
     cost_top = last + 2
     sheet.cell(row=cost_top, column=1, value="Monthly cost (US$ list price unless said)").font = BOLD
-    sheet.cell(row=cost_top, column=2, value="Simulated").font = BOLD
-    sheet.cell(row=cost_top, column=3, value="Chosen").font = BOLD
+    for column, header in ((2, "By peak"), (3, "By average"), (4, "Chosen")):
+        sheet.cell(row=cost_top, column=column, value=header).font = BOLD
     seconds = lambda wd, we: f"(SUM({wd}{top + 1}:{wd}{last})*weekdays+SUM({we}{top + 1}:{we}{last})*weekend_days)*3600"
-    meters = [("Replica-seconds per \"micro\"-service", seconds("F", "L"), seconds("G", "M"), "#,##0"),
-              ("Compute (vCPU + memory)", f"B{cost_top + 1}*$B$7", f"C{cost_top + 1}*$B$7", USD),
-              ("Requests", "N($B$8)*requests_buffer/1000000*price_requests",
-               "N($B$8)*requests_buffer/1000000*price_requests", USD),
-              ("Environment (load balancer)", "$B$6*environments_per_cluster*hours_month*price_lb_hour",
-               "$B$6*environments_per_cluster*hours_month*price_lb_hour", USD),
-              ("Total list price", f"SUM(B{cost_top + 2}:B{cost_top + 4})", f"SUM(C{cost_top + 2}:C{cost_top + 4})",
-               USD),
-              ("Container Apps with discount and IGV (S/)", f"B{cost_top + 5}*(1-bank_discount)*(1+igv)*exchange_rate",
-               f"C{cost_top + 5}*(1-bank_discount)*(1+igv)*exchange_rate", PEN),
-              ("AKS today (S/)", "$B$9", "$B$9", PEN),
-              ("Saving (S/)", f"B{cost_top + 7}-B{cost_top + 6}", f"C{cost_top + 7}-C{cost_top + 6}", PEN),
-              ("Saving share", f"IF(B{cost_top + 7}>0,B{cost_top + 8}/B{cost_top + 7},0)",
-               f"IF(C{cost_top + 7}>0,C{cost_top + 8}/C{cost_top + 7},0)", PCT)]
-    for offset, (label, simulated, chosen, fmt) in enumerate(meters, start=1):
+    grid = {2: ("F", "M"), 3: ("G", "N"), 4: ("H", "O")}  # cost column -> its weekday and weekend replica columns
+    each = lambda formula: {column: formula(get_column_letter(column), column) for column in grid}
+    meters = [("Replica-seconds per \"micro\"-service", each(lambda x, column: seconds(*grid[column])), "#,##0"),
+              ("Compute (vCPU + memory)", each(lambda x, _: f"{x}{cost_top + 1}*$B$7"), USD),
+              ("Requests", each(lambda x, _: "N($B$8)*requests_buffer/1000000*price_requests"), USD),
+              ("Environment (load balancer)",
+               each(lambda x, _: "$B$6*environments_per_cluster*hours_month*price_lb_hour"), USD),
+              ("Total list price", each(lambda x, _: f"SUM({x}{cost_top + 2}:{x}{cost_top + 4})"), USD),
+              ("Container Apps with discount and IGV (S/)",
+               each(lambda x, _: f"{x}{cost_top + 5}*(1-bank_discount)*(1+igv)*exchange_rate"), PEN),
+              ("AKS today (S/)", each(lambda x, _: "$B$9"), PEN),
+              ("Saving (S/)", each(lambda x, _: f"{x}{cost_top + 7}-{x}{cost_top + 6}"), PEN),
+              ("Saving share", each(lambda x, _: f"IF({x}{cost_top + 7}>0,{x}{cost_top + 8}/{x}{cost_top + 7},0)"),
+               PCT)]
+    for offset, (label, formulas, fmt) in enumerate(meters, start=1):
         sheet.cell(row=cost_top + offset, column=1, value=label)
-        for column, formula in ((2, simulated), (3, chosen)):
+        for column, formula in formulas.items():
             sheet.cell(row=cost_top + offset, column=column, value="=" + formula).number_format = fmt
-    for block, title, anchor in ((0, "Weekday TPS by hour", "O2"), (6, "Weekend TPS by hour", "O20")):
+    sheet.cell(row=cost_top + len(meters) + 2, column=1,
+               value="By peak is the conservative figure (the one presented); by average, the optimistic one.")
+    for block, title, anchor in ((0, "Weekday TPS by hour", "Q2"), (BLOCK, "Weekend TPS by hour", "Q20")):
         chart = LineChart()
         chart.title, chart.height, chart.width = title, 8, 16
         chart.y_axis.title, chart.x_axis.title = "TPS", "Hour"
@@ -590,14 +600,14 @@ def write_calculator(sheet, default_scope):
     replicas_chart.type, replicas_chart.title, replicas_chart.height, replicas_chart.width = \
         "col", "Chosen replicas per \"micro\"-service", 8, 16
     replicas_chart.y_axis.title, replicas_chart.x_axis.title = "Replicas", "Hour"
-    for column, name in ((7, "Weekday"), (13, "Weekend")):
+    for column, name in ((8, "Weekday"), (8 + BLOCK, "Weekend")):
         replicas_chart.add_data(Reference(sheet, min_col=column, min_row=top + 1, max_row=last))
         replicas_chart.series[-1].tx = SeriesLabel(v=name)
     replicas_chart.set_categories(Reference(sheet, min_col=1, min_row=top + 1, max_row=last))
     hour_axis(replicas_chart)
-    sheet.add_chart(replicas_chart, "O38")
+    sheet.add_chart(replicas_chart, "Q38")
     sheet.column_dimensions["A"].width = 40
-    for column in "BCDEFGHIJKLM":
+    for column in "BCDEFGHIJKLMNO":
         sheet.column_dimensions[column].width = 13
 
 
