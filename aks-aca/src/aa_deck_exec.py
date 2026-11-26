@@ -93,7 +93,7 @@ def slide_estate(deck, estate, apps, source):
     d.text_box(slide, left, top + Inches(1.75), width, Inches(0.3), "clusters AKS en producción", size=12,
                color=d.SOFT, align=d.PP_ALIGN.CENTER)
     split = [(aa.APPLICATION, "aplicaciones de negocio"), (aa.INFRASTRUCTURE, "infraestructura"),
-             (aa.NO_APPLICATIONS, "creados sin aplicaciones"), (aa.NO_DATA, "sin datos")]
+             (aa.NO_APPLICATIONS, "vacíos, aún en desarrollo"), (aa.NO_DATA, "sin datos")]
     row = top + Inches(2.25)
     for code, label in split:
         entry = category.get(code)
@@ -105,28 +105,35 @@ def slide_estate(deck, estate, apps, source):
         d.text_box(slide, left + Inches(1.15), row + Inches(0.03), width - Inches(1.3), Inches(0.35), label,
                    size=11, bold=base, color=d.WHITE if base else d.SOFT)
         row += Inches(0.42)
-    d.text_box(slide, left, top + height - Inches(0.5), width, Inches(0.35),
-               f"+ {d.number(estate['nonprod_clusters'])} no productivos (certificación y desarrollo)", size=10,
-               color=d.SOFT, align=d.PP_ALIGN.CENTER)
     grid_left, gap = Inches(4.25), Inches(0.2)
     card_width = int((Inches(12.75) - grid_left - gap) / 2)
     cards = [(MICRO, d.number(v1.deployed_microservices(apps)), "desplegados en esos clusters", d.GREEN),
              ("Su peso en AKS", d.percent(d.share_of(application["cost"], total)),
-              f"de todo lo que se paga en AKS ({month})", d.STEEL),
-             ("Costo mensual", v1.soles(application["cost"]), f"de {v1.soles(total)} de todo AKS", d.ORANGE),
+              f"de todo AKS, productivo y no productivo ({month})", d.STEEL),
+             ("Costo mensual", v1.soles(application["cost"]), f"de {v1.soles(total)}: todo AKS, productivo y no "
+                                                              "productivo", d.ORANGE),
              ("Costo anual", v1.soles(application["cost"] * 12), "costo mensual × 12", d.RUST)]
     for index, (label, value, detail, accent) in enumerate(cards):
         v1.accent_card(slide, grid_left + (index % 2) * (card_width + gap), top + (index // 2) * Inches(1.75),
                        card_width, Inches(1.6), label, value, detail, accent, value_size=30 if index >= 2 else 28)
+    box_top, box_height = top + Inches(3.55), Inches(1.2)
+    halves = int((Inches(12.75) - grid_left - gap) / 2)
     outside = [f"{label[0].upper() + label[1:]}: {v1.soles(category[code]['cost'])}" for code, label in split[1:]
                if category.get(code, {}).get("clusters")]
-    outside.append(f"No productivos: {v1.soles(estate['nonprod_cost'])}")
-    box_top = top + Inches(3.55)
-    d.note_box(slide, grid_left, box_top, Inches(12.75) - grid_left, Inches(1.2), "", size=11)
-    d.text_box(slide, grid_left + Inches(0.25), box_top + Inches(0.1), Inches(8.0), Inches(0.35),
-               f"Fuera del análisis, al mes ({month}):", size=12, bold=True, color=d.NAVY)
-    d.text_box(slide, grid_left + Inches(0.25), box_top + Inches(0.45), Inches(8.0), Inches(0.7),
-               ["   ·   ".join(outside[:2]), "   ·   ".join(outside[2:])], size=11, color=d.GREY)
+    production = sum(category[code]["clusters"] for code, _ in split[1:] if category.get(code, {}).get("clusters"))
+    for index, (title, lines) in enumerate(((f"Fuera del análisis ({production} clusters), al mes", outside),
+                                            (f"No productivos ({d.number(estate['nonprod_clusters'])} clusters), al mes",
+                                             [v1.soles(estate["nonprod_cost"]), "certificación y desarrollo"]))):
+        left_box = grid_left + index * (halves + gap)
+        d.note_box(slide, left_box, box_top, halves, box_height, "", size=11)
+        d.text_box(slide, left_box + Inches(0.2), box_top + Inches(0.1), halves - Inches(0.4), Inches(0.5), title,
+                   size=11, bold=True, color=d.NAVY)
+        d.text_box(slide, left_box + Inches(0.2), box_top + Inches(0.42), halves - Inches(0.4), Inches(0.75),
+                   lines if not index else lines[:1], size=18 if index else 10.5, bold=bool(index),
+                   color=d.NAVY if index else d.GREY)
+        if index:
+            d.text_box(slide, left_box + Inches(0.2), box_top + Inches(0.82), halves - Inches(0.4), Inches(0.3),
+                       lines[1], size=10.5, color=d.GREY)
 
 
 THOUSANDS = re.compile(r"\d{1,3}(?:\.\d{3})+(?:,\d+)?|\d+,\d+")
@@ -158,18 +165,41 @@ def example_cluster(rows):
 
 
 def slide_hypothesis(deck, estate, apps, scaling, results, example, source):
-    """v1's slide 3 with the example costed by the v2 model."""
-    original = v1.example_app
+    """v1's slide 3 with the example costed by the v2 model and a fourth sign: PROD clusters created empty while
+    their application is still in development (only the platform's Istio runs in them)."""
+    original, original_card = v1.example_app, v1.sign_card
     soles = (1 + v1.IGV) * v1.EXCHANGE_RATE
     v1.example_app = lambda *_: {"code": example["cod_app"], "cluster": example["cluster"],
                                  "microservices": int(example["microservices"]),
                                  "aks": example["aks_month_pen"] / soles, "aca": example["aca_month_pen"] / soles,
                                  "saving": example["saving_share"]}
+    signs = []  # v1's three signs, drawn below with the fourth
+    v1.sign_card = lambda slide, left, top, width, height, *rest, **named: signs.append((top, height, rest, named))
     try:
         v1.slide_hypothesis(deck, estate, apps, scaling, results, source)
     finally:
-        v1.example_app = original
+        v1.example_app, v1.sign_card = original, original_card
     slide = deck.slides[-1]
+    shift = Inches(0.7)  # the motivation column narrows to make room for the fourth sign
+    for shape in slide.shapes:
+        if shape.left >= Inches(8.0) and Inches(1.2) <= shape.top < Inches(4.7):
+            shape.left, shape.width = shape.left + shift, shape.width - shift
+            if shape.has_text_frame and "versiones de Kubernetes" in shape.text_frame.text:
+                shape.text_frame.paragraphs[0].runs[0].text = "Complejidad: sin servidores ni Kubernetes que administrar"
+    # The third sign in a narrower card: the count alone as the figure, "of N" in its label.
+    signs[0] = (signs[0][0], signs[0][1], ("Pagamos CPU que no usamos",) + signs[0][2][1:], signs[0][3])
+    sentence, value, label = signs[2][2][:3]
+    count, _, of = value.partition(" de ")
+    signs[2] = (signs[2][0], signs[2][1], (f"Pocos {MICRO} por cluster", count,
+                                           f"de {of} {label}") + signs[2][2][3:], signs[2][3])
+    empty = estate["by_category"].get(aa.NO_APPLICATIONS, {"clusters": 0, "cost": 0})
+    signs.append((signs[0][0], signs[0][1], ("Clusters creados antes de tiempo", d.number(empty["clusters"]),
+                                             "clusters de producción vacíos mientras su aplicación sigue en "
+                                             f"desarrollo: {v1.soles(empty['cost'])} al mes"), {}))
+    gap = Inches(0.12)
+    width = int((Inches(8.1) + shift - Inches(0.6) - Inches(0.35) - 3 * gap) / 4)
+    for index, (top, height, rest, named) in enumerate(signs):
+        original_card(slide, Inches(0.6) + index * (width + gap), top, width, height, *rest, **named)
     for shape in slide.shapes:
         if shape.has_text_frame and shape.text_frame.text.startswith("Con IGV."):
             shape.text_frame.paragraphs[0].runs[0].text = (
