@@ -673,7 +673,7 @@ def write_top_costs(book, sheet, applications, everything):
            f'"High, constant load: nearly the replicas of AKS",'
            f'IF({flag("group", "BELOW_MARGIN")},"Saves less than min_saving","")))))))))')
     left_formulas = [rank, get("cluster"), get("cod_app"), get("bia"), get("aks_month_pen"),
-                     f'{get("aks_month_pen")}/{bill}',                     f'IF({meets},{get("saving_share")},"-")', get("group"), why]
+                     f'{get("aks_month_pen")}/SUM(Criteria[aks_month_pen])',                     f'IF({meets},{get("saving_share")},"-")', get("group"), why]
     formula_table(sheet, "TopApplications", [(header, shown(value)) for header, value in zip(left, left_formulas)],
                   applications, top=head)
     for column, fmt in ((5, PEN), (6, "0.0%"), (7, PCT)):
