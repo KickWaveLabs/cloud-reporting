@@ -18,6 +18,7 @@ import argparse
 import glob
 import math
 import os
+import re
 import sys
 from collections import defaultdict
 
@@ -70,6 +71,74 @@ def sizing(where):
 def pen(value):
     """Soles already with IGV -> 'S/ 1.234'."""
     return f"S/ {value:,.0f}".replace(",", ".")
+
+
+def slide_estate(deck, estate, apps, source):
+    """(Costs in US$, shown in soles.) The PROD application clusters, the base of the analysis, in large print; the whole AKS bill in small print."""
+    month = v1.month_label(estate["month"])
+    category = estate["by_category"]
+    application = category.get(aa.APPLICATION, {"clusters": 0, "cost": 0})
+    total = estate["prod_cost"]["AKS"] + estate["nonprod_cost"]
+    others = estate["prod"]["aks"] - application["clusters"]
+    slide = d.base_slide(deck, f"Producción: {application['clusters']} clusters AKS con aplicaciones, la base del "
+                               "análisis", source)
+    left, top, width, height = Inches(0.6), Inches(1.3), Inches(3.4), Inches(3.45)
+    d.rounded(slide, left, top, width, height, d.CARD)
+    d.text_box(slide, left, top + Inches(0.1), width, Inches(0.4), "AKS", size=16, bold=True, color=d.WHITE,
+               align=d.PP_ALIGN.CENTER)
+    icon = Inches(1.0)
+    slide.shapes.add_picture(os.path.join(v1.ICONS_DIR, "aks.png"), left + int((width - icon) / 2),
+                             top + Inches(0.6), height=icon)
+    d.text_box(slide, left, top + Inches(1.7), width, Inches(0.35), "Servidores encendidos 24/7", size=11,
+               color=d.SOFT, align=d.PP_ALIGN.CENTER)
+    d.text_box(slide, left, top + Inches(1.95), width, Inches(0.7), d.number(application["clusters"]), size=40,
+               bold=True, color=d.ORANGE, align=d.PP_ALIGN.CENTER)
+    d.text_box(slide, left, top + Inches(2.62), width, Inches(0.3), "clusters con aplicaciones en producción",
+               size=12, color=d.SOFT, align=d.PP_ALIGN.CENTER)
+    d.text_box(slide, left + Inches(0.15), top + Inches(2.95), width - Inches(0.3), Inches(0.45),
+               f"+ {d.number(others)} de producción sin aplicaciones y {d.number(estate['nonprod_clusters'])} no "
+               "productivos", size=10, color=d.SOFT, align=d.PP_ALIGN.CENTER)
+    grid_left, gap = Inches(4.25), Inches(0.2)
+    card_width = int((Inches(12.75) - grid_left - gap) / 2)
+    cards = [(MICRO, d.number(v1.deployed_microservices(apps)), "desplegados en esos clusters", d.GREEN),
+             ("Su peso en AKS", d.percent(d.share_of(application["cost"], total)),
+              f"de todo lo que se paga en AKS ({month})", d.STEEL),
+             ("Costo mensual", v1.soles(application["cost"]), f"todo AKS: {v1.soles(total)} al mes", d.ORANGE),
+             ("Costo anual", v1.soles(application["cost"] * 12), f"todo AKS: {v1.soles(total * 12)} al año", d.RUST)]
+    for index, (label, value, detail, accent) in enumerate(cards):
+        v1.accent_card(slide, grid_left + (index % 2) * (card_width + gap), top + (index // 2) * Inches(1.75),
+                       card_width, Inches(1.6), label, value, detail, accent, value_size=30 if index >= 2 else 28)
+    rows = [["Clusters AKS en producción", "Clusters", f"Costo {month}"]]
+    for code, label in ((aa.APPLICATION, "Con aplicaciones (base del análisis)"),
+                        (aa.NO_APPLICATIONS, "Creados sin aplicaciones"),
+                        (aa.INFRASTRUCTURE, "Infraestructura (CI/CD, observabilidad, gateways)"),
+                        (aa.NO_DATA, "Sin datos")):
+        entry = category.get(code)
+        if entry and entry["clusters"]:
+            rows.append([label, d.number(entry["clusters"]), v1.soles(entry["cost"])])
+    d.table(slide, Inches(0.6), Inches(4.95), Inches(7.9), rows, [0.6, 0.15, 0.25], highlight_column=None,
+            row_height=0.32, size=11)
+    d.note_box(slide, Inches(8.85), Inches(4.95), Inches(3.9), Inches(0.85),
+               f"{v1.MICRO_CAP} = servicios de una aplicación desplegados en AKS.", size=11)
+
+
+THOUSANDS = re.compile(r"\d{1,3}(?:\.\d{3})+(?:,\d+)?|\d+,\d+")
+
+
+def english_numbers(deck):
+    """1,656,229 and 3.41333 instead of 1.656.229 and 3,41333 on every text and table of the deck."""
+    swap = str.maketrans(".,", ",.")
+    frames = []
+    for slide in deck.slides:
+        for shape in slide.shapes:
+            if shape.has_text_frame:
+                frames.append(shape.text_frame)
+            if shape.has_table:
+                frames += [cell.text_frame for row in shape.table.rows for cell in row.cells]
+    for frame in frames:
+        for paragraph in frame.paragraphs:
+            for run in paragraph.runs:
+                run.text = THOUSANDS.sub(lambda match: match.group(0).translate(swap), run.text)
 
 
 def example_cluster(rows):
@@ -238,7 +307,7 @@ def main():
     deck = Presentation()
     deck.slide_width, deck.slide_height = Inches(13.333), Inches(7.5)
     v1.slide_context(deck, apps, "Fuente: lineamientos de arquitectura del banco (FAT_001, ADT_019).")
-    v1.slide_estate(deck, estate, apps, f"{measured} {v1.MONEY_NOTE}")
+    slide_estate(deck, estate, apps, f"{measured} {v1.MONEY_NOTE}")
     slide_hypothesis(deck, estate, apps, scaling, args.results, example,
                      f"{measured} Mínimos: calculadora de precios de Azure (East US 2, precios de lista). {v1.MONEY_NOTE}")
     slide_criteria(deck, f"Referencia: lineamiento ADT_019 del banco. Réplicas: {sizing('criteria')} "
@@ -248,6 +317,7 @@ def main():
     reports = sorted(glob.glob(os.path.join(aa.TOPIC_DIR, "reports", "*-aks-aca")))
     output = args.output or os.path.join(reports[-1] if reports else aa.TOPIC_DIR,
                                          f"aks_aca_corporate_{args.criteria}.pptx")
+    english_numbers(deck)
     deck.save(output)
     columns = ["cluster", "cod_app", "group", "decision", "reason", "microservices", "traffic_layer",
                "busiest_hour_tps", "peak_tps", "aks_month_pen", "aca_month_pen", "saving_month_pen", "saving_share"]
