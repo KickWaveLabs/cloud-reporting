@@ -8,9 +8,9 @@ each hour's traffic.
 Slides 1 and 2 are v1's (aa_deck_exec_v1.py). Then:
   3  hypothesis, with the real example costed by the v2 model
   4  criteria per cluster: four conditions, the rules that keep a cluster on AKS, the saving margin, how it is costed
-  5  requirement to move: the "micro"-services on Quarkus, and pipelines that deploy Quarkus on Container Apps
-  6  result per cluster (groups of the v2 workbook's Results sheet)
-  7  saving: what moving the clusters of the ACA groups saves a month and a year
+  5  result per cluster (groups of the v2 workbook's Results sheet)
+  6  saving: what moving the clusters of the ACA groups saves a month and a year, against their cost and the total
+  7  operating cost of moving: what each application must meet (Quarkus, pipelines, no data in the cluster, network)
 Reads only results/ (run aa_cluster_snapshot.py first). Output: aks_aca_corporate_<criteria>.pptx in the newest
 reports/<date>-aks-aca folder (or --output); next to it, cluster_decisions_<criteria>.csv with every cluster's figures.
 """
@@ -87,14 +87,14 @@ def slide_estate(deck, estate, apps, source):
     d.rounded(slide, left, top, width, height, d.CARD)
     icon = Inches(0.8)
     slide.shapes.add_picture(os.path.join(v1.ICONS_DIR, "aks.png"), left + int((width - icon) / 2),
-                             top + Inches(0.2), height=icon)
-    d.text_box(slide, left, top + Inches(1.05), width, Inches(0.7), d.number(estate["prod"]["aks"]), size=40,
+                             top + Inches(0.45), height=icon)
+    d.text_box(slide, left, top + Inches(1.3), width, Inches(0.7), d.number(estate["prod"]["aks"]), size=40,
                bold=True, color=d.ORANGE, align=d.PP_ALIGN.CENTER)
-    d.text_box(slide, left, top + Inches(1.75), width, Inches(0.3), "clusters AKS en producción", size=12,
+    d.text_box(slide, left, top + Inches(2.0), width, Inches(0.3), "clusters AKS en producción", size=12,
                color=d.SOFT, align=d.PP_ALIGN.CENTER)
     split = [(aa.APPLICATION, "aplicaciones de negocio"), (aa.INFRASTRUCTURE, "infraestructura"),
              (aa.NO_APPLICATIONS, "vacíos, aún en desarrollo"), (aa.NO_DATA, "sin datos")]
-    row = top + Inches(2.25)
+    row = top + Inches(2.55)
     for code, label in split:
         entry = category.get(code)
         if not entry or not entry["clusters"]:
@@ -114,9 +114,11 @@ def slide_estate(deck, estate, apps, source):
                                                               "productivo", d.ORANGE),
              ("Costo anual", v1.soles(application["cost"] * 12), "costo mensual × 12", d.RUST)]
     for index, (label, value, detail, accent) in enumerate(cards):
-        v1.accent_card(slide, grid_left + (index % 2) * (card_width + gap), top + (index // 2) * Inches(1.75),
-                       card_width, Inches(1.6), label, value, detail, accent, value_size=30 if index >= 2 else 28)
-    box_top, box_height = top + Inches(3.55), Inches(1.2)
+        v1.accent_card(slide, grid_left + (index % 2) * (card_width + gap), top + (index // 2) * Inches(1.65),
+                       card_width, Inches(1.5), label, value, detail, accent, value_size=30 if index >= 2 else 28)
+    # Context, not the analysis: below a rule, apart and in smaller print.
+    box_top, box_height = top + Inches(3.8), Inches(0.95)
+    d.rounded(slide, grid_left, top + Inches(3.45), Inches(12.75) - grid_left, Inches(0.025), d.SOFT, radius=0)
     halves = int((Inches(12.75) - grid_left - gap) / 2)
     outside = [f"{label[0].upper() + label[1:]}: {v1.soles(category[code]['cost'])}" for code, label in split[1:]
                if category.get(code, {}).get("clusters")]
@@ -126,14 +128,13 @@ def slide_estate(deck, estate, apps, source):
                                              [v1.soles(estate["nonprod_cost"]), "certificación y desarrollo"]))):
         left_box = grid_left + index * (halves + gap)
         d.note_box(slide, left_box, box_top, halves, box_height, "", size=11)
-        d.text_box(slide, left_box + Inches(0.2), box_top + Inches(0.1), halves - Inches(0.4), Inches(0.5), title,
-                   size=11, bold=True, color=d.NAVY)
-        d.text_box(slide, left_box + Inches(0.2), box_top + Inches(0.42), halves - Inches(0.4), Inches(0.75),
-                   lines if not index else lines[:1], size=18 if index else 10.5, bold=bool(index),
-                   color=d.NAVY if index else d.GREY)
+        d.text_box(slide, left_box + Inches(0.2), box_top + Inches(0.06), halves - Inches(0.4), Inches(0.35), title,
+                   size=10, bold=True, color=d.GREY)
+        d.text_box(slide, left_box + Inches(0.2), box_top + Inches(0.32), halves - Inches(0.4), Inches(0.6),
+                   lines if not index else lines[:1], size=14 if index else 9.5, bold=bool(index), color=d.GREY)
         if index:
-            d.text_box(slide, left_box + Inches(0.2), box_top + Inches(0.82), halves - Inches(0.4), Inches(0.3),
-                       lines[1], size=10.5, color=d.GREY)
+            d.text_box(slide, left_box + Inches(0.2), box_top + Inches(0.62), halves - Inches(0.4), Inches(0.3),
+                       lines[1], size=9.5, color=d.GREY)
 
 
 THOUSANDS = re.compile(r"\d{1,3}(?:\.\d{3})+(?:,\d+)?|\d+,\d+")
@@ -165,64 +166,85 @@ def example_cluster(rows):
 
 
 def slide_hypothesis(deck, estate, apps, scaling, results, example, source):
-    """v1's slide 3 with the example costed by the v2 model and a fourth sign: PROD clusters created empty while
-    their application is still in development (only the platform's Istio runs in them)."""
-    original, original_card = v1.example_app, v1.sign_card
-    soles = (1 + v1.IGV) * v1.EXCHANGE_RATE
-    v1.example_app = lambda *_: {"code": example["cod_app"], "cluster": example["cluster"],
-                                 "microservices": int(example["microservices"]),
-                                 "aks": example["aks_month_pen"] / soles, "aca": example["aca_month_pen"] / soles,
-                                 "saving": example["saving_share"]}
-    signs = []  # v1's three signs, drawn below with the fourth
-    v1.sign_card = lambda slide, left, top, width, height, *rest, **named: signs.append((top, height, rest, named))
-    try:
-        v1.slide_hypothesis(deck, estate, apps, scaling, results, source)
-    finally:
-        v1.example_app, v1.sign_card = original, original_card
-    slide = deck.slides[-1]
-    shift = Inches(0.7)  # the motivation column narrows to make room for the fourth sign
-    for shape in slide.shapes:
-        if shape.left >= Inches(8.0) and Inches(1.2) <= shape.top < Inches(4.7):
-            shape.left, shape.width = shape.left + shift, shape.width - shift
-            if shape.has_text_frame and "versiones de Kubernetes" in shape.text_frame.text:
-                shape.text_frame.paragraphs[0].runs[0].text = "Complejidad: sin servidores ni Kubernetes que administrar"
-    # The third sign in a narrower card: the count alone as the figure, "of N" in its label.
-    signs[0] = (signs[0][0], signs[0][1], ("Pagamos CPU que no usamos",) + signs[0][2][1:], signs[0][3])
-    sentence, value, label = signs[2][2][:3]
-    count, _, of = value.partition(" de ")
-    signs[2] = (signs[2][0], signs[2][1], (f"Pocos {MICRO} por cluster", count,
-                                           f"de {of} {label}") + signs[2][2][3:], signs[2][3])
+    """The hypothesis: four signs in a square (CPU paid and not used, autoscaling that does not move, few
+    "micro"-services per cluster, PROD clusters created empty while their application is still in development), the
+    motivation beside them and the example costed by the v2 model below."""
+    month = estate["month"]
+    aks_min, aca_min, _ = v1.minimum_costs(month, v1.read_prices(results))
+    app_clusters = [row for row in v1.results_csv(results, "aa-k8s-snapshot", "cluster_snapshot.csv")
+                    if row["environment"] == "PROD" and row["category"] == aa.APPLICATION and row["in_inventory"] == "YES"]
+    small = sum(0 < int(row["microservices"] or 0) <= v1.MAX_MICROSERVICES for row in app_clusters)
+    stuck = d.share_of(scaling["over_3_months"], scaling["dated"]) if scaling["dated"] else None
     empty = estate["by_category"].get(aa.NO_APPLICATIONS, {"clusters": 0, "cost": 0})
-    signs.append((signs[0][0], signs[0][1], ("Clusters creados antes de tiempo", d.number(empty["clusters"]),
-                                             "clusters de producción vacíos mientras su aplicación sigue en "
-                                             f"desarrollo: {v1.soles(empty['cost'])} al mes"), {}))
-    gap = Inches(0.12)
-    width = int((Inches(8.1) + shift - Inches(0.6) - Inches(0.35) - 3 * gap) / 4)
-    for index, (top, height, rest, named) in enumerate(signs):
-        original_card(slide, Inches(0.6) + index * (width + gap), top, width, height, *rest, **named)
-    for shape in slide.shapes:
-        if shape.has_text_frame and shape.text_frame.text.startswith("Con IGV."):
-            shape.text_frame.paragraphs[0].runs[0].text = (
-                f"Con IGV. Container Apps con réplicas según su tráfico: {sizing('example')} Mínimo de referencia: S/ 2.124 un cluster AKS de 4 "
-                f"servidores; S/ 117 un {MICRO_ONE} en Container Apps encendido todo el mes.")
-            for run in shape.text_frame.paragraphs[0].runs[1:]:
-                run.text = ""
+    slide = d.base_slide(deck, "Hipótesis: un cluster AKS por aplicación paga más de lo que usa", source)
+    cpu_average = d.share_of(estate["cpu_used"], estate["cpu_total"])
+    cpu_peak = d.share_of(estate["cpu_peak"], estate["cpu_total"])
+    signs = [(d.percent(cpu_average), "Pagamos CPU que casi no usamos",
+              f"Se usa en promedio; en el pico del mes, {d.percent(cpu_peak)}."),
+             (d.percent(stuck), "El autoescalado casi no se mueve", "No sube ni baja de réplicas hace más de 3 meses."),
+             (f"{d.number(small)} de {d.number(len(app_clusters))}", f"Un cluster para pocos {MICRO}",
+              f"Clusters con {v1.MAX_MICROSERVICES} o menos."),
+             (d.number(empty["clusters"]), "Clusters creados antes de tiempo",
+              f"Vacíos mientras su aplicación se desarrolla: {v1.soles(empty['cost'])} al mes.")]
+    d.heading(slide, Inches(0.6), Inches(1.2), Inches(7.6), "Indicios", size=14)
+    width, height, gap, figure = Inches(3.75), Inches(1.45), Inches(0.15), Inches(1.65)
+    for index, (value, title, detail) in enumerate(signs):
+        left = Inches(0.6) + (index % 2) * (width + gap)
+        top = Inches(1.6) + (index // 2) * (height + gap)
+        d.rounded(slide, left, top, width, height, d.CARD)
+        bar = index == 0  # the CPU paid: average strong, peak light with a tick, as v1 drew it
+        d.text_box(slide, left + Inches(0.05), top + (Inches(0.2) if bar else 0), figure,
+                   Inches(0.6) if bar else height, value, size=18 if " de " in value else 22, bold=True, color=d.ORANGE,
+                   align=d.PP_ALIGN.CENTER, anchor=d.MSO_ANCHOR.MIDDLE)
+        if bar:
+            bar_left, bar_width, bar_top, bar_height = left + Inches(0.2), figure - Inches(0.3), top + Inches(0.95), Inches(0.16)
+            for share, colour in ((1.0, v1.TRACK_COLOR), (cpu_peak or 0, v1.PEAK_COLOR), (cpu_average or 0, d.ORANGE)):
+                if share > 0:
+                    d.rounded(slide, bar_left, bar_top, max(int(bar_width * min(share, 1.0)), Inches(0.04)),
+                              bar_height, colour, radius=0.5)
+            if cpu_peak:
+                tick = bar_left + int(bar_width * min(cpu_peak, 1.0))
+                v1.shape(slide, v1.MSO_SHAPE.RECTANGLE, tick - Inches(0.012), bar_top - Inches(0.04), Inches(0.024),
+                         bar_height + Inches(0.08), d.WHITE)
+        d.text_box(slide, left + figure, top + Inches(0.12), width - figure - Inches(0.1), Inches(0.5), title, size=12,
+                   bold=True, color=d.WHITE)
+        d.text_box(slide, left + figure, top + Inches(0.68), width - figure - Inches(0.1), Inches(0.72), detail,
+                   size=10.5, color=d.SOFT)
+    d.heading(slide, Inches(8.5), Inches(1.2), Inches(4.2), "Motivación", size=14)
+    d.callout(slide, Inches(8.5), Inches(1.6), Inches(4.2), Inches(1.2),
+              "Económica: pagar por uso, no por servidores encendidos 24/7", size=14, fill=d.RUST)
+    for index, text in enumerate(("Operación: menos clusters que actualizar y vigilar",
+                                  "Complejidad: sin servidores ni Kubernetes que administrar")):
+        d.callout(slide, Inches(8.5), Inches(2.95) + index * Inches(0.75), Inches(4.2), Inches(0.6), text, size=12,
+                  fill=d.CARD)
+    d.heading(slide, Inches(0.6), Inches(4.75), Inches(12.1),
+              f"Ejemplo real: {example['cod_app']}, {int(example['microservices'])} {MICRO} en un cluster. En "
+              f"Container Apps costaría {d.percent(example['saving_share'])} menos al mes", size=14)
+    d.kpi(slide, Inches(0.6), Inches(5.15), Inches(5.9), Inches(1.15), pen(example["aks_month_pen"]),
+          f"hoy en AKS: lo que se pagó en {v1.month_label(month)} por su cluster, con reservas", value_color=d.RUST,
+          value_size=26, label_size=11)
+    d.kpi(slide, Inches(6.8), Inches(5.15), Inches(5.9), Inches(1.15), pen(example["aca_month_pen"]),
+          f"en Container Apps: los mismos {int(example['microservices'])} {MICRO}, con el "
+          f"{d.percent(v1.BANK_DISCOUNT)} de descuento del banco", value_color=d.GREEN, value_size=26, label_size=11)
+    d.text_box(slide, Inches(0.6), Inches(6.4), Inches(12.1), Inches(0.25),
+               f"Con IGV. Mínimo de referencia: {v1.soles(aks_min)} un cluster AKS de {v1.MIN_AKS_NODES} servidores; "
+               f"{v1.soles(aca_min)} un {MICRO_ONE} en Container Apps encendido todo el mes.", size=9, color=d.GREY,
+               italic=True)
 
 
 def slide_criteria(deck, source):
     """Four numbered conditions, the rules that always keep a cluster on AKS, the saving margin, and at the bottom
     (not a condition) how Container Apps is costed; the sizing figures go in the footnote."""
     conditions = [
-        (f"Hasta {model.DEFAULTS['max_tps']} TPS", "En su hora más cargada del día."),
-        (f"Hasta {model.DEFAULTS['max_services']} {MICRO}", "En el cluster."),
+        (f"No más de {model.DEFAULTS['max_tps']} TPS", "En su hora más cargada del día."),
+        (f"No más de {model.DEFAULTS['max_services']} {MICRO}", "En el cluster."),
         ("No es compartida", "No es autenticación ni Core.") if model.DEFAULTS["rule_shared"] == "YES" else None,
-        ("Sin carga alta", f"Hasta {model.DEFAULTS['max_requests_day'] / 1e6:.0f} millones de solicitudes en 24 horas.")
-        if model.DEFAULTS["rule_high_load"] == "YES" else None,
+        ("Sin carga alta ni constante", f"Hasta {model.DEFAULTS['max_avg_tps']} TPS de promedio y baja de noche.") if model.DEFAULTS["rule_high_load"] == "YES" else None,
         ("Sin carga constante", f"Usaría menos del {d.percent(model.DEFAULTS['max_replicas_vs_aks'])} de "
                                 "las réplicas de hoy.") if model.DEFAULTS["rule_constant_load"] == "YES" else None]
     conditions = [condition for condition in conditions if condition]  # the rules switched off in the variables
     words = {2: "dos", 3: "tres", 4: "cuatro", 5: "cinco"}
-    slide = d.base_slide(deck, f"Para pasar a Container Apps: {words[len(conditions)]} condiciones por cluster", source)
+    slide = d.base_slide(deck, f"Para pasar a Container Apps: {words[len(conditions)]} criterios por cluster", source)
     width, height, gap = Inches(5.9), Inches(1.1), Inches(0.3)
     for index, (title, meaning) in enumerate(conditions):
         alone = index == len(conditions) - 1 and index % 2 == 0  # an odd last card takes the whole row
@@ -240,32 +262,31 @@ def slide_criteria(deck, source):
                anchor=d.MSO_ANCHOR.MIDDLE)
 
 
-def slide_requirement(deck, source):
-    """What an application must do before it moves, once it meets the criteria: run on Quarkus, deployed by a
-    pipeline that targets Container Apps."""
-    slide = d.base_slide(deck, f"Requisito para migrar: los {MICRO} en Quarkus", source)
-    cards = [("Requisito de la aplicación", d.GREEN, f"Sus {MICRO} deben estar en Quarkus.",
-              ["• Arranca en segundos: puede apagarse fuera de horario y volver rápido.",
-               "• Usa menos memoria: réplicas más chicas y más baratas."]),
-             ("Prerrequisito de plataforma", d.ORANGE, "Pipelines para desplegar Quarkus en Container Apps.",
-              ["• Sin ellos, ninguna aplicación puede pasar, aunque cumpla los criterios.",
-               "• Se construyen una vez y sirven para todas."])]
-    width, gap, top = Inches(5.9), Inches(0.3), Inches(1.3)
-    for index, (label, accent, headline, lines) in enumerate(cards):
-        left = Inches(0.6) + index * (width + gap)
-        v1.box(slide, left, top, width, Inches(2.9), d.LIGHT)
-        v1.box(slide, left, top, Inches(0.12), Inches(2.9), accent, radius=0.02)
-        d.text_box(slide, left + Inches(0.35), top + Inches(0.2), width - Inches(0.6), Inches(0.35), label.upper(),
-                   size=12, bold=True, color=d.GREY)
-        d.text_box(slide, left + Inches(0.35), top + Inches(0.6), width - Inches(0.6), Inches(0.9), headline,
-                   size=20, bold=True, color=d.NAVY)
-        d.text_box(slide, left + Inches(0.35), top + Inches(1.65), width - Inches(0.6), Inches(1.1), lines,
-                   size=13, color=d.GREY)
-    v1.box(slide, Inches(0.6), Inches(4.5), Inches(12.1), Inches(1.0), d.LIGHT)
-    d.text_box(slide, Inches(0.9), Inches(4.5), Inches(11.5), Inches(1.0),
+def slide_requirement(deck, rows, source):
+    """The operating cost of moving: what each application must meet before it moves, after the saving."""
+    moving = [row for row in rows if row["goes_to_aca"]]
+    slide = d.base_slide(deck, "Costo operativo de migrar: lo que cada aplicación debe cumplir", source)
+    cards = [("En Quarkus", d.GREEN, f"Sus {MICRO} en Quarkus: arranca en segundos y usa menos memoria. Los que "
+                                     "no, se migran primero."),
+             ("Pipelines para Container Apps", d.ORANGE, "Se construyen una vez y sirven para todas. Sin ellos no "
+                                                        "pasa ninguna."),
+             ("Sin datos en el cluster", d.STEEL, f"Ni discos ni procesos batch propios. Hoy ninguno de los "
+                                                  f"{len(moving)} los usa."),
+             ("Red y seguridad", d.RUST, "Conexión privada a las mismas redes, secretos e identidades que usa hoy.")]
+    width, height, gap = Inches(5.95), Inches(1.45), Inches(0.2)
+    for index, (title, accent, detail) in enumerate(cards):
+        left = Inches(0.6) + (index % 2) * (width + gap)
+        top = Inches(1.3) + (index // 2) * (height + gap)
+        v1.box(slide, left, top, width, height, d.LIGHT)
+        v1.box(slide, left, top, Inches(0.12), height, accent, radius=0.02)
+        d.text_box(slide, left + Inches(0.35), top + Inches(0.15), width - Inches(0.6), Inches(0.4), title, size=17,
+                   bold=True, color=d.NAVY)
+        d.text_box(slide, left + Inches(0.35), top + Inches(0.6), width - Inches(0.6), Inches(0.8), detail, size=13,
+                   color=d.GREY)
+    v1.box(slide, Inches(0.6), Inches(4.75), Inches(12.1), Inches(0.9), d.LIGHT)
+    d.text_box(slide, Inches(0.9), Inches(4.75), Inches(11.5), Inches(0.9),
                "Siguiente paso: relevar el runtime de cada aplicación (Quarkus, Spring Boot, .NET o Java legacy) para "
-               "saber cuántas deben migrar primero a Quarkus y cuánto cuesta.", size=14, color=d.NAVY,
-               anchor=d.MSO_ANCHOR.MIDDLE)
+               "estimar cuántas deben adaptarse y cuánto cuesta.", size=14, color=d.NAVY, anchor=d.MSO_ANCHOR.MIDDLE)
 
 
 def slide_distribution(deck, rows, month, source):
@@ -311,19 +332,22 @@ def slide_cost(deck, rows, source):
     aca = sum(row["aca_month_pen"] for row in moving)
     saving = aks - aca
     share = d.percent(d.share_of(saving, aks))
-    slide = d.base_slide(deck, f"Pasar {len(moving)} clusters a Container Apps baja su costo {share}: "
-                               f"~{pen(saving)} al mes", source)
-    table = [["Con IGV", "AKS hoy / mes", "Container Apps / mes", "Ahorro / mes", "Baja", "Ahorro / año"],
-             [f"{len(moving)} clusters que pasan", pen(aks), pen(aca), pen(saving), share, pen(saving * 12)]]
-    d.table(slide, Inches(0.6), Inches(1.4), Inches(12.1), table, [0.25, 0.16, 0.18, 0.15, 0.1, 0.16], highlight_column=4,
-            row_height=0.5, size=13)
+    total = sum(row["aks_month_pen"] for row in rows)  # every business application cluster of the analysis
+    slide = d.base_slide(deck, f"Pasar {len(moving)} clusters a Container Apps ahorra ~{pen(saving)} al mes: {share} "
+                               f"de su costo, {d.percent(d.share_of(saving, total))} del total", source)
+    table = [["Con IGV, al mes", "Hoy en AKS", "Después", "Ahorro / mes", "Baja", "Ahorro / año"],
+             [f"Los {len(moving)} clusters que pasan", pen(aks), pen(aca), pen(saving), share, pen(saving * 12)],
+             [f"Total de negocio ({len(rows)} clusters)", pen(total), pen(total - saving), pen(saving),
+              d.percent(d.share_of(saving, total)), pen(saving * 12)]]
+    d.table(slide, Inches(0.6), Inches(1.3), Inches(12.1), table, [0.3, 0.14, 0.14, 0.14, 0.1, 0.18], highlight_column=4,
+            row_height=0.45, size=13)
     how = [["Cómo se paga", "AKS", "Container Apps"],
            ["Cobro", "Servidores completos (VM) las 24 horas", "vCPU-segundo y GB-segundo de las réplicas encendidas"],
            ["Réplicas", "Las que se configuran, haya o no tráfico",
             sizing("cost")],
            ["Descuento", "Reservas de 3 años en las VM", f"{d.percent(model.DEFAULTS['bank_discount'])} del banco"]]
-    d.table(slide, Inches(0.6), Inches(2.6), Inches(12.1), how, [0.18, 0.37, 0.45], row_height=0.45, size=12)
-    d.note_box(slide, Inches(0.6), Inches(4.85), Inches(12.1), Inches(0.75),
+    d.table(slide, Inches(0.6), Inches(2.85), Inches(12.1), how, [0.18, 0.37, 0.45], row_height=0.45, size=12)
+    d.note_box(slide, Inches(0.6), Inches(5.0), Inches(12.1), Inches(0.75),
                f"Incluye los clusters \"con revisión\": el ahorro firme es el de los candidatos. Los que cumplen pero "
                f"ahorran menos de {d.percent(model.DEFAULTS['min_saving'])} se quedan en AKS. "
                + ("Incluye el tamaño de cada réplica según su uso real. " if CRITERIA["name"] == "v3" else "")
@@ -378,15 +402,19 @@ def main():
     slide_estate(deck, estate, apps, f"{measured} {v1.MONEY_NOTE}")
     slide_hypothesis(deck, estate, apps, scaling, args.results, example,
                      f"{measured} Mínimos: calculadora de precios de Azure (East US 2, precios de lista). {v1.MONEY_NOTE}")
-    slide_criteria(deck, f"Referencia: lineamiento ADT_019 del banco. Réplicas: {sizing('criteria')} "
+    slide_criteria(deck, f"Referencia: lineamiento ADT_019 del banco. Carga alta: más de {model.DEFAULTS['max_avg_tps']} "
+                         f"TPS de promedio en el día; constante: desde {model.DEFAULTS['min_constant_tps']} TPS de promedio, "
+                         f"con su hora más tranquila en al menos {d.percent(model.DEFAULTS['min_quiet_share'])} del "
+                         f"promedio. Réplicas: {sizing('criteria')} "
                          "Fuente: Microsoft Learn.")
-    slide_requirement(deck, "")
     slide_distribution(deck, rows, estate["month"], f"{traffic} {v1.MONEY_NOTE}")
     slide_cost(deck, rows, f"{measured} Precios de lista: Azure Retail Prices API. {v1.MONEY_NOTE}")
+    slide_requirement(deck, rows, "")
     reports = sorted(glob.glob(os.path.join(aa.TOPIC_DIR, "reports", "*-aks-aca")))
     output = args.output or os.path.join(reports[-1] if reports else aa.TOPIC_DIR,
                                          f"aks_aca_corporate_{args.criteria}.pptx")
     english_numbers(deck)
+    aa.keep_version(output)
     deck.save(output)
     columns = ["cluster", "cod_app", "group", "decision", "reason", "microservices", "traffic_layer",
                "busiest_hour_tps", "peak_tps", "aks_month_pen", "aca_month_pen", "saving_month_pen", "saving_share"]

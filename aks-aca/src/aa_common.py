@@ -461,3 +461,19 @@ def add_common_arguments(parser):
 def wanted_environments(args):
     value = (args.environments or "").strip().upper()
     return None if value in ("", "ALL") else {item.strip() for item in value.split(",") if item.strip()}
+
+
+def keep_version(path):
+    """Copy an output about to be overwritten to versions/ next to it, named by its last change
+    (aks_aca_corporate_v2_2026-11-26_1300.pptx), so earlier decks and workbooks stay at hand."""
+    if not os.path.exists(path):
+        return None
+    import shutil
+    folder = os.path.join(os.path.dirname(os.path.abspath(path)), "versions")
+    os.makedirs(folder, exist_ok=True)
+    stem, extension = os.path.splitext(os.path.basename(path))
+    stamp = datetime.fromtimestamp(os.path.getmtime(path)).strftime("%Y-%m-%d_%H%M")
+    target = os.path.join(folder, f"{stem}_{stamp}{extension}")
+    if not os.path.exists(target):
+        shutil.copy2(path, target)
+    return target

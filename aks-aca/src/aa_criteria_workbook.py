@@ -120,10 +120,13 @@ def write_variables(book, sheet, month, days, price_env_hour):
                       ("rule_shared", model.DEFAULTS["rule_shared"],
                        "YES: shared clusters (shared_apps, Core layer) stay on AKS. NO: evaluated as the rest"),
                       ("rule_high_load", model.DEFAULTS["rule_high_load"],
-                       "YES: high load (more than max_requests_day requests in 24 hours) stays on AKS. NO: evaluated "
-                       "as the rest"),
-                      ("max_requests_day", model.DEFAULTS["max_requests_day"],
-                       "High load: requests in 24 hours (the month's requests over its days)"),
+                       "YES: high or constant load stays on AKS. NO: evaluated as the rest"),
+                      ("max_avg_tps", model.DEFAULTS["max_avg_tps"],
+                       "High load: more than this TPS on average over the day (the month's requests over its seconds)"),
+                      ("min_quiet_share", model.DEFAULTS["min_quiet_share"],
+                       "Constant load: its quietest weekday hour carries at least this share of the weekday average..."),
+                      ("min_constant_tps", model.DEFAULTS["min_constant_tps"],
+                       "...with at least this TPS on average over the day (one replica busy all day)"),
                       ("rule_constant_load", model.DEFAULTS["rule_constant_load"],
                        "YES: constant load (max_replicas_vs_aks) stays on AKS. NO (default): evaluated as the rest"),
                       ("max_replicas_vs_aks", model.DEFAULTS["max_replicas_vs_aks"],
@@ -186,10 +189,8 @@ def write_variables(book, sheet, month, days, price_env_hour):
             cell = sheet.cell(row=row, column=2, value=value)
             cell.fill = EDITABLE
             if label in ("bank_discount", "igv", "min_saving", "traffic_share", "capacity_safety",
-                         "max_replicas_vs_aks"):
+                         "max_replicas_vs_aks", "min_quiet_share"):
                 cell.number_format = PCT
-            if label == "max_requests_day":
-                cell.number_format = "#,##0"
             sheet.cell(row=row, column=3, value=comment)
             if label in SOURCES:
                 link = sheet.cell(row=row, column=4, value="Microsoft Learn")
@@ -529,7 +530,13 @@ def criteria_formulas():
         # requests in 24 hours: the month's requests over its days (DATE with day 0 is the month's last day)
         ("requests_day", f'IFERROR(N({c("requests_month")})/DAY(DATE(VALUE(LEFT({c("month")},4)),'
                          f'VALUE(MID({c("month")},6,2))+1,0)),0)'),
-        ("load_ok", f'IF(AND(rule_high_load="YES",{c("requests_day")}>max_requests_day),"NO","YES")'),
+        ("avg_tps_day", f'{c("requests_day")}/86400'),
+        # its quietest weekday hour over the weekday average (hourly averages): 1 = flat all day
+        ("quiet_share", f'IFERROR(_xlfn.MINIFS(Traffic[tps_avg],Traffic[scope],{c("cluster")},Traffic[scope_type],"CLUSTER",'
+                        f'Traffic[day_type],"weekday")/AVERAGEIFS(Traffic[tps_avg],Traffic[scope],{c("cluster")},'
+                        'Traffic[scope_type],"CLUSTER",Traffic[day_type],"weekday"),"")'),
+        ("load_ok", f'IF(AND(rule_high_load="YES",OR({c("avg_tps_day")}>max_avg_tps,AND(ISNUMBER({c("quiet_share")}),'
+                    f'N({c("quiet_share")})>=min_quiet_share,{c("avg_tps_day")}>=min_constant_tps))),"NO","YES")'),
         ("shared_ok", f'IF(AND(rule_shared="YES",OR({c("traffic_layer")}="CORE",ISNUMBER(SEARCH(","&{c("cod_app")}&",",","&'
                       'SUBSTITUTE(shared_apps," ","")&",")))),"NO","YES")'),
         ("decision", f'IF({c("has_traffic")}="NO","NO_TRAFFIC",IF(OR({c("size_ok")}="NO",'
@@ -681,7 +688,7 @@ def write_top_costs(book, sheet, applications, everything):
            f'IF({flag("tps_ok", "NO")},"Busiest hour over max_tps",IF({flag("services_ok", "NO")},'
            f'"Over max_services ""micro""-services",IF({flag("bia_ok", "NO")},"BIA "&aks_from_bia&" or above",'
            f'IF({flag("shared_ok", "NO")},"Shared: authentication or core",IF({flag("load_ok", "NO")},'
-           f'"High load: over max_requests_day requests a day",IF({flag("replicas_ok", "NO")},'
+           f'"High or constant load",IF({flag("replicas_ok", "NO")},'
            f'"Constant load: nearly the replicas of AKS",'
            f'IF({flag("group", "BELOW_MARGIN")},"Saves less than min_saving",""))))))))))')
     left_formulas = [rank, get("cluster"), get("cod_app"), get("bia"), get("aks_month_pen"),
@@ -925,7 +932,8 @@ def write_criteria(sheet, count):
     widths(sheet, headers)
     for index, header in enumerate(headers, start=1):
         fmt = USD if header.endswith("_usd") else PEN if header.endswith("_pen") else PCT if header in ("saving_share", "replicas_vs_aks") \
-            else "0.0" if header == "aca_replicas" else "#,##0" if header == "requests_day" else None
+            else "0.0" if header == "aca_replicas" else "#,##0" if header == "requests_day" else "0.0" if header == "avg_tps_day" \
+            else PCT if header == "quiet_share" else None
         if fmt:
             for row in range(2, count + 2):
                 sheet.cell(row=row, column=index).number_format = fmt
@@ -1122,6 +1130,7 @@ def build(results, output, criteria="v2"):
         sheets[name].sheet_state = "hidden"
     book.calculation.fullCalcOnLoad = True
     os.makedirs(os.path.dirname(os.path.abspath(output)), exist_ok=True)
+    aa.keep_version(output)
     book.save(output)
     folder = os.path.abspath(results)
     pq.load_queries(output, [

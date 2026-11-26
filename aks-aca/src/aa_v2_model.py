@@ -13,8 +13,9 @@ Decision of a cluster, in order (the first that applies):
   AKS               BIA at AKS_FROM_BIA or above (MUY ALTA > ALTA > MEDIA > BAJA; NONE by default: no cluster)
   AKS               shared: its traffic is on the Core layer, or its application is in SHARED_APPS (authentication
                     and identity, used by several applications); off with RULE_SHARED NO
-  AKS               high load: more than MAX_REQUESTS_DAY requests in 24 hours (the month's requests / its days);
-                    off with RULE_HIGH_LOAD NO
+  AKS               high or constant load (off with RULE_HIGH_LOAD NO): high, more than MAX_AVG_TPS on average over
+                    the day (the month's requests / its seconds); constant, at least MIN_CONSTANT_TPS on average and
+                    its quietest weekday hour carries at least MIN_QUIET_SHARE of the weekday average (quiet_share)
   AKS               constant load (off by default): Container Apps would run, on average over the month, at least
                     MAX_REPLICAS_VS_AKS of the replicas it runs today on AKS (aca_replicas / replicas_today_total);
                     off with RULE_CONSTANT_LOAD NO
@@ -62,7 +63,7 @@ DEFAULTS = {
     "concurrent_requests": 10, "traffic_share": 1.0, "sizing_basis": "BUSIEST_HOUR",
     "min_replicas_office": 1, "min_replicas_offhours": 0,
     "aks_from_bia": "NONE", "max_replicas_vs_aks": 0.8,
-    "rule_event_driven": "YES", "rule_shared": "YES", "rule_high_load": "YES", "max_requests_day": 50_000_000,
+    "rule_event_driven": "YES", "rule_shared": "YES", "rule_high_load": "YES", "max_avg_tps": 20, "min_quiet_share": 0.5, "min_constant_tps": 10,
     "rule_constant_load": "NO",
     "shared_apps": "AUTH,ASOB,B2CC,CB2C,CIAM,TOKE,TOTP,TPWL,TRSA,BIOM",
     "capacity_from_today": "NO", "capacity_safety": 0.7, "size_from_usage": "NO", "usage_headroom": 2.0,
@@ -195,9 +196,12 @@ def decide(row, variables):
     shared = {code.strip().upper() for code in variables["shared_apps"].split(",") if code.strip()}
     if variables["rule_shared"] == "YES" and (row["traffic_layer"] == "CORE" or row["cod_app"].upper() in shared):
         return "AKS", "Shared: authentication or core, used by several applications"
-    per_day = requests_per_day(row)
-    if variables["rule_high_load"] == "YES" and per_day > variables["max_requests_day"]:
-        return "AKS", f"High load: {per_day / 1e6:.0f} million requests a day"
+    average, quiet = requests_per_day(row) / 86400, to_float(row.get("quiet_share"))
+    if variables["rule_high_load"] == "YES" and average > variables["max_avg_tps"]:
+        return "AKS", f"High load: {average:.0f} TPS on average over the day"
+    if variables["rule_high_load"] == "YES" and quiet is not None and quiet >= variables["min_quiet_share"] and \
+            average >= variables["min_constant_tps"]:
+        return "AKS", f"Constant load: its quietest hour carries {quiet:.0%} of the average"
     today, aca = to_float(row.get("replicas_today_total")), to_float(row.get("aca_replicas"))
     if variables["rule_constant_load"] == "YES" and today and aca is not None and \
             aca / today >= variables["max_replicas_vs_aks"]:
@@ -221,18 +225,22 @@ def evaluate(data, variables=None):
                          to_float(row.get("ci_cpu_used_per_replica")), to_float(row.get("ci_mem_used_gib_per_replica")))
         unit[data["names"][row["cluster_id"]]] += size * (prices["price_vcpu"] + variables["gib_per_vcpu"] *
                                                           prices["price_gib"])
-    replica_seconds, seconds = defaultdict(float), defaultdict(float)
+    replica_seconds, seconds, weekday = defaultdict(float), defaultdict(float), defaultdict(list)
     for row in data["profile"]:
         if row["scope_type"] == "CLUSTER":
             replica_seconds[row["scope"]] += int(row["days"]) * 3600 * replicas(row, variables)
             seconds[row["scope"]] += int(row["days"]) * 3600
+            if row["day_type"] == "weekday":
+                weekday[row["scope"]].append(to_float(row["tps_avg"]) or 0)
     soles = (1 + variables["igv"]) * variables["exchange_rate"]
     out = []
     for row in data["clusters"]:
         # replicas of all its "micro"-services on Container Apps, on average over the month
         aca_replicas = replica_seconds[row["cluster"]] / seconds[row["cluster"]] * \
             (to_float(row["microservices"]) or 0) if seconds[row["cluster"]] else None
-        row = dict(row, aca_replicas=aca_replicas)
+        hours = weekday[row["cluster"]]  # its quietest weekday hour over the weekday average: 1 = flat all day
+        quiet_share = min(hours) / (sum(hours) / len(hours)) if hours and sum(hours) else None
+        row = dict(row, aca_replicas=aca_replicas, quiet_share=quiet_share)
         decision, reason = decide(row, variables)
         requests = 0 if row["event_driven"] == "YES" else (to_float(row["requests_month"]) or 0)
         compute = replica_seconds[row["cluster"]] * unit[row["cluster"]]
