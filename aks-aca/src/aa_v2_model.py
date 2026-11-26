@@ -76,10 +76,18 @@ PRICE_KEYS = {"price_vcpu": "aca_vcpu_active_s", "price_gib": "aca_mem_active_gi
 PRESETS = {"v2": {}, "v3": {"sizing_basis": "BUSIEST_HOUR", "capacity_from_today": "YES", "size_from_usage": "YES"}}
 
 
-def use(criteria):
-    """Make DEFAULTS those of criteria v2 or v3 (the deck and the workbook read DEFAULTS)."""
+def use(criteria, changes=()):
+    """Make DEFAULTS those of criteria v2 or v3 (the deck and the workbook read DEFAULTS), then apply changes:
+    "name=value" strings from --set, each value read as the type of that variable's default."""
     DEFAULTS.update(BASE_DEFAULTS)
     DEFAULTS.update(PRESETS[criteria])
+    for change in changes:
+        name, _, value = change.partition("=")
+        name = name.strip()
+        if name not in DEFAULTS or not value:
+            raise SystemExit(f"--set {change}: expected name=value with one of: {', '.join(sorted(DEFAULTS))}")
+        kind = type(DEFAULTS[name])
+        DEFAULTS[name] = value.strip().upper() if kind is str and name != "shared_apps" else kind(value.strip())
     return criteria
 GROUP_OF_REASON = {"IN_DEVELOPMENT": "IN_DEVELOPMENT", "IN_USE_NOT_MEASURED": "IN_USE"}
 

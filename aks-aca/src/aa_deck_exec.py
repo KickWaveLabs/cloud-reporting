@@ -117,8 +117,9 @@ def slide_criteria(deck, source):
     slide = d.base_slide(deck, f"Para pasar a Container Apps: {words[len(conditions)]} condiciones por cluster", source)
     width, height, gap = Inches(5.9), Inches(1.1), Inches(0.3)
     for index, (title, meaning) in enumerate(conditions):
+        alone = index == len(conditions) - 1 and index % 2 == 0  # an odd last card takes the whole row
         v1.condition_card(slide, Inches(0.6) + (index % 2) * (width + gap), Inches(1.25) + (index // 2) * Inches(1.25),
-                          width, height, str(index + 1), d.GREEN, title, meaning)
+                          2 * width + gap if alone else width, height, str(index + 1), d.GREEN, title, meaning)
     v1.box(slide, Inches(0.6), Inches(3.85), Inches(12.1), Inches(0.75), d.LIGHT)
     d.text_box(slide, Inches(0.9), Inches(3.85), Inches(11.5), Inches(0.75),
                f"Siempre se queda en AKS si un {MICRO_ONE} demanda más CPU o memoria de la que soporta Container Apps.",
@@ -209,6 +210,9 @@ def main():
     parser.add_argument("--results", default=aa.RESULTS_DIR, help="Folder with the aa-<source> result folders")
     parser.add_argument("--criteria", choices=["v1"] + sorted(model.PRESETS), default="v2",
                         help="Criteria v1 (aa_deck_exec_v1.py), v2 or v3 (aa_v2_model.PRESETS)")
+    parser.add_argument("--set", action="append", default=[], metavar="NAME=VALUE",
+                        help="Change a variable's default, e.g. --set rule_shared=NO (repeatable; give the workbook "
+                             "and the deck the same ones)")
     parser.add_argument("--output", default=None,
                         help="Output .pptx. Default: aks_aca_corporate_<criteria>.pptx in the newest reports/<date>-aks-aca")
     args, rest = parser.parse_known_args()
@@ -218,7 +222,7 @@ def main():
     if rest:
         parser.error("unrecognized arguments: " + " ".join(rest))
     aa.azure.setup_logging(False)
-    CRITERIA["name"] = model.use(args.criteria)
+    CRITERIA["name"] = model.use(args.criteria, args.set)
     data = model.load(args.results)
     rows = model.evaluate(data)
     estate, apps, scaling = v1.read_estate(args.results), v1.read_applications(args.results), v1.read_scaling(args.results)

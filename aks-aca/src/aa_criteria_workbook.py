@@ -1129,6 +1129,9 @@ def main():
     parser.add_argument("--criteria", choices=["v1"] + sorted(model.PRESETS), default="v2",
                         help="Criteria v1 (aa_criteria_workbook_v1.py), or the variables' defaults of v2 or v3 "
                              "(aa_v2_model.PRESETS)")
+    parser.add_argument("--set", action="append", default=[], metavar="NAME=VALUE",
+                        help="Change a variable's default, e.g. --set rule_shared=NO (repeatable; give the workbook "
+                             "and the deck the same ones)")
     parser.add_argument("--output", default=None,
                         help="Output .xlsx. Default: aks_aca_criteria_<criteria>.xlsx in the newest reports/<date>-aks-aca")
     args, rest = parser.parse_known_args()
@@ -1138,7 +1141,7 @@ def main():
     if rest:
         parser.error("unrecognized arguments: " + " ".join(rest))
     aa.azure.setup_logging(False)
-    model.use(args.criteria)
+    model.use(args.criteria, args.set)
     output = args.output
     if not output:
         folders = sorted(glob.glob(os.path.join(aa.TOPIC_DIR, "reports", "*-aks-aca")))

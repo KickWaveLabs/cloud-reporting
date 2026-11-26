@@ -261,7 +261,8 @@ Container Insights; one stopped PROD cluster without metrics.
     subscription names: AUTH, ASOB, B2CC, CB2C, CIAM, TOKE, TOTP, TPWL, TRSA, BIOM). Critical (BIA) or growing clusters move with review.
   - `rule_event_driven`, `rule_shared` and `rule_constant_load` (YES by default) switch those three rules: with NO the
     clusters they hold back are evaluated as the rest and count in the saving when they meet the other criteria
-    (an event-driven cluster's messages per second are then taken as TPS).
+    (an event-driven cluster's messages per second are then taken as TPS). The workbook reads them live; the deck takes
+    the defaults, so give both scripts the same `--set`, e.g. `--set rule_shared=NO` (any variable, repeatable).
 - **v2** is tagged `v2` (2026-11-25). **v3** is the same model, scripts and variables with other defaults
   (`aa_v2_model.PRESETS["v3"]`, chosen with `--criteria v3` on the workbook and deck scripts; files end in `_v3`):
   - `sizing_basis` BUSIEST_HOUR;
