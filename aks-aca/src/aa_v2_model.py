@@ -13,7 +13,9 @@ Decision of a cluster, in order (the first that applies):
   AKS               BIA at AKS_FROM_BIA or above (MUY ALTA > ALTA > MEDIA > BAJA; NONE by default: no cluster)
   AKS               shared: its traffic is on the Core layer, or its application is in SHARED_APPS (authentication
                     and identity, used by several applications); off with RULE_SHARED NO
-  AKS               high, constant load: Container Apps would run, on average over the month, at least
+  AKS               high load: more than MAX_REQUESTS_DAY requests in 24 hours (the month's requests / its days);
+                    off with RULE_HIGH_LOAD NO
+  AKS               constant load (off by default): Container Apps would run, on average over the month, at least
                     MAX_REPLICAS_VS_AKS of the replicas it runs today on AKS (aca_replicas / replicas_today_total);
                     off with RULE_CONSTANT_LOAD NO
   ACA_WITH_REVIEW   critical (BIA ALTA or MUY ALTA) or growing past MAX_SERVICES with DESA
@@ -47,6 +49,7 @@ ENVIRONMENT_FEE is off in both (a switch for when a private endpoint is confirme
 With the bank's discount and IGV in soles: x (1 - BANK_DISCOUNT) x (1 + IGV) x EXCHANGE_RATE.
 """
 
+import calendar
 import math
 import os
 from collections import defaultdict
@@ -59,7 +62,8 @@ DEFAULTS = {
     "concurrent_requests": 10, "traffic_share": 1.0, "sizing_basis": "BUSIEST_HOUR",
     "min_replicas_office": 1, "min_replicas_offhours": 0,
     "aks_from_bia": "NONE", "max_replicas_vs_aks": 0.8,
-    "rule_event_driven": "YES", "rule_shared": "YES", "rule_constant_load": "YES",
+    "rule_event_driven": "YES", "rule_shared": "YES", "rule_high_load": "YES", "max_requests_day": 50_000_000,
+    "rule_constant_load": "NO",
     "shared_apps": "AUTH,ASOB,B2CC,CB2C,CIAM,TOKE,TOTP,TPWL,TRSA,BIOM",
     "capacity_from_today": "NO", "capacity_safety": 0.7, "size_from_usage": "NO", "usage_headroom": 2.0,
     "environment_fee": "NO",
@@ -159,6 +163,13 @@ def replicas(row, variables):
     return count
 
 
+def requests_per_day(row):
+    """Requests in 24 hours: the month's requests over its days."""
+    month = row.get("month") or ""
+    days = calendar.monthrange(int(month[:4]), int(month[5:7]))[1] if len(month) >= 7 else 30
+    return (to_float(row.get("requests_month")) or 0) / days
+
+
 def unmeasured_events(row, variables):
     """An event-driven cluster kept out of the count (RULE_EVENT_DRIVEN YES): its messages are not measured as load."""
     return row["event_driven"] == "YES" and variables["rule_event_driven"] == "YES"
@@ -184,6 +195,9 @@ def decide(row, variables):
     shared = {code.strip().upper() for code in variables["shared_apps"].split(",") if code.strip()}
     if variables["rule_shared"] == "YES" and (row["traffic_layer"] == "CORE" or row["cod_app"].upper() in shared):
         return "AKS", "Shared: authentication or core, used by several applications"
+    per_day = requests_per_day(row)
+    if variables["rule_high_load"] == "YES" and per_day > variables["max_requests_day"]:
+        return "AKS", f"High load: {per_day / 1e6:.0f} million requests a day"
     today, aca = to_float(row.get("replicas_today_total")), to_float(row.get("aca_replicas"))
     if variables["rule_constant_load"] == "YES" and today and aca is not None and \
             aca / today >= variables["max_replicas_vs_aks"]:

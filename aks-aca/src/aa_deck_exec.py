@@ -8,8 +8,9 @@ each hour's traffic.
 Slides 1 and 2 are v1's (aa_deck_exec_v1.py). Then:
   3  hypothesis, with the real example costed by the v2 model
   4  criteria per cluster: four conditions, the rules that keep a cluster on AKS, the saving margin, how it is costed
-  5  result per cluster (groups of the v2 workbook's Results sheet)
-  6  saving: what moving the clusters of the ACA groups saves a month and a year
+  5  requirement to move: the "micro"-services on Quarkus, and pipelines that deploy Quarkus on Container Apps
+  6  result per cluster (groups of the v2 workbook's Results sheet)
+  7  saving: what moving the clusters of the ACA groups saves a month and a year
 Reads only results/ (run aa_cluster_snapshot.py first). Output: aks_aca_corporate_<criteria>.pptx in the newest
 reports/<date>-aks-aca folder (or --output); next to it, cluster_decisions_<criteria>.csv with every cluster's figures.
 """
@@ -185,10 +186,12 @@ def slide_criteria(deck, source):
         (f"Hasta {model.DEFAULTS['max_tps']} TPS", "En su hora más cargada del día."),
         (f"Hasta {model.DEFAULTS['max_services']} {MICRO}", "En el cluster."),
         ("No es compartida", "No es autenticación ni Core.") if model.DEFAULTS["rule_shared"] == "YES" else None,
-        ("Sin carga alta y constante", f"Usaría menos del {d.percent(model.DEFAULTS['max_replicas_vs_aks'])} de "
-                                       "las réplicas de hoy.") if model.DEFAULTS["rule_constant_load"] == "YES" else None]
+        ("Sin carga alta", f"Hasta {model.DEFAULTS['max_requests_day'] / 1e6:.0f} millones de solicitudes en 24 horas.")
+        if model.DEFAULTS["rule_high_load"] == "YES" else None,
+        ("Sin carga constante", f"Usaría menos del {d.percent(model.DEFAULTS['max_replicas_vs_aks'])} de "
+                                "las réplicas de hoy.") if model.DEFAULTS["rule_constant_load"] == "YES" else None]
     conditions = [condition for condition in conditions if condition]  # the rules switched off in the variables
-    words = {2: "dos", 3: "tres", 4: "cuatro"}
+    words = {2: "dos", 3: "tres", 4: "cuatro", 5: "cinco"}
     slide = d.base_slide(deck, f"Para pasar a Container Apps: {words[len(conditions)]} condiciones por cluster", source)
     width, height, gap = Inches(5.9), Inches(1.1), Inches(0.3)
     for index, (title, meaning) in enumerate(conditions):
@@ -204,6 +207,34 @@ def slide_criteria(deck, source):
                size=15, bold=True, color=d.NAVY)
     v1.box(slide, Inches(0.6), Inches(5.45), Inches(12.1), Inches(0.75), d.LIGHT)
     d.text_box(slide, Inches(0.9), Inches(5.45), Inches(11.5), Inches(0.75), sizing("band"), size=14, color=d.NAVY,
+               anchor=d.MSO_ANCHOR.MIDDLE)
+
+
+def slide_requirement(deck, source):
+    """What an application must do before it moves, once it meets the criteria: run on Quarkus, deployed by a
+    pipeline that targets Container Apps."""
+    slide = d.base_slide(deck, f"Requisito para migrar: los {MICRO} en Quarkus", source)
+    cards = [("Requisito de la aplicación", d.GREEN, f"Sus {MICRO} deben estar en Quarkus.",
+              ["• Arranca en segundos: puede apagarse fuera de horario y volver rápido.",
+               "• Usa menos memoria: réplicas más chicas y más baratas."]),
+             ("Prerrequisito de plataforma", d.ORANGE, "Pipelines para desplegar Quarkus en Container Apps.",
+              ["• Sin ellos, ninguna aplicación puede pasar, aunque cumpla los criterios.",
+               "• Se construyen una vez y sirven para todas."])]
+    width, gap, top = Inches(5.9), Inches(0.3), Inches(1.3)
+    for index, (label, accent, headline, lines) in enumerate(cards):
+        left = Inches(0.6) + index * (width + gap)
+        v1.box(slide, left, top, width, Inches(2.9), d.LIGHT)
+        v1.box(slide, left, top, Inches(0.12), Inches(2.9), accent, radius=0.02)
+        d.text_box(slide, left + Inches(0.35), top + Inches(0.2), width - Inches(0.6), Inches(0.35), label.upper(),
+                   size=12, bold=True, color=d.GREY)
+        d.text_box(slide, left + Inches(0.35), top + Inches(0.6), width - Inches(0.6), Inches(0.9), headline,
+                   size=20, bold=True, color=d.NAVY)
+        d.text_box(slide, left + Inches(0.35), top + Inches(1.65), width - Inches(0.6), Inches(1.1), lines,
+                   size=13, color=d.GREY)
+    v1.box(slide, Inches(0.6), Inches(4.5), Inches(12.1), Inches(1.0), d.LIGHT)
+    d.text_box(slide, Inches(0.9), Inches(4.5), Inches(11.5), Inches(1.0),
+               "Siguiente paso: relevar el runtime de cada aplicación (Quarkus, Spring Boot, .NET o Java legacy) para "
+               "saber cuántas deben migrar primero a Quarkus y cuánto cuesta.", size=14, color=d.NAVY,
                anchor=d.MSO_ANCHOR.MIDDLE)
 
 
@@ -319,6 +350,7 @@ def main():
                      f"{measured} Mínimos: calculadora de precios de Azure (East US 2, precios de lista). {v1.MONEY_NOTE}")
     slide_criteria(deck, f"Referencia: lineamiento ADT_019 del banco. Réplicas: {sizing('criteria')} "
                          "Fuente: Microsoft Learn.")
+    slide_requirement(deck, "")
     slide_distribution(deck, rows, estate["month"], f"{traffic} {v1.MONEY_NOTE}")
     slide_cost(deck, rows, f"{measured} Precios de lista: Azure Retail Prices API. {v1.MONEY_NOTE}")
     reports = sorted(glob.glob(os.path.join(aa.TOPIC_DIR, "reports", "*-aks-aca")))

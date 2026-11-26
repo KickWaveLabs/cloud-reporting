@@ -253,6 +253,8 @@ Container Insights; one stopped PROD cluster without metrics.
   - The saving margin (`min_saving`, 10% by default) is applied at the end, not as a criterion.
   - An event-driven cluster (Event Hubs / Service Bus) is counted as in use without measured traffic (group
     IN_USE): its load is messages, and how many one replica handles is not measured yet, so it is not costed.
+  - High load: more than `max_requests_day` (50 million) requests in 24 hours, the month's requests over its
+    days (`rule_high_load`). The constant-load rule below is off by default (`rule_constant_load` NO).
   - Besides size, TPS and "micro"-services, a cluster stays on AKS when its load is high and
     constant: Container Apps would run, on average over the month, at least `max_replicas_vs_aks` (80%) of the
     replicas it runs today (`aca_replicas` / `replicas_today_total` from cluster_criteria_input.csv), so it would
