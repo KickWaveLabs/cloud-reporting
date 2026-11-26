@@ -65,8 +65,10 @@ Snapshots are not off-line: they sit in the production subscription next to the 
   retention applies) and the result (balances, movements) is stored by business services (BS), Core or
   mainframe. Only those databases need the regulated backup. Logs and backups are separate.
 - Audit tables inside an application database are database data: they travel in its backup under the base rule.
-  The audit-record retention (central repository ≥ 1 year, archive ≥ 10 years, LSEG_038) is met by shipping them
-  to the log repository, not by keeping database backups longer. Engine auditing (for example SQL Auditing to
+  Their retention is a log matter, met in the log repository, not by keeping database backups longer. LSEG_038
+  reads as "every audit record 1 year central + 10 years archive", but the log best practice exists to narrow
+  that: audit and login logs with DAC data, hot 3 months + archive 1 year; without DAC, 3 months and no archive;
+  10 years only for transactional logs with DAC (values read from photos of its table, to confirm). Engine auditing (for example SQL Auditing to
   Storage or Log Analytics) is a log, not a backup.
 - To do: list which applications have databases and in which layer (BS, Core, mainframe) from the database
   inventory and the subscription names.
