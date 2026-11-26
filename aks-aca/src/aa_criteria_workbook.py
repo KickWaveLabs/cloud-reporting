@@ -655,10 +655,11 @@ def write_top_costs(book, sheet, applications, everything):
     head = 12
     rank = f"ROW()-{head}"
     shown = lambda value: f'IF({rank}>top_n,"",IFERROR({value},""))'
+    bill = f"(SUM(AllClusters[cost_month_usd])*{soles})"  # the whole AKS bill, every cluster
 
     # Left: PROD application clusters of the criteria, by AKS cost (Criteria[cost_rank]).
     sheet["A11"], sheet["A11"].font = "PROD application clusters by AKS cost (S/ a month, with IGV)", BOLD
-    left = ["Rank", "Cluster", "App", "BIA", "AKS today (S/)", "Saving share", "Destination", "Stays on AKS because"]
+    left = ["Rank", "Cluster", "App", "BIA", "AKS today (S/)", "Cost share", "Saving share", "Destination", "Stays on AKS because"]
     at = f"MATCH({rank},Criteria[cost_rank],0)"
     get = lambda column: f"INDEX(Criteria[{column}],{at})"
     flag = lambda column, value: f'{get(column)}="{value}"'
@@ -672,37 +673,37 @@ def write_top_costs(book, sheet, applications, everything):
            f'"High, constant load: nearly the replicas of AKS",'
            f'IF({flag("group", "BELOW_MARGIN")},"Saves less than min_saving","")))))))))')
     left_formulas = [rank, get("cluster"), get("cod_app"), get("bia"), get("aks_month_pen"),
-                     f'IF({meets},{get("saving_share")},"-")', get("group"), why]
+                     f'{get("aks_month_pen")}/{bill}',                     f'IF({meets},{get("saving_share")},"-")', get("group"), why]
     formula_table(sheet, "TopApplications", [(header, shown(value)) for header, value in zip(left, left_formulas)],
                   applications, top=head)
-    for column, fmt in ((5, PEN), (6, PCT)):
+    for column, fmt in ((5, PEN), (6, "0.0%"), (7, PCT)):
         for row in range(head + 1, head + 1 + applications):
             sheet.cell(row=row, column=column).number_format = fmt
-    rows = f"$A${head + 1}:$H${head + applications}"
-    sheet.conditional_formatting.add(rows, FormulaRule(formula=[f'OR($G{head + 1}="ACA",$G{head + 1}="ACA_WITH_REVIEW")'],
+    rows = f"$A${head + 1}:$I${head + applications}"
+    sheet.conditional_formatting.add(rows, FormulaRule(formula=[f'OR($H{head + 1}="ACA",$H{head + 1}="ACA_WITH_REVIEW")'],
                                                        fill=GREEN))
-    sheet.conditional_formatting.add(rows, FormulaRule(formula=[f'$G{head + 1}="BELOW_MARGIN"'], fill=AMBER))
+    sheet.conditional_formatting.add(rows, FormulaRule(formula=[f'$H{head + 1}="BELOW_MARGIN"'], fill=AMBER))
     counted = 'SUMIFS(Criteria[saving_month_pen],Criteria[goes_to_aca],"YES"'
     totals = [('="Top "&MIN(top_n,COUNT(Criteria[cost_rank]))&" shown"', "SUM(TopApplications[AKS today (S/)])",
                f'{counted},Criteria[cost_rank],"<="&top_n)'),
               ("All PROD application clusters", "SUM(Criteria[aks_month_pen])", counted + ")")]
     sheet.cell(row=5, column=5, value="AKS today (S/)").font = BOLD
-    sheet.cell(row=5, column=6, value="Saving counted (S/)").font = BOLD
+    sheet.cell(row=5, column=7, value="Saving counted (S/)").font = BOLD
     for row, (label, cost, saving) in enumerate(totals, start=6):
         sheet.cell(row=row, column=2, value=label).font = BOLD
         sheet.cell(row=row, column=5, value="=" + cost).number_format = PEN
-        sheet.cell(row=row, column=6, value="=" + saving).number_format = PEN
+        sheet.cell(row=row, column=7, value="=" + saving).number_format = PEN
     sheet.cell(row=8, column=2, value="Share of the shown in the PROD application cost")
     sheet["E8"], sheet["E8"].number_format = "=IF(E7>0,E6/E7,0)", PCT
     sheet.cell(row=9, column=2, value="Green: moves to Container Apps. Yellow: meets the criteria but saves less than "
                                       "min_saving. \"-\": a criterion keeps it on AKS.")
 
     # Right: every AKS cluster, any environment or category (AllClusters comes sorted by cost).
-    start = 10  # column J
+    start = 11  # column K
     letter = lambda offset: get_column_letter(start + offset)
     sheet.cell(row=11, column=start, value="AKS clusters of every environment and category "
                                            "(S/ a month, with IGV)").font = BOLD
-    right = ["Rank", "Cluster", "Environment", "Category", "App", "AKS cost (S/)", "In the criteria", "Saving share",
+    right = ["Rank", "Cluster", "Environment", "Category", "App", "AKS cost (S/)", "Cost share", "In the criteria", "Saving share",
              "Destination"]
     name = f"INDEX(AllClusters[cluster],{rank})"
     at = f"MATCH({name},Criteria[cluster],0)"
@@ -710,19 +711,20 @@ def write_top_costs(book, sheet, applications, everything):
     inside = f"COUNTIF(Criteria[cluster],{name})>0"
     right_formulas = [rank, name, f"INDEX(AllClusters[environment],{rank})", f"INDEX(AllClusters[category],{rank})",
                       f'INDEX(AllClusters[cod_app],{rank})&""', f"INDEX(AllClusters[cost_month_usd],{rank})*{soles}",
+                      f"INDEX(AllClusters[cost_month_usd],{rank})*{soles}/{bill}",
                       f'IF({inside},"YES","NO")',
                       f'IF({inside},IF(OR({group}="ACA",{group}="ACA_WITH_REVIEW",{group}="BELOW_MARGIN"),'
                       f'INDEX(Criteria[saving_share],{at}),"-"),"-")',
                       f'IF({inside},{group},"Not evaluated")']
     formula_table(sheet, "TopAllClusters", [(header, shown(value)) for header, value in zip(right, right_formulas)],
                   everything, top=head, left=start)
-    for offset, fmt in ((5, PEN), (7, PCT)):
+    for offset, fmt in ((5, PEN), (6, "0.0%"), (8, PCT)):
         for row in range(head + 1, head + 1 + everything):
             sheet.cell(row=row, column=start + offset).number_format = fmt
-    rows = f"${letter(0)}${head + 1}:${letter(8)}${head + everything}"
+    rows = f"${letter(0)}${head + 1}:${letter(9)}${head + everything}"
     sheet.conditional_formatting.add(rows, FormulaRule(
-        formula=[f'OR(${letter(8)}{head + 1}="ACA",${letter(8)}{head + 1}="ACA_WITH_REVIEW")'], fill=GREEN))
-    sheet.conditional_formatting.add(rows, FormulaRule(formula=[f'${letter(8)}{head + 1}="BELOW_MARGIN"'], fill=AMBER))
+        formula=[f'OR(${letter(9)}{head + 1}="ACA",${letter(9)}{head + 1}="ACA_WITH_REVIEW")'], fill=GREEN))
+    sheet.conditional_formatting.add(rows, FormulaRule(formula=[f'${letter(9)}{head + 1}="BELOW_MARGIN"'], fill=AMBER))
     all_cost = f"SUM(AllClusters[cost_month_usd])*{soles}"
     app_cost = (f'SUMIFS(AllClusters[cost_month_usd],AllClusters[environment],"PROD",AllClusters[category],'
                 f'"APPLICATION")*{soles}')
@@ -737,10 +739,10 @@ def write_top_costs(book, sheet, applications, everything):
         sheet.cell(row=row, column=start + 5, value="=" + formula).number_format = fmt
     sheet.cell(row=10, column=start + 1,
                value="Not evaluated: other environments and infrastructure clusters are outside the criteria.")
-    for column, width in zip("ABCDEFGH", (6, 18, 7, 10, 14, 18, 16, 34)):
+    for column, width in zip("ABCDEFGHI", (6, 18, 7, 10, 14, 11, 18, 16, 34)):
         sheet.column_dimensions[column].width = width
-    sheet.column_dimensions["I"].width = 3
-    for offset, width in enumerate((6, 18, 12, 16, 7, 14, 12, 11, 16)):
+    sheet.column_dimensions["J"].width = 3
+    for offset, width in enumerate((6, 18, 12, 16, 7, 14, 11, 12, 11, 16)):
         sheet.column_dimensions[letter(offset)].width = width
     sheet.freeze_panes = f"A{head + 1}"
 
