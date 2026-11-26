@@ -288,7 +288,7 @@ quarter of a Container Apps vCPU (`Breakeven` sheet: Container Apps wins only if
 day), so a well-used AKS cluster stays cheaper and the saving comes from capacity paid and not used.
 `aa_rightsizing.py` writes `results/aa-rightsizing/cluster_rightsizing.csv` (one row per AKS cluster with cost in the
 month, any environment; PROD with CPU and memory used in office hours against allocatable, system pool, autoscaling
-and the criteria v2 Container Apps cost) and `aks_rightsizing.xlsx` (Summary by class, Pain points, Clusters,
+and the criteria v2 Container Apps cost) and `aks_rightsizing.xlsx` (Summary by class, Calculator per cluster with its nodes, use and the nodes enough at the target, Pain points, Clusters,
 Breakeven, Variables; the cluster table is a Power Query connection to the CSV). Use = the busier of CPU and memory,
 average in office hours over allocatable; `optimized_use` 60% and `partly_use` 30% are editable.
 `aa_deck_rightsizing.py` builds `aks_rightsizing.pptx` (five slides in Spanish) from the same figures. Pain points

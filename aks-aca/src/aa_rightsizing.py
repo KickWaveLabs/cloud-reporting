@@ -343,13 +343,94 @@ def write_breakeven(sheet):
     sheet.column_dimensions["B"].width = 14
 
 
+def write_calculator(sheet, default):
+    """One cluster at a time: what its nodes offer, what it uses (applications and system), how many nodes would be
+    enough at optimized_use, and what that costs against Container Apps."""
+    from openpyxl.chart import BarChart, Reference
+    from openpyxl.worksheet.datavalidation import DataValidation
+    sheet["A1"], sheet["A1"].font = "Calculator: how much of its nodes a cluster uses", Font(bold=True, size=14)
+    sheet["A3"], sheet["A3"].font = "Cluster", BOLD
+    sheet["B3"], sheet["B3"].fill = default, EDITABLE
+    validation = DataValidation(type="list", formula1="=INDIRECT(\"Clusters[cluster]\")", allow_blank=False)
+    sheet.add_data_validation(validation)
+    validation.add("B3")
+    get = lambda column: f'IFERROR(INDEX(Clusters[{column}],MATCH($B$3,Clusters[cluster],0)),"")'
+    facts = [("Application", get("cod_app"), None), ("Environment / category", f'{get("environment")}&" / "&{get("category")}', None),
+             ("Nodes: system + user", f'{get("nodes_system")}&" + "&{get("nodes_user")}', None),
+             ("VM sizes", get("vm_sizes"), None), ('"Micro"-services', get("microservices"), "0"),
+             ("AKS cost (S/ a month, with IGV)", get("aks_month_pen"), PEN),
+             ("Container Apps, criteria v2 (S/ a month)", get("aca_month_pen"), PEN),
+             ("Criteria v2 decision", get("aca_group"), None),
+             ("Use (the busier of CPU and memory)", get("use"), PCT), ("Class", get("class"), None)]
+    for row, (label, formula, fmt) in enumerate(facts, start=5):
+        sheet.cell(row=row, column=1, value=label)
+        cell = sheet.cell(row=row, column=2, value="=" + formula)
+        if fmt:
+            cell.number_format = fmt
+    top = 17
+    sheet.cell(row=top, column=1, value="Office hours (weekdays 8:00-20:00)").font = BOLD
+    for column, header in enumerate(["", "CPU (vCPU)", "Memory (GiB)"], start=1):
+        sheet.cell(row=top + 1, column=column, value=header).font = BOLD
+    lines = [("Nodes offer (allocatable)", "cpu_allocatable", "mem_allocatable_gib"),
+             ("Used, peak of the month", "cpu_used_max", "mem_used_max_gib"),
+             ("Used, average in office hours", "cpu_used_office_avg", "mem_used_office_avg_gib"),
+             ("...of it, the system pool (Kubernetes itself)", "cpu_used_system_office_avg", "mem_used_system_office_avg_gib"),
+             ("Used, average off hours", "cpu_used_offhours_avg", "mem_used_offhours_avg_gib")]
+    for offset, (label, cpu, mem) in enumerate(lines, start=top + 2):
+        sheet.cell(row=offset, column=1, value=label)
+        sheet.cell(row=offset, column=2, value="=" + get(cpu)).number_format = "0.0"
+        sheet.cell(row=offset, column=3, value="=" + get(mem)).number_format = "0.0"
+    used_by_apps = top + 7
+    sheet.cell(row=used_by_apps, column=1, value="Used by the applications (office average minus system)")
+    sheet.cell(row=used_by_apps, column=2, value=f"=MAX(0,N(B{top + 4})-N(B{top + 5}))").number_format = "0.0"
+    sheet.cell(row=used_by_apps, column=3, value=f"=MAX(0,N(C{top + 4})-N(C{top + 5}))").number_format = "0.0"
+    share = top + 8
+    sheet.cell(row=share, column=1, value="Share of what the nodes offer, office average")
+    sheet.cell(row=share, column=2, value=f'=IF(N(B{top + 2})>0,N(B{top + 4})/B{top + 2},"")').number_format = PCT
+    sheet.cell(row=share, column=3, value=f'=IF(N(C{top + 2})>0,N(C{top + 4})/C{top + 2},"")').number_format = PCT
+    fit = top + 11
+    sheet.cell(row=fit, column=1, value="If it were sized to optimized_use").font = BOLD
+    nodes = f"(N({get('nodes_system')})+N({get('nodes_user')}))"
+    rows = [("Nodes today", f"={nodes}", "0"),
+            ("Nodes enough at optimized_use (never below min_cluster_nodes)",
+             f'=IF({nodes}>0,MAX(min_cluster_nodes,CEILING({nodes}*N({get("use")})/optimized_use,1)),"")', "0"),
+            ("AKS cost with those nodes (S/ a month)", f'=IF(N(B{fit + 1})>0,N({get("aks_month_pen")})*B{fit + 2}/B{fit + 1},"")', PEN),
+            ("AKS today (S/ a month)", "=N(" + get("aks_month_pen") + ")", PEN),
+            ("Container Apps, criteria v2 (S/ a month)", "=" + get("aca_month_pen"), PEN)]
+    for offset, (label, formula, fmt) in enumerate(rows, start=fit + 1):
+        sheet.cell(row=offset, column=1, value=label)
+        sheet.cell(row=offset, column=2, value=formula).number_format = fmt
+    notes = top + 18
+    sheet.cell(row=notes, column=1, value="How it is measured").font = BOLD
+    for offset, text in enumerate((
+            "Use: CPU and memory used on the cluster's nodes (Azure Monitor node metrics of the month), averaged over "
+            "office hours, over what the nodes offer to pods (allocatable). The busier of the two decides.",
+            "Cost: Cost Management, amortized cost of the month for the cluster's resources (reservations spread over "
+            "their term), in soles with IGV.",
+            "Nodes enough: today's nodes x use / optimized_use, rounded up, never below the dedicated minimum. A cluster "
+            "at the minimum cannot get cheaper inside AKS: only sharing a cluster or Container Apps removes that floor.",
+            "Container Apps: the criteria v2 model (replicas from the traffic of each hour, 1 minimum in office hours, 0 "
+            "outside), only for PROD business clusters."), start=1):
+        sheet.cell(row=notes + offset, column=1, value=text)
+    chart = BarChart()
+    chart.type, chart.grouping, chart.title = "bar", "clustered", None
+    chart.y_axis.title = None
+    data = Reference(sheet, min_col=2, max_col=3, min_row=top + 1, max_row=top + 1 + 4)
+    chart.add_data(data, titles_from_data=True)
+    chart.set_categories(Reference(sheet, min_col=1, min_row=top + 2, max_row=top + 2 + 3))
+    chart.height, chart.width = 8, 16
+    sheet.add_chart(chart, "E3")
+    for column, width in zip("ABC", (62, 18, 16)):
+        sheet.column_dimensions[column].width = width
+
+
 def build(results, output):
     data, month = rows(results)
     out_dir = os.path.join(results, FOLDER)
     os.makedirs(out_dir, exist_ok=True)
     aa.azure.Output(out_dir, ",").csv(FILE, data)
     book = Workbook()
-    names = ["Summary", "Pain points", "Clusters", "Breakeven", "Variables", "Data"]
+    names = ["Summary", "Calculator", "Pain points", "Clusters", "Breakeven", "Variables", "Data"]
     sheets = {name: (book.active if index == 0 else book.create_sheet(name)) for index, name in enumerate(names)}
     sheets["Summary"].title = "Summary"
     write_variables(book, sheets["Variables"], v1.read_prices(results))
@@ -359,6 +440,8 @@ def build(results, output):
     write_summary(sheets["Summary"], month)
     write_pains(sheets["Pain points"])
     write_breakeven(sheets["Breakeven"])
+    write_calculator(sheets["Calculator"], next((row["cluster"] for row in data if row["cod_app"] == "BSEG"),
+                                                data[0]["cluster"] if data else ""))
     sheets["Data"].sheet_state = "hidden"
     book.calculation.fullCalcOnLoad = True
     os.makedirs(os.path.dirname(os.path.abspath(output)), exist_ok=True)

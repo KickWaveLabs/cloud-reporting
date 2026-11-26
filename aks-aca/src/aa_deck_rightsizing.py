@@ -49,9 +49,10 @@ def slide_pain(deck, summary, hours, ratio, source):
     idle = sum(entry["idle"] for entry in classes.values())
     count = sum(entry["clusters"] for entry in classes.values())
     slide = d.base_slide(deck, "El verdadero dolor no es AKS: es cómo lo usamos", source)
-    cards = [(d.percent(d.share_of(idle, total)), "de la capacidad que pagamos en AKS de negocio no se usa", d.RUST),
-             (f"{classes['OPTIMIZED']['clusters']} de {count}", "clusters aprovechan bien lo que pagan (60% o más)",
-              d.ORANGE),
+    cards = [(d.percent(d.share_of(idle, total)), "del gasto en servidores AKS de negocio paga CPU y memoria que no "
+                                                  "se usan", d.RUST),
+             (f"{classes['OPTIMIZED']['clusters']} de {count}", "clusters usan en promedio 60% o más de la CPU o "
+                                                               "memoria de sus servidores", d.ORANGE),
              (f"{hours:.0f} h", f"al día: una vCPU de Container Apps cuesta {ratio:.0f} veces la de AKS con reserva; "
                                 "solo gana si está encendida menos que eso", d.GREEN)]
     width, gap = Inches(3.9), Inches(0.2)
@@ -61,26 +62,34 @@ def slide_pain(deck, summary, hours, ratio, source):
     d.callout(slide, Inches(0.6), Inches(3.6), Inches(12.1), Inches(1.0),
               "Un AKS bien usado es más barato que Container Apps. El ahorro aparece donde AKS paga capacidad que no "
               "usa.", size=16, fill=d.CARD)
-    d.text_box(slide, Inches(0.6), Inches(4.85), Inches(12.1), Inches(1.0),
-               ["• Uso: CPU o memoria usada en promedio en horario de oficina, sobre lo que ofrecen sus servidores.",
-                "• Aplicaciones de negocio en producción. Lo que ahorraría cada palanca va al final."], size=12,
-               color=d.GREY)
+    d.text_box(slide, Inches(0.6), Inches(4.85), Inches(12.1), Inches(1.3),
+               ["• Uso: CPU y memoria que usan los servidores de cada cluster, en promedio de lunes a viernes de 8:00 a "
+                "20:00 (métricas de Azure Monitor de octubre 2026), sobre lo que esos servidores ofrecen. Cuenta la "
+                "más llena de las dos.",
+                "• Costo: Cost Management de octubre 2026, costo amortizado (las reservas repartidas en su plazo).",
+                "• Clusters de aplicaciones de negocio en producción. Lo que ahorraría cada palanca va al final."],
+               size=12, color=d.GREY)
 
 
 def slide_classes(deck, summary, source):
     classes = summary["classes"]
-    slide = d.base_slide(deck, "AKS bien usado contra mal usado: Container Apps solo gana en los sobredimensionados",
+    slide = d.base_slide(deck, "AKS bien usado contra mal usado: Container Apps gana donde sobra capacidad",
                          source)
     total = sum(entry["aks"] for entry in classes.values())
-    table = [["Cluster", "Clusters", "Peso en el gasto", "Capacidad sin usar", "Container Apps sería"]]
+    verdict = lambda aca, aks: "-" if not aks else (f"{aca / aks:.1f} veces más caro" if aca >= aks
+                                                    else f"{d.percent(1 - aca / aks)} más barato")
+    table = [["Cluster", "Clusters", "Peso en el gasto", "Pasan a Container Apps", "Los que pasan", "Los que se quedan"]]
     for kind, label, meaning, _ in KINDS:
-        entry = classes[kind]
-        ratio = entry["aca"] / entry["aks_costed"] if entry["aks_costed"] else 0
-        verdict = f"{ratio:.1f} veces más caro" if ratio >= 1 else f"{d.percent(1 - ratio)} más barato"
-        table.append([f"{label} ({meaning})", d.number(entry["clusters"]), d.percent(d.share_of(entry["aks"], total)),
-                      d.percent(d.share_of(entry["idle"], entry["aks"])), verdict])
-    d.table(slide, Inches(0.6), Inches(1.3), Inches(12.1), table, [0.32, 0.1, 0.18, 0.18, 0.22], highlight_column=4,
-            row_height=0.45, size=13)
+        members = [row for row in summary["rows"] if row["kind"] == kind]
+        moving = [row for row in members if row["aca_group"] in ("ACA", "ACA_WITH_REVIEW")]
+        staying = [row for row in members if row not in moving and row["aca_month_pen"] != ""]
+        cost = lambda group: (sum(v1.to_float(row["aca_month_pen"]) or 0 for row in group),
+                              sum(row["aks_pen"] for row in group))
+        table.append([f"{label} ({meaning})", d.number(len(members)),
+                      d.percent(d.share_of(sum(row["aks_pen"] for row in members), total)), d.number(len(moving)),
+                      verdict(*cost(moving)), verdict(*cost(staying))])
+    d.table(slide, Inches(0.6), Inches(1.3), Inches(12.1), table, [0.28, 0.09, 0.13, 0.15, 0.17, 0.18],
+            highlight_column=4, row_height=0.45, size=12)
     rows = {row["cod_app"]: row for row in summary["rows"]}
     examples = [(code, rows[code]) for code in ("YAPE", "APPV", "XESS") if code in rows]
     width, gap = Inches(3.9), Inches(0.2)
@@ -93,9 +102,10 @@ def slide_classes(deck, summary, source):
               value_color=dict((kind, colour) for kind, _, _, colour in KINDS).get(row["kind"], d.ORANGE),
               value_size=28, label_size=11)
     d.text_box(slide, Inches(0.6), Inches(5.3), Inches(12.1), Inches(0.7),
-               f"En los clusters grandes la estimación de Container Apps es alta: supone que cada {MICRO_ONE} recibe "
-               "todo el tráfico del cluster. La dirección no cambia: mientras mejor usado está el AKS, más caro sale "
-               "Container Apps.", size=11, italic=True, color=d.GREY)
+f"Los de uso a medias que pasan están casi todos en el mínimo de {v1.MIN_AKS_NODES} servidores, y la mayor "
+               "parte de la memoria que usan es del propio Kubernetes, no de la aplicación: por eso igual ahorran. "
+               f"En los clusters grandes la estimación de Container Apps es alta (supone que cada {MICRO_ONE} recibe "
+               "todo el tráfico del cluster), pero la dirección no cambia.", size=11, italic=True, color=d.GREY)
 
 
 def slide_money(deck, summary, total, source):
