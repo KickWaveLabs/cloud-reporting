@@ -106,13 +106,15 @@ def slide_hypothesis(deck, estate, apps, scaling, results, example, source):
 def slide_criteria(deck, source):
     """Four numbered conditions, the rules that always keep a cluster on AKS, the saving margin, and at the bottom
     (not a condition) how Container Apps is costed; the sizing figures go in the footnote."""
-    slide = d.base_slide(deck, "Para pasar a Container Apps: cuatro condiciones por cluster", source)
-    conditions = (
+    conditions = [
         (f"Hasta {model.DEFAULTS['max_tps']} TPS", "En su hora más cargada del día."),
         (f"Hasta {model.DEFAULTS['max_services']} {MICRO}", "En el cluster."),
-        ("No es compartida", "No es autenticación ni Core."),
+        ("No es compartida", "No es autenticación ni Core.") if model.DEFAULTS["rule_shared"] == "YES" else None,
         ("Sin carga alta y constante", f"Usaría menos del {d.percent(model.DEFAULTS['max_replicas_vs_aks'])} de "
-                                       "las réplicas de hoy."))
+                                       "las réplicas de hoy.") if model.DEFAULTS["rule_constant_load"] == "YES" else None]
+    conditions = [condition for condition in conditions if condition]  # the rules switched off in the variables
+    words = {2: "dos", 3: "tres", 4: "cuatro"}
+    slide = d.base_slide(deck, f"Para pasar a Container Apps: {words[len(conditions)]} condiciones por cluster", source)
     width, height, gap = Inches(5.9), Inches(1.1), Inches(0.3)
     for index, (title, meaning) in enumerate(conditions):
         v1.condition_card(slide, Inches(0.6) + (index % 2) * (width + gap), Inches(1.25) + (index // 2) * Inches(1.25),

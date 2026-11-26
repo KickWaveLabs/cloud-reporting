@@ -5,15 +5,17 @@ as Excel formulas over the same inputs, so both give the same figures with the d
 
 Decision of a cluster, in order (the first that applies):
   NO_TRAFFIC        no traffic measured in the month on its own layer (grouped by no_traffic_reason), or
-                    event-driven: its load is Event Hubs / Service Bus messages, not measured yet (group IN_USE)
+                    event-driven: its load is Event Hubs / Service Bus messages, not measured yet (group IN_USE;
+                    RULE_EVENT_DRIVEN NO evaluates it as the rest, its messages per second taken as TPS)
   AKS               a "micro"-service requests more than a Container Apps replica allows (4 vCPU / 8 GiB): implicit
   AKS               busiest hour above MAX_TPS (average TPS of the busiest hour of the day, as v1)
   AKS               more than MAX_SERVICES "micro"-services in the cluster
   AKS               BIA at AKS_FROM_BIA or above (MUY ALTA > ALTA > MEDIA > BAJA; NONE by default: no cluster)
   AKS               shared: its traffic is on the Core layer, or its application is in SHARED_APPS (authentication
-                    and identity, used by several applications)
+                    and identity, used by several applications); off with RULE_SHARED NO
   AKS               high, constant load: Container Apps would run, on average over the month, at least
-                    MAX_REPLICAS_VS_AKS of the replicas it runs today on AKS (aca_replicas / replicas_today_total)
+                    MAX_REPLICAS_VS_AKS of the replicas it runs today on AKS (aca_replicas / replicas_today_total);
+                    off with RULE_CONSTANT_LOAD NO
   ACA_WITH_REVIEW   critical (BIA ALTA or MUY ALTA) or growing past MAX_SERVICES with DESA
   ACA               otherwise
 The saving margin is not a criterion: at the end, a cluster that meets the criteria moves to Container Apps only when
@@ -57,6 +59,7 @@ DEFAULTS = {
     "concurrent_requests": 10, "traffic_share": 1.0, "sizing_basis": "BUSIEST_HOUR",
     "min_replicas_office": 1, "min_replicas_offhours": 0,
     "aks_from_bia": "NONE", "max_replicas_vs_aks": 0.8,
+    "rule_event_driven": "YES", "rule_shared": "YES", "rule_constant_load": "YES",
     "shared_apps": "AUTH,ASOB,B2CC,CB2C,CIAM,TOKE,TOTP,TPWL,TRSA,BIOM",
     "capacity_from_today": "NO", "capacity_safety": 0.7, "size_from_usage": "NO", "usage_headroom": 2.0,
     "environment_fee": "NO",
@@ -148,9 +151,14 @@ def replicas(row, variables):
     return count
 
 
+def unmeasured_events(row, variables):
+    """An event-driven cluster kept out of the count (RULE_EVENT_DRIVEN YES): its messages are not measured as load."""
+    return row["event_driven"] == "YES" and variables["rule_event_driven"] == "YES"
+
+
 def decide(row, variables):
     """(decision, reason) of one cluster row of cluster_criteria_input.csv."""
-    if row["event_driven"] == "YES":
+    if unmeasured_events(row, variables):
         return "NO_TRAFFIC", "Event-driven: its load is messages, not measured yet"
     if row["traffic_status"] != "MEASURED" or row["busiest_hour_tps"] == "":
         return "NO_TRAFFIC", f"No traffic of its own in the month ({row['traffic_status']})"
@@ -166,10 +174,11 @@ def decide(row, variables):
             BIA_LEVELS.index(row["bia"]) >= BIA_LEVELS.index(threshold):
         return "AKS", f"BIA {threshold} or above"
     shared = {code.strip().upper() for code in variables["shared_apps"].split(",") if code.strip()}
-    if row["traffic_layer"] == "CORE" or row["cod_app"].upper() in shared:
+    if variables["rule_shared"] == "YES" and (row["traffic_layer"] == "CORE" or row["cod_app"].upper() in shared):
         return "AKS", "Shared: authentication or core, used by several applications"
     today, aca = to_float(row.get("replicas_today_total")), to_float(row.get("aca_replicas"))
-    if today and aca is not None and aca / today >= variables["max_replicas_vs_aks"]:
+    if variables["rule_constant_load"] == "YES" and today and aca is not None and \
+            aca / today >= variables["max_replicas_vs_aks"]:
         return "AKS", f"High, constant load: Container Apps needs {aca / today:.0%} of today's AKS replicas"
     reasons = []
     if row["bia"] in CRITICAL_BIA:
@@ -218,7 +227,7 @@ def evaluate(data, variables=None):
         share = saving / aks if aks else 0
         movable = decision in ("ACA", "ACA_WITH_REVIEW")
         if decision == "NO_TRAFFIC":
-            group = "IN_USE" if row["event_driven"] == "YES" else \
+            group = "IN_USE" if unmeasured_events(row, variables) else \
                 GROUP_OF_REASON.get(row["no_traffic_reason"], "NOT_IN_USE")
         elif movable and share < variables["min_saving"]:
             group = "BELOW_MARGIN"

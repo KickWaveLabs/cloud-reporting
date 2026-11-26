@@ -90,7 +90,8 @@ FIVE_MINUTES_COLUMN = 36  # Calculator: column AJ, right of the charts
 HOUR_LABEL_STEP = 4  # hours 0, 4, 8 ... 20 on the charts: office hours are 8:00 to 19:59
 LISTS = {"sizing_basis": '"PEAK,BUSIEST_HOUR,AVERAGE"', "capacity_from_today": '"NO,YES"',
          "size_from_usage": '"NO,YES"', "environment_fee": '"NO,YES"',
-         "aks_from_bia": '"NONE,MUY ALTA,ALTA,MEDIA,BAJA"'}
+         "aks_from_bia": '"NONE,MUY ALTA,ALTA,MEDIA,BAJA"', "rule_event_driven": '"YES,NO"',
+         "rule_shared": '"YES,NO"', "rule_constant_load": '"YES,NO"'}
 BIA_ORDER = '{"BAJA","MEDIA","ALTA","MUY ALTA"}'  # lowest first; SIN BIA and NONE match none  # variables picked from a list
 BUCKETS = 12  # 5-minute buckets in an hour
 # Official sources of the sizing rule, linked next to their variables.
@@ -113,6 +114,13 @@ def write_variables(book, sheet, month, days, price_env_hour):
                       ("max_services", model.DEFAULTS["max_services"], "Up to this many \"micro\"-services per cluster"),
                       ("aks_from_bia", model.DEFAULTS["aks_from_bia"],
                        "Clusters with this BIA or above stay on AKS (MUY ALTA > ALTA > MEDIA > BAJA); NONE: no cluster"),
+                      ("rule_event_driven", model.DEFAULTS["rule_event_driven"],
+                       "YES: event-driven clusters count as in use without measurement (their messages are not "
+                       "measured as load). NO: evaluated as the rest, messages per second taken as TPS"),
+                      ("rule_shared", model.DEFAULTS["rule_shared"],
+                       "YES: shared clusters (shared_apps, Core layer) stay on AKS. NO: evaluated as the rest"),
+                      ("rule_constant_load", model.DEFAULTS["rule_constant_load"],
+                       "YES: high, constant load (max_replicas_vs_aks) stays on AKS. NO: evaluated as the rest"),
                       ("max_replicas_vs_aks", model.DEFAULTS["max_replicas_vs_aks"],
                        "High, constant load: clusters where Container Apps would run, on average, at least this share "
                        "of the replicas they run today on AKS stay on AKS"),
@@ -494,7 +502,7 @@ def criteria_formulas():
     c = lambda column: r("Criteria", column)
     return [
         # event-driven: its load is messages, not measured yet, so it counts as in use without measured traffic
-        ("has_traffic", f'IF(AND({c("event_driven")}<>"YES",{c("traffic_status")}="MEASURED",'
+        ("has_traffic", f'IF(AND(OR({c("event_driven")}<>"YES",rule_event_driven="NO"),{c("traffic_status")}="MEASURED",'
                         f'ISNUMBER({c("busiest_hour_tps")})),"YES","NO")'),
         ("size_ok", f'IF(N({c("microservices_over_aca_size")})=0,"YES","NO")'),
         ("tps_ok", f'IF({c("has_traffic")}="NO","-",IF({c("busiest_hour_tps")}<=max_tps,"YES","NO"))'),
@@ -509,10 +517,10 @@ def criteria_formulas():
                          f'Traffic[scope_type],"CLUSTER")*3600)*N({c("microservices")}),"")'),
         ("replicas_vs_aks", f'IF(AND(ISNUMBER({c("aca_replicas")}),N({c("replicas_today_total")})>0),'
                             f'{c("aca_replicas")}/{c("replicas_today_total")},"")'),
-        ("replicas_ok", f'IF(AND(ISNUMBER({c("replicas_vs_aks")}),N({c("replicas_vs_aks")})>=max_replicas_vs_aks),'
-                        '"NO","YES")'),
-        ("shared_ok", f'IF(OR({c("traffic_layer")}="CORE",ISNUMBER(SEARCH(","&{c("cod_app")}&",",","&'
-                      'SUBSTITUTE(shared_apps," ","")&","))),"NO","YES")'),
+        ("replicas_ok", f'IF(AND(rule_constant_load="YES",ISNUMBER({c("replicas_vs_aks")}),'
+                        f'N({c("replicas_vs_aks")})>=max_replicas_vs_aks),"NO","YES")'),
+        ("shared_ok", f'IF(AND(rule_shared="YES",OR({c("traffic_layer")}="CORE",ISNUMBER(SEARCH(","&{c("cod_app")}&",",","&'
+                      'SUBSTITUTE(shared_apps," ","")&",")))),"NO","YES")'),
         ("decision", f'IF({c("has_traffic")}="NO","NO_TRAFFIC",IF(OR({c("size_ok")}="NO",'
                      f'{c("tps_ok")}="NO",{c("services_ok")}="NO",{c("bia_ok")}="NO",{c("replicas_ok")}="NO",'
                      f'{c("shared_ok")}="NO"),"AKS",IF(OR({c("critical")}="YES",'
@@ -528,7 +536,7 @@ def criteria_formulas():
         ("aks_month_pen", f'N({c("cost_month_usd")})*(1+igv)*exchange_rate'),
         ("saving_month_pen", f'{c("aks_month_pen")}-{c("aca_month_pen")}'),
         ("saving_share", f'IF({c("aks_month_pen")}>0,{c("saving_month_pen")}/{c("aks_month_pen")},0)'),
-        ("group", f'IF({c("decision")}="NO_TRAFFIC",IF({c("event_driven")}="YES","IN_USE",'
+        ("group", f'IF({c("decision")}="NO_TRAFFIC",IF(AND({c("event_driven")}="YES",rule_event_driven="YES"),"IN_USE",'
                   f'IF({c("no_traffic_reason")}="IN_DEVELOPMENT","IN_DEVELOPMENT",'
                   f'IF({c("no_traffic_reason")}="IN_USE_NOT_MEASURED","IN_USE","NOT_IN_USE"))),IF(AND(OR('
                   f'{c("decision")}="ACA",{c("decision")}="ACA_WITH_REVIEW"),{c("saving_share")}<min_saving),'
@@ -656,7 +664,7 @@ def write_top_costs(book, sheet, applications, everything):
     flag = lambda column, value: f'{get(column)}="{value}"'
     # The saving share shows only for clusters that meet the criteria; the rest show "-" and why they stay.
     meets = f'OR({flag("group", "ACA")},{flag("group", "ACA_WITH_REVIEW")},{flag("group", "BELOW_MARGIN")})'
-    why = (f'IF({flag("event_driven", "YES")},"Event-driven: messages, not measured yet",'
+    why = (f'IF(AND({flag("event_driven", "YES")},rule_event_driven="YES"),"Event-driven: messages, not measured yet",'
            f'IF({flag("decision", "NO_TRAFFIC")},"No traffic of its own",IF({flag("size_ok", "NO")},"A ""micro""-service over 4 vCPU / 8 GiB",'
            f'IF({flag("tps_ok", "NO")},"Busiest hour over max_tps",IF({flag("services_ok", "NO")},'
            f'"Over max_services ""micro""-services",IF({flag("bia_ok", "NO")},"BIA "&aks_from_bia&" or above",'
