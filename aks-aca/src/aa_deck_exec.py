@@ -272,10 +272,11 @@ def slide_criteria(deck, source):
     """Four numbered conditions, the rules that always keep a cluster on AKS, the saving margin, and at the bottom
     (not a condition) how Container Apps is costed; the sizing figures go in the footnote."""
     conditions = [
-        (f"No más de {model.DEFAULTS['max_tps']} TPS", "En su hora más cargada del día."),
+        (f"No más de {model.DEFAULTS['max_tps']} TPS", "Promedio de su hora pico, en los días del mes."),
         (f"No más de {model.DEFAULTS['max_services']} {MICRO}", "En el cluster."),
         ("No es compartida", "No es autenticación ni Core.") if model.DEFAULTS["rule_shared"] == "YES" else None,
-        ("Sin carga alta ni constante", f"Hasta {model.DEFAULTS['max_avg_tps']} TPS de promedio y baja de noche.") if model.DEFAULTS["rule_high_load"] == "YES" else None,
+        ("Sin carga alta ni constante", f"Hasta {model.DEFAULTS['max_avg_tps'] * 86400 / 1e6:.1f} millones de solicitudes al día "
+                                        f"({model.DEFAULTS['max_avg_tps']} TPS).") if model.DEFAULTS["rule_high_load"] == "YES" else None,
         ("Sin carga constante", f"Usaría menos del {d.percent(model.DEFAULTS['max_replicas_vs_aks'])} de "
                                 "las réplicas de hoy.") if model.DEFAULTS["rule_constant_load"] == "YES" else None]
     conditions = [condition for condition in conditions if condition]  # the rules switched off in the variables
@@ -429,8 +430,9 @@ def main():
     slide_estate(deck, estate, apps, args.results, f"{measured} {v1.MONEY_NOTE}")
     slide_hypothesis(deck, estate, apps, scaling, args.results, example,
                      f"{measured} Mínimos: calculadora de precios de Azure (East US 2, precios de lista). {v1.MONEY_NOTE}")
-    slide_criteria(deck, f"Referencia: lineamiento ADT_019 del banco. Carga alta: más de {model.DEFAULTS['max_avg_tps']} "
-                         f"TPS de promedio en el día; constante: desde {model.DEFAULTS['min_constant_tps']} TPS de promedio, "
+    slide_criteria(deck, f"Referencia: lineamiento ADT_019 del banco. Hora pico: la hora del día con más tráfico, "
+                         "promediada en los días del mes. Carga alta: más de "
+                         f"{model.DEFAULTS['max_avg_tps']} TPS de promedio en el día; constante: desde {model.DEFAULTS['min_constant_tps']} TPS de promedio, "
                          f"con su hora más tranquila en al menos {d.percent(model.DEFAULTS['min_quiet_share'])} del "
                          f"promedio. Réplicas: {sizing('criteria')} "
                          "Fuente: Microsoft Learn.")
