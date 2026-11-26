@@ -432,7 +432,9 @@ def main():
                      f"{measured} Mínimos: calculadora de precios de Azure (East US 2, precios de lista). {v1.MONEY_NOTE}")
     slide_criteria(deck, f"Referencia: lineamiento ADT_019 del banco. Hora pico: la hora del día con más tráfico, "
                          "promediada en los días del mes. Carga alta: más de "
-                         f"{model.DEFAULTS['max_avg_tps']} TPS de promedio en el día; constante: desde {model.DEFAULTS['min_constant_tps']} TPS de promedio, "
+                         f"{model.DEFAULTS['max_avg_tps']} TPS de promedio en el día, o sea "
+                         f"{model.DEFAULTS['max_avg_tps'] / model.DEFAULTS['concurrent_requests']:.0f} réplicas de cada "
+                         f"{MICRO_ONE} ocupadas las 24 horas: Container Apps ya no puede bajar ni apagarse; constante: desde {model.DEFAULTS['min_constant_tps']} TPS de promedio, "
                          f"con su hora más tranquila en al menos {d.percent(model.DEFAULTS['min_quiet_share'])} del "
                          f"promedio. Réplicas: {sizing('criteria')} "
                          "Fuente: Microsoft Learn.")
