@@ -482,8 +482,10 @@ def slide_layers(deck):
     action = {"left": True, "size": 8.5}
     no = {"left": True, "size": 8.5, "color": RUST}
     rows = [
-        ["Canal", "Homebanking, Banca Móvil, Yape", "Transacciones del cliente",
-         ("Sí, su base de datos: lineamiento base + ámbito regulado (lámina 1)", action)],
+        ["Canal", "Homebanking, Banca Móvil, Yape", "Lo que su base guarde; la transacción deja traza en logs",
+         ("Sí, su base: lineamiento base. Ámbito regulado solo si su base guarda el registro", action)],
+        ["Core y mainframe", "Cuentas, operaciones, contabilidad", "El resultado: saldos y movimientos",
+         ("Sí: lineamiento base + ámbito regulado (lámina 1)", action)],
         ["Backoffice", "Contratos, libros contables, pedidos", "Documentos y registros internos",
          ("Sí, su base de datos o archivos: lineamiento base + ámbito regulado", action)],
         ["Plataformas de integración", "APIs, microservicios, middleware", "Nada en reposo",
@@ -494,13 +496,13 @@ def slide_layers(deck):
          ("No es backup: lo rige la retención de logs", no)],
     ]
     grid = table(slide, left, Inches(1.55), width, ["Tipo de aplicación", "Ejemplos", "Qué guarda", "¿Backup?"],
-                 rows, [0.22, 0.25, 0.19, 0.34], row_height=0.74, size=9)
-    grid.rows[0].height = Inches(0.4)
-    note_box(slide, left, Inches(5.75), width, Inches(1.18), [
-        [("Dentro de la aplicación, solo la capa de datos. ", True, NAVY),
-         ("Se respaldan la base de datos y los archivos; la capa de cómputo (contenedores, App Service, servidores "
-          "sin datos) se vuelve a desplegar. Todos los recursos de la aplicación heredan su regla.", False, GREY)]],
-             size=9.5)
+                 rows, [0.21, 0.23, 0.23, 0.33], row_height=0.62, size=8.5)
+    grid.rows[0].height = Inches(0.36)
+    note_box(slide, left, Inches(5.68), width, Inches(1.25), [
+        [("Manda lo que guarda la base, no lo que la aplicación procesa. ", True, NAVY),
+         ("La transacción deja traza en logs (su retención es la de logs); el resultado queda en la base del "
+          "sistema de registro y ahí va el backup regulado. Dentro de la aplicación solo se respalda la capa de "
+          "datos; el cómputo se vuelve a desplegar.", False, GREY)]], size=9)
 
     divider(slide, Inches(7.25), Inches(1.08), Inches(5.85))
 
@@ -528,7 +530,7 @@ def slide_layers(deck):
     slide.notes_slide.notes_text_frame.text = (
         "Granularidad: el mismo criterio que el best practice de retención de logs, que fija la retención por tipo "
         "de aplicación (canal, backoffice, infraestructura y software base, plataformas de integración, plataformas de "
-        "seguridad). La decisión se toma por aplicación y todos sus recursos la heredan. Dentro de la aplicación se "
+        "seguridad). La decisión se toma por aplicación y todos sus recursos la heredan. El ámbito regulado lo define lo que guarda la base de datos, no lo que la aplicación procesa: un canal procesa transacciones pero su traza queda en los logs (retención de logs: hot 1 año, archive hasta 10) y el resultado (saldos, movimientos) queda en la base del sistema de registro, normalmente Core o mainframe; ahí va el backup regulado. Dentro de la aplicación se "
         "respalda la capa que guarda el dato: las bases de datos de canales y backoffice, y los servidores o "
         "archivos que tengan datos propios. Las capas sin estado (contenedores, App Service, APIs, plataformas de "
         "integración, que no guardan datos en reposo) se recuperan desplegando de nuevo desde el código, la imagen y "

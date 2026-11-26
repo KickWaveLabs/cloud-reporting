@@ -60,6 +60,10 @@ Snapshots are not off-line: they sit in the production subscription next to the 
 
 ## Open for the backup decision tree (ADT)
 
+- The regulated scope follows what an application's database stores, not what the application processes: a
+  channel processes transactions, but their trace is in logs (log retention applies) and the result (balances,
+  movements) is stored by the system of record, usually Core or mainframe. Only that database needs the
+  regulated backup.
 - Which layer holds the source record of each regulated scope: UX/channel, BS, Core or mainframe. Only that
   layer needs the regulated backup; layers holding copies or caches follow the base rule or none.
 - Where each application's BIA criticality is recorded (business continuity team, to confirm).
