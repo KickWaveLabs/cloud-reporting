@@ -249,11 +249,12 @@ def slide_cost(deck, rows, source):
     aks = sum(row["aks_month_pen"] for row in moving)
     aca = sum(row["aca_month_pen"] for row in moving)
     saving = aks - aca
-    slide = d.base_slide(deck, f"Apagar {len(moving)} clusters ahorraría ~{pen(saving)} al mes ({pen(saving * 12)} al "
-                               "año)", source)
-    table = [["Con IGV", "AKS hoy / mes", "Container Apps / mes", "Ahorro / mes", "Ahorro / año"],
-             [f"{len(moving)} clusters que pasan", pen(aks), pen(aca), pen(saving), pen(saving * 12)]]
-    d.table(slide, Inches(0.6), Inches(1.4), Inches(12.1), table, [0.28, 0.18, 0.2, 0.17, 0.17], highlight_column=3,
+    share = d.percent(d.share_of(saving, aks))
+    slide = d.base_slide(deck, f"Pasar {len(moving)} clusters a Container Apps baja su costo {share}: "
+                               f"~{pen(saving)} al mes", source)
+    table = [["Con IGV", "AKS hoy / mes", "Container Apps / mes", "Ahorro / mes", "Baja", "Ahorro / año"],
+             [f"{len(moving)} clusters que pasan", pen(aks), pen(aca), pen(saving), share, pen(saving * 12)]]
+    d.table(slide, Inches(0.6), Inches(1.4), Inches(12.1), table, [0.25, 0.16, 0.18, 0.15, 0.1, 0.16], highlight_column=4,
             row_height=0.5, size=13)
     how = [["Cómo se paga", "AKS", "Container Apps"],
            ["Cobro", "Servidores completos (VM) las 24 horas", "vCPU-segundo y GB-segundo de las réplicas encendidas"],
