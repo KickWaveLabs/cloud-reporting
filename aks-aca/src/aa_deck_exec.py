@@ -7,7 +7,7 @@ each hour's traffic.
 
 Slides 1 and 2 are v1's (aa_deck_exec_v1.py). Then:
   3  hypothesis, with the real example costed by the v2 model
-  4  criteria per cluster: two conditions, the rules that keep a cluster on AKS, the checks and the saving margin
+  4  criteria per cluster: four conditions, the rules that keep a cluster on AKS, the saving margin, how it is costed
   5  how a cluster is sized: the example's traffic by hour (min / average / peak) and its replicas
   6  result per cluster (groups of the v2 workbook's Results sheet)
   7  saving: what moving the clusters of the ACA groups saves a month and a year
@@ -60,13 +60,17 @@ def sizing(where):
                "criteria": f"1 réplica por cada {per} TPS en el pico de cada hora (regla de escalado de Azure), mínimo "
                            f"1 por {MICRO_ONE}.",
                "traffic": f"Réplicas = 1 por cada {per} TPS del pico de la hora, mínimo 1.",
-               "cost": f"Según el tráfico de cada hora: 1 por cada {per} TPS, mínimo 1"},
+               "cost": f"Según el tráfico de cada hora: 1 por cada {per} TPS, mínimo 1",
+               "band": "Costo en Container Apps: las réplicas siguen al tráfico de cada hora, con al menos 1 "
+                       "siempre encendida."},
         "v3": {"example": f"cada 5 minutos con la capacidad por réplica medida hoy, mínimo 1 por {MICRO_ONE}.",
                "criteria": f"Cada 5 minutos de la hora más cargada del mes, con lo que hoy atiende una réplica en AKS "
                            f"(al menos {per} TPS, regla de escalado de Azure); mínimo 1 por {MICRO_ONE}.",
                "traffic": f"Réplicas cada 5 minutos de la hora más cargada del mes, con la capacidad medida hoy (al "
                           f"menos {per} TPS por réplica), mínimo 1.",
-               "cost": "Cada 5 min según el tráfico y la capacidad medida; mínimo 1"}}
+               "cost": "Cada 5 min según el tráfico y la capacidad medida; mínimo 1",
+               "band": "Costo en Container Apps: las réplicas siguen al tráfico cada 5 minutos, con al menos 1 "
+                       "siempre encendida."}}
     return texts[CRITERIA["name"]][where]
 
 
@@ -107,33 +111,31 @@ def slide_hypothesis(deck, estate, apps, scaling, results, example, source):
 
 
 def slide_criteria(deck, source):
-    slide = d.base_slide(deck, "Para pasar a Container Apps: dos condiciones por cluster", source)
-    width, height, gap = Inches(5.9), Inches(1.2), Inches(0.3)
-    for index, (title, meaning) in enumerate((("Hasta 100 TPS", "En su hora más cargada del día (promedio de la hora)."),
-                                              (f"Hasta 15 {MICRO}", "En el cluster."))):
-        v1.condition_card(slide, Inches(0.6) + index * (width + gap), Inches(1.3), width, height, str(index + 1), d.GREEN,
-                          title, meaning)
-    v1.condition_card(slide, Inches(0.6), Inches(2.7), Inches(12.1), Inches(1.2), "3", v1.YELLOW,
-                      "Réplicas según su tráfico, hora por hora",
-                      [sizing("criteria")], oval=False)
-    v1.box(slide, Inches(0.6), Inches(4.1), Inches(5.9), Inches(1.5), d.LIGHT)
-    d.text_box(slide, Inches(0.85), Inches(4.2), Inches(5.5), Inches(0.4), "Siempre se queda en AKS si:", size=15,
+    """Four numbered conditions, the rules that always keep a cluster on AKS, the saving margin, and at the bottom
+    (not a condition) how Container Apps is costed; the sizing figures go in the footnote."""
+    slide = d.base_slide(deck, "Para pasar a Container Apps: cuatro condiciones por cluster", source)
+    conditions = (
+        (f"Hasta {model.DEFAULTS['max_tps']} TPS", "En su hora más cargada del día."),
+        (f"Hasta {model.DEFAULTS['max_services']} {MICRO}", "En el cluster."),
+        ("No es compartida", "No es autenticación ni Core."),
+        ("Sin carga alta y constante", f"Usaría menos del {d.percent(model.DEFAULTS['max_replicas_vs_aks'])} de "
+                                       "las réplicas de hoy."))
+    width, height, gap = Inches(5.9), Inches(1.1), Inches(0.3)
+    for index, (title, meaning) in enumerate(conditions):
+        v1.condition_card(slide, Inches(0.6) + (index % 2) * (width + gap), Inches(1.25) + (index // 2) * Inches(1.25),
+                          width, height, str(index + 1), d.GREEN, title, meaning)
+    v1.box(slide, Inches(0.6), Inches(3.85), Inches(12.1), Inches(1.15), d.LIGHT)
+    d.text_box(slide, Inches(0.9), Inches(3.92), Inches(11.5), Inches(0.4), "Siempre se queda en AKS si:", size=15,
                bold=True, color=d.NAVY)
-    d.text_box(slide, Inches(0.85), Inches(4.6), Inches(5.5), Inches(0.9),
-               ["• Solo consume eventos (Event Hubs, Service Bus).", f"• Un {MICRO_ONE} pide más de 4 vCPU u 8 GB.",
-                "• Es compartida por varias aplicaciones: autenticación o Core.",
-                f"• Carga alta y constante: necesitaría {d.percent(model.DEFAULTS['max_replicas_vs_aks'])} o más "
-                "de las réplicas de hoy."],
-               size=12, color=d.GREY)
-    v1.box(slide, Inches(6.8), Inches(4.1), Inches(5.9), Inches(1.5), d.LIGHT)
-    d.text_box(slide, Inches(7.05), Inches(4.2), Inches(5.5), Inches(0.4), "Antes de mover, se valida:", size=15,
-               bold=True, color=d.ORANGE)
-    d.text_box(slide, Inches(7.05), Inches(4.6), Inches(5.5), Inches(0.9),
-               ["• Si es crítica (BIA alta o muy alta).", f"• Si crece con lo que está en desarrollo y pasaría de 15 "
-                                                          f"{MICRO}."], size=12, color=d.GREY)
-    d.text_box(slide, Inches(0.6), Inches(5.85), Inches(12.1), Inches(0.4),
-               f"Al final, un cluster pasa solo si ahorra al menos {d.percent(model.DEFAULTS['min_saving'])} de lo que "
-               "cuesta hoy en AKS.", size=14, bold=True, color=d.NAVY)
+    d.text_box(slide, Inches(0.9), Inches(4.3), Inches(11.5), Inches(0.6),
+               ["• Trabaja con eventos (event-driven).", f"• Un {MICRO_ONE} es muy grande (más de 4 vCPU u 8 GB)."],
+               size=13, color=d.GREY)
+    d.text_box(slide, Inches(0.6), Inches(5.2), Inches(12.1), Inches(0.4),
+               f"Solo se considera para migrar si ahorra al menos {d.percent(model.DEFAULTS['min_saving'])}.",
+               size=15, bold=True, color=d.NAVY)
+    v1.box(slide, Inches(0.6), Inches(5.8), Inches(12.1), Inches(0.75), d.LIGHT)
+    d.text_box(slide, Inches(0.9), Inches(5.8), Inches(11.5), Inches(0.75), sizing("band"), size=14, color=d.NAVY,
+               anchor=d.MSO_ANCHOR.MIDDLE)
 
 
 def slide_traffic(deck, example, profile, source):
@@ -267,7 +269,8 @@ def main():
     v1.slide_estate(deck, estate, apps, f"{measured} {v1.MONEY_NOTE}")
     slide_hypothesis(deck, estate, apps, scaling, args.results, example,
                      f"{measured} Mínimos: calculadora de precios de Azure (East US 2, precios de lista). {v1.MONEY_NOTE}")
-    slide_criteria(deck, f"Referencia: lineamiento ADT_019 del banco. {SIZING_SOURCES}")
+    slide_criteria(deck, f"Referencia: lineamiento ADT_019 del banco. Réplicas: {sizing('criteria')} "
+                         "Fuente: Microsoft Learn.")
     slide_traffic(deck, example, data["profile"], f"{traffic} {SIZING_SOURCES} {v1.MONEY_NOTE}")
     slide_distribution(deck, rows, estate["month"], f"{traffic} {v1.MONEY_NOTE}")
     slide_cost(deck, rows, f"{measured} Precios de lista: Azure Retail Prices API. {v1.MONEY_NOTE}")
