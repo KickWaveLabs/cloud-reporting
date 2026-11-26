@@ -482,14 +482,14 @@ def slide_layers(deck):
     action = {"left": True, "size": 8.5}
     no = {"left": True, "size": 8.5, "color": RUST}
     rows = [
-        ["Canal", "Homebanking, Banca Móvil, Yape", "Lo que su base guarde; la transacción deja traza en logs",
-         ("Sí, su base: lineamiento base. Ámbito regulado solo si su base guarda el registro", action)],
+        ["Canal e integración", "Homebanking, Banca Móvil, Yape; APIs, middleware", "Nada en reposo: orquestan",
+         ("No: se vuelven a desplegar. La traza de cada transacción va en logs", no)],
+        ["Servicios de negocio (BS)", "Microservicios con lógica de negocio", "Datos de negocio en su base",
+         ("Sí: lineamiento base + ámbito regulado si su base guarda el registro", action)],
         ["Core y mainframe", "Cuentas, operaciones, contabilidad", "El resultado: saldos y movimientos",
          ("Sí: lineamiento base + ámbito regulado (lámina 1)", action)],
         ["Backoffice", "Contratos, libros contables, pedidos", "Documentos y registros internos",
          ("Sí, su base de datos o archivos: lineamiento base + ámbito regulado", action)],
-        ["Plataformas de integración", "APIs, microservicios, middleware", "Nada en reposo",
-         ("No: se vuelven a desplegar desde el código y la imagen", no)],
         ["Infraestructura y software base", "Servidores, sistemas operativos, red", "Configuración y métricas",
          ("Solo si guarda datos propios; si no, se reconstruye desde su plantilla", action)],
         ["Plataformas de seguridad", "SIEM, EDR, DLP", "Eventos y auditoría",
@@ -500,9 +500,9 @@ def slide_layers(deck):
     grid.rows[0].height = Inches(0.36)
     note_box(slide, left, Inches(5.68), width, Inches(1.25), [
         [("Manda lo que guarda la base, no lo que la aplicación procesa. ", True, NAVY),
-         ("La transacción deja traza en logs (su retención es la de logs); el resultado queda en la base del "
-          "sistema de registro y ahí va el backup regulado. Dentro de la aplicación solo se respalda la capa de "
-          "datos; el cómputo se vuelve a desplegar.", False, GREY)]], size=9)
+         ("Logs y backup son cosas distintas: la traza de la transacción se rige por la retención de logs; el "
+          "resultado queda en la base de BS, Core o mainframe y ahí va el backup regulado. Dentro de la "
+          "aplicación solo se respalda la capa de datos.", False, GREY)]], size=9)
 
     divider(slide, Inches(7.25), Inches(1.08), Inches(5.85))
 
@@ -530,7 +530,7 @@ def slide_layers(deck):
     slide.notes_slide.notes_text_frame.text = (
         "Granularidad: el mismo criterio que el best practice de retención de logs, que fija la retención por tipo "
         "de aplicación (canal, backoffice, infraestructura y software base, plataformas de integración, plataformas de "
-        "seguridad). La decisión se toma por aplicación y todos sus recursos la heredan. El ámbito regulado lo define lo que guarda la base de datos, no lo que la aplicación procesa: un canal procesa transacciones pero su traza queda en los logs (retención de logs: hot 1 año, archive hasta 10) y el resultado (saldos, movimientos) queda en la base del sistema de registro, normalmente Core o mainframe; ahí va el backup regulado. Dentro de la aplicación se "
+        "seguridad). La decisión se toma por aplicación y todos sus recursos la heredan. El ámbito regulado lo define lo que guarda la base de datos, no lo que la aplicación procesa: el canal solo orquesta y no guarda datos: la traza de cada transacción queda en los logs (retención de logs: hot 1 año, archive hasta 10) y el resultado (saldos, movimientos) queda en la base de los servicios de negocio (BS), Core o mainframe; ahí va el backup regulado. Auditoría dentro de una base (tablas de auditoría de la aplicación): es dato de la base y viaja en su backup con la regla base; la conservación que exige el lineamiento de registros de auditoría se cumple enviándola al repositorio de logs, no alargando el backup. La auditoría propia del motor (por ejemplo, SQL Auditing hacia Storage o Log Analytics) es log, no backup. Dentro de la aplicación se "
         "respalda la capa que guarda el dato: las bases de datos de canales y backoffice, y los servidores o "
         "archivos que tengan datos propios. Las capas sin estado (contenedores, App Service, APIs, plataformas de "
         "integración, que no guardan datos en reposo) se recuperan desplegando de nuevo desde el código, la imagen y "

@@ -60,10 +60,16 @@ Snapshots are not off-line: they sit in the production subscription next to the 
 
 ## Open for the backup decision tree (ADT)
 
-- The regulated scope follows what an application's database stores, not what the application processes: a
-  channel processes transactions, but their trace is in logs (log retention applies) and the result (balances,
-  movements) is stored by the system of record, usually Core or mainframe. Only that database needs the
-  regulated backup.
+- The regulated scope follows what an application's database stores, not what the application processes.
+  Channels only orchestrate and hold no database (per the user): the trace of each transaction is in logs (log
+  retention applies) and the result (balances, movements) is stored by business services (BS), Core or
+  mainframe. Only those databases need the regulated backup. Logs and backups are separate.
+- Audit tables inside an application database are database data: they travel in its backup under the base rule.
+  The audit-record retention (central repository ≥ 1 year, archive ≥ 10 years, LSEG_038) is met by shipping them
+  to the log repository, not by keeping database backups longer. Engine auditing (for example SQL Auditing to
+  Storage or Log Analytics) is a log, not a backup.
+- To do: list which applications have databases and in which layer (BS, Core, mainframe) from the database
+  inventory and the subscription names.
 - Which layer holds the source record of each regulated scope: UX/channel, BS, Core or mainframe. Only that
   layer needs the regulated backup; layers holding copies or caches follow the base rule or none.
 - Where each application's BIA criticality is recorded (business continuity team, to confirm).
