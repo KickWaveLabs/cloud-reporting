@@ -122,7 +122,8 @@ def slide_criteria(deck, source):
     d.text_box(slide, Inches(0.85), Inches(4.6), Inches(5.5), Inches(0.9),
                ["• Solo consume eventos (Event Hubs, Service Bus).", f"• Un {MICRO_ONE} pide más de 4 vCPU u 8 GB.",
                 "• Es compartida por varias aplicaciones: autenticación o Core.",
-                f"• Corre hoy {model.DEFAULTS['max_replicas_today']} réplicas o más, constantes todo el día."],
+                f"• Carga alta y constante: necesitaría {d.percent(model.DEFAULTS['max_replicas_vs_aks'])} o más "
+                "de las réplicas de hoy."],
                size=12, color=d.GREY)
     v1.box(slide, Inches(6.8), Inches(4.1), Inches(5.9), Inches(1.5), d.LIGHT)
     d.text_box(slide, Inches(7.05), Inches(4.2), Inches(5.5), Inches(0.4), "Antes de mover, se valida:", size=15,

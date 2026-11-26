@@ -12,8 +12,8 @@ Decision of a cluster, in order (the first that applies):
   AKS               BIA at AKS_FROM_BIA or above (MUY ALTA > ALTA > MEDIA > BAJA; NONE by default: no cluster)
   AKS               shared: its traffic is on the Core layer, or its application is in SHARED_APPS (authentication
                     and identity, used by several applications)
-  AKS               many constant replicas today: at least MAX_REPLICAS_TODAY in all, its lowest hour at least
-                    MIN_REPLICAS_CONSTANCY of its highest
+  AKS               high, constant load: Container Apps would run, on average over the month, at least
+                    MAX_REPLICAS_VS_AKS of the replicas it runs today on AKS (aca_replicas / replicas_today_total)
   ACA_WITH_REVIEW   critical (BIA ALTA or MUY ALTA) or growing past MAX_SERVICES with DESA
   ACA               otherwise
 The saving margin is not a criterion: at the end, a cluster that meets the criteria moves to Container Apps only when
@@ -56,7 +56,7 @@ DEFAULTS = {
     "max_tps": 100, "max_services": 15, "min_saving": 0.10,
     "concurrent_requests": 10, "traffic_share": 1.0, "sizing_basis": "PEAK",
     "min_replicas_office": 1, "min_replicas_offhours": 1,
-    "aks_from_bia": "NONE", "max_replicas_today": 100, "min_replicas_constancy": 0.8,
+    "aks_from_bia": "NONE", "max_replicas_vs_aks": 0.8,
     "shared_apps": "AUTH,ASOB,B2CC,CB2C,CIAM,TOKE,TOTP,TPWL,TRSA,BIOM",
     "capacity_from_today": "NO", "capacity_safety": 0.7, "size_from_usage": "NO", "usage_headroom": 2.0,
     "environment_fee": "NO",
@@ -168,10 +168,9 @@ def decide(row, variables):
     shared = {code.strip().upper() for code in variables["shared_apps"].split(",") if code.strip()}
     if row["traffic_layer"] == "CORE" or row["cod_app"].upper() in shared:
         return "AKS", "Shared: authentication or core, used by several applications"
-    total, constancy = to_float(row.get("replicas_today_total")), to_float(row.get("replicas_today_constancy"))
-    if total is not None and total >= variables["max_replicas_today"] and \
-            (constancy or 0) >= variables["min_replicas_constancy"]:
-        return "AKS", f"{total:.0f} constant replicas today"
+    today, aca = to_float(row.get("replicas_today_total")), to_float(row.get("aca_replicas"))
+    if today and aca is not None and aca / today >= variables["max_replicas_vs_aks"]:
+        return "AKS", f"High, constant load: Container Apps needs {aca / today:.0%} of today's AKS replicas"
     reasons = []
     if row["bia"] in CRITICAL_BIA:
         reasons.append("Critical (BIA)")
@@ -191,13 +190,18 @@ def evaluate(data, variables=None):
                          to_float(row.get("ci_cpu_used_per_replica")), to_float(row.get("ci_mem_used_gib_per_replica")))
         unit[data["names"][row["cluster_id"]]] += size * (prices["price_vcpu"] + variables["gib_per_vcpu"] *
                                                           prices["price_gib"])
-    replica_seconds = defaultdict(float)
+    replica_seconds, seconds = defaultdict(float), defaultdict(float)
     for row in data["profile"]:
         if row["scope_type"] == "CLUSTER":
             replica_seconds[row["scope"]] += int(row["days"]) * 3600 * replicas(row, variables)
+            seconds[row["scope"]] += int(row["days"]) * 3600
     soles = (1 + variables["igv"]) * variables["exchange_rate"]
     out = []
     for row in data["clusters"]:
+        # replicas of all its "micro"-services on Container Apps, on average over the month
+        aca_replicas = replica_seconds[row["cluster"]] / seconds[row["cluster"]] * \
+            (to_float(row["microservices"]) or 0) if seconds[row["cluster"]] else None
+        row = dict(row, aca_replicas=aca_replicas)
         decision, reason = decide(row, variables)
         requests = 0 if row["event_driven"] == "YES" else (to_float(row["requests_month"]) or 0)
         compute = replica_seconds[row["cluster"]] * unit[row["cluster"]]

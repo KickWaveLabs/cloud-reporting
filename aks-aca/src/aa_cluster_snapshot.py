@@ -42,7 +42,7 @@ Outputs (in --output-dir, results/aa-cluster-snapshot by default):
                                replaying every 5-minute bucket of the month with the model's default variables (a
                                reference for how conservative each sizing is; it does not follow the workbook);
                                replicas_today_total (replicas of all its "micro"-services today on AKS, average over
-                               the hours) and replicas_today_constancy (its lowest hour over its highest, 1 = constant)
+                               the hours), compared with the Container Apps replicas by the criteria
   traffic_hourly_profile.csv   scope x day type x hour, as above
   api_cluster_map.csv          PROD AKS API -> cluster and how it was attributed
   cluster_snapshot_summary.json
@@ -121,13 +121,11 @@ BUSIEST_COLUMNS = [f"busiest_hour_5min_{minute:02d}" for minute in range(0, 60, 
 
 
 def replica_figures(slots, microservices):
-    """Total replicas today (average per "micro"-service x "micro"-services, averaged over the hours) and how
-    constant they are (lowest hour / highest hour)."""
+    """Total replicas today: average per "micro"-service x "micro"-services, averaged over the hours."""
     values = [average for average, _ in slots.values()]
     if not values or not max(values):
-        return {"replicas_today_total": "", "replicas_today_constancy": ""}
-    return {"replicas_today_total": round(sum(values) / len(values) * microservices, 1),
-            "replicas_today_constancy": round(min(values) / max(values), 3)}
+        return {"replicas_today_total": ""}
+    return {"replicas_today_total": round(sum(values) / len(values) * microservices, 1)}
 
 
 def exact_replica_seconds(month, series, variables):
