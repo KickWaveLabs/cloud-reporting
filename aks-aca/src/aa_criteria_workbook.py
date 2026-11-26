@@ -493,7 +493,9 @@ def service_cost(match):
 def criteria_formulas():
     c = lambda column: r("Criteria", column)
     return [
-        ("has_traffic", f'IF(AND({c("traffic_status")}="MEASURED",ISNUMBER({c("busiest_hour_tps")})),"YES","NO")'),
+        # event-driven: its load is messages, not measured yet, so it counts as in use without measured traffic
+        ("has_traffic", f'IF(AND({c("event_driven")}<>"YES",{c("traffic_status")}="MEASURED",'
+                        f'ISNUMBER({c("busiest_hour_tps")})),"YES","NO")'),
         ("size_ok", f'IF(N({c("microservices_over_aca_size")})=0,"YES","NO")'),
         ("tps_ok", f'IF({c("has_traffic")}="NO","-",IF({c("busiest_hour_tps")}<=max_tps,"YES","NO"))'),
         ("services_ok", f'IF(N({c("microservices")})<=max_services,"YES","NO")'),
@@ -511,7 +513,7 @@ def criteria_formulas():
                         '"NO","YES")'),
         ("shared_ok", f'IF(OR({c("traffic_layer")}="CORE",ISNUMBER(SEARCH(","&{c("cod_app")}&",",","&'
                       'SUBSTITUTE(shared_apps," ","")&","))),"NO","YES")'),
-        ("decision", f'IF({c("has_traffic")}="NO","NO_TRAFFIC",IF(OR({c("event_driven")}="YES",{c("size_ok")}="NO",'
+        ("decision", f'IF({c("has_traffic")}="NO","NO_TRAFFIC",IF(OR({c("size_ok")}="NO",'
                      f'{c("tps_ok")}="NO",{c("services_ok")}="NO",{c("bia_ok")}="NO",{c("replicas_ok")}="NO",'
                      f'{c("shared_ok")}="NO"),"AKS",IF(OR({c("critical")}="YES",'
                      f'{c("growing")}="YES"),"ACA_WITH_REVIEW","ACA")))'),
@@ -526,8 +528,9 @@ def criteria_formulas():
         ("aks_month_pen", f'N({c("cost_month_usd")})*(1+igv)*exchange_rate'),
         ("saving_month_pen", f'{c("aks_month_pen")}-{c("aca_month_pen")}'),
         ("saving_share", f'IF({c("aks_month_pen")}>0,{c("saving_month_pen")}/{c("aks_month_pen")},0)'),
-        ("group", f'IF({c("decision")}="NO_TRAFFIC",IF({c("no_traffic_reason")}="IN_DEVELOPMENT","IN_DEVELOPMENT",'
-                  f'IF({c("no_traffic_reason")}="IN_USE_NOT_MEASURED","IN_USE","NOT_IN_USE")),IF(AND(OR('
+        ("group", f'IF({c("decision")}="NO_TRAFFIC",IF({c("event_driven")}="YES","IN_USE",'
+                  f'IF({c("no_traffic_reason")}="IN_DEVELOPMENT","IN_DEVELOPMENT",'
+                  f'IF({c("no_traffic_reason")}="IN_USE_NOT_MEASURED","IN_USE","NOT_IN_USE"))),IF(AND(OR('
                   f'{c("decision")}="ACA",{c("decision")}="ACA_WITH_REVIEW"),{c("saving_share")}<min_saving),'
                   f'"BELOW_MARGIN",{c("decision")}))'),
         ("goes_to_aca", f'IF(OR({c("group")}="ACA",{c("group")}="ACA_WITH_REVIEW"),"YES","NO")'),
@@ -653,8 +656,8 @@ def write_top_costs(book, sheet, applications, everything):
     flag = lambda column, value: f'{get(column)}="{value}"'
     # The saving share shows only for clusters that meet the criteria; the rest show "-" and why they stay.
     meets = f'OR({flag("group", "ACA")},{flag("group", "ACA_WITH_REVIEW")},{flag("group", "BELOW_MARGIN")})'
-    why = (f'IF({flag("decision", "NO_TRAFFIC")},"No traffic of its own",IF({flag("event_driven", "YES")},'
-           f'"Event-driven",IF({flag("size_ok", "NO")},"A ""micro""-service over 4 vCPU / 8 GiB",'
+    why = (f'IF({flag("event_driven", "YES")},"Event-driven: messages, not measured yet",'
+           f'IF({flag("decision", "NO_TRAFFIC")},"No traffic of its own",IF({flag("size_ok", "NO")},"A ""micro""-service over 4 vCPU / 8 GiB",'
            f'IF({flag("tps_ok", "NO")},"Busiest hour over max_tps",IF({flag("services_ok", "NO")},'
            f'"Over max_services ""micro""-services",IF({flag("bia_ok", "NO")},"BIA "&aks_from_bia&" or above",'
            f'IF({flag("shared_ok", "NO")},"Shared: authentication or core",IF({flag("replicas_ok", "NO")},'

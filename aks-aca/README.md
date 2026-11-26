@@ -237,9 +237,11 @@ Container Insights; one stopped PROD cluster without metrics.
   - Replicas per hour = max(minimum, ceiling(TPS x traffic_share / concurrent_requests)): Container Apps adds a
     replica every `concurrent_requests` requests per second (HTTP scale rule, Azure default 10). The peak of an
     hour is its busiest 5 minutes; only minimum, average and peak are shown, never percentiles.
-    The figure presented is by peak (conservative). `sizing_basis` also takes BUSIEST_HOUR: each hour of the day at
-    its busiest occurrence in the month, replayed 5 minutes at a time (a bucket keeps the replicas of the one
-    before, as Container Apps waits 5 minutes to scale in), and AVERAGE. The Calculator shows the three side by
+    The figure presented is by BUSIEST_HOUR (`sizing_basis`): each hour of the day at its busiest occurrence in
+    the month, replayed 5 minutes at a time (a bucket keeps the replicas of the one before, as Container Apps
+    waits 5 minutes to scale in); minimum 1 per "micro"-service in office hours and 0 outside them
+    (`min_replicas_offhours`: it scales to zero when there is no traffic). PEAK (each hour at its busiest 5
+    minutes, the most conservative) and AVERAGE are the other options. The Calculator shows the three side by
     side and charts every 5 minutes of the busiest hour against the hour's peak and average.
   - `exact_replica_seconds` (cluster_criteria_input.csv) replays every 5-minute bucket of the month with the
     model's default variables: what Container Apps would bill, a reference for how conservative each sizing is.
@@ -249,7 +251,9 @@ Container Insights; one stopped PROD cluster without metrics.
     in the one before, the 5-minute wait before it scales in). It needs `active_5min` in the metrics' hourly
     files, so rerun `aa_metrics.py` and `aa_cluster_snapshot.py` after updating.
   - The saving margin (`min_saving`, 10% by default) is applied at the end, not as a criterion.
-  - Besides event-driven, size, TPS and "micro"-services, a cluster stays on AKS when its load is high and
+  - An event-driven cluster (Event Hubs / Service Bus) is counted as in use without measured traffic (group
+    IN_USE): its load is messages, and how many one replica handles is not measured yet, so it is not costed.
+  - Besides size, TPS and "micro"-services, a cluster stays on AKS when its load is high and
     constant: Container Apps would run, on average over the month, at least `max_replicas_vs_aks` (80%) of the
     replicas it runs today (`aca_replicas` / `replicas_today_total` from cluster_criteria_input.csv), so it would
     not scale down; or when it is shared: its

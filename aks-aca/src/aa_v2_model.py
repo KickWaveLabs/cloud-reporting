@@ -4,8 +4,8 @@ One source for the v2 and v3 deck (aa_deck_exec.py); the workbook (aa_criteria_w
 as Excel formulas over the same inputs, so both give the same figures with the default variables.
 
 Decision of a cluster, in order (the first that applies):
-  NO_TRAFFIC        no traffic measured in the month on its own layer (grouped by no_traffic_reason)
-  AKS               event-driven (Event Hubs / Service Bus messages, not TPS)
+  NO_TRAFFIC        no traffic measured in the month on its own layer (grouped by no_traffic_reason), or
+                    event-driven: its load is Event Hubs / Service Bus messages, not measured yet (group IN_USE)
   AKS               a "micro"-service requests more than a Container Apps replica allows (4 vCPU / 8 GiB): implicit
   AKS               busiest hour above MAX_TPS (average TPS of the busiest hour of the day, as v1)
   AKS               more than MAX_SERVICES "micro"-services in the cluster
@@ -54,8 +54,8 @@ import aa_deck_exec_v1 as v1
 
 DEFAULTS = {
     "max_tps": 100, "max_services": 15, "min_saving": 0.10,
-    "concurrent_requests": 10, "traffic_share": 1.0, "sizing_basis": "PEAK",
-    "min_replicas_office": 1, "min_replicas_offhours": 1,
+    "concurrent_requests": 10, "traffic_share": 1.0, "sizing_basis": "BUSIEST_HOUR",
+    "min_replicas_office": 1, "min_replicas_offhours": 0,
     "aks_from_bia": "NONE", "max_replicas_vs_aks": 0.8,
     "shared_apps": "AUTH,ASOB,B2CC,CB2C,CIAM,TOKE,TOTP,TPWL,TRSA,BIOM",
     "capacity_from_today": "NO", "capacity_safety": 0.7, "size_from_usage": "NO", "usage_headroom": 2.0,
@@ -150,10 +150,10 @@ def replicas(row, variables):
 
 def decide(row, variables):
     """(decision, reason) of one cluster row of cluster_criteria_input.csv."""
+    if row["event_driven"] == "YES":
+        return "NO_TRAFFIC", "Event-driven: its load is messages, not measured yet"
     if row["traffic_status"] != "MEASURED" or row["busiest_hour_tps"] == "":
         return "NO_TRAFFIC", f"No traffic of its own in the month ({row['traffic_status']})"
-    if row["event_driven"] == "YES":
-        return "AKS", "Event-driven: messages, not TPS"
     if int(to_float(row["microservices_over_aca_size"]) or 0):
         return "AKS", "A \"micro\"-service requests more than 4 vCPU / 8 GiB"
     if (to_float(row["busiest_hour_tps"]) or 0) > variables["max_tps"]:
@@ -218,7 +218,8 @@ def evaluate(data, variables=None):
         share = saving / aks if aks else 0
         movable = decision in ("ACA", "ACA_WITH_REVIEW")
         if decision == "NO_TRAFFIC":
-            group = GROUP_OF_REASON.get(row["no_traffic_reason"], "NOT_IN_USE")
+            group = "IN_USE" if row["event_driven"] == "YES" else \
+                GROUP_OF_REASON.get(row["no_traffic_reason"], "NOT_IN_USE")
         elif movable and share < variables["min_saving"]:
             group = "BELOW_MARGIN"
         else:

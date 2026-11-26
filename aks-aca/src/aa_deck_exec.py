@@ -45,7 +45,7 @@ GROUPS = {
 MOVABLE = ("ACA", "ACA_WITH_REVIEW")
 # Sources of the sizing rule, named on the slides that use it; the links are in the v2 workbook (Variables), since
 # the corporate deck carries no URLs.
-SIZING_SOURCES = ("Escalado de Container Apps (1 réplica más por cada 10 solicitudes por segundo) y mínimo de 1 réplica "
+SIZING_SOURCES = ("Escalado de Container Apps (1 réplica más por cada 10 solicitudes por segundo) y mínimo de 1 réplica en horario de oficina "
                   "para evitar el arranque en frío: Microsoft Learn.")
 
 
@@ -55,22 +55,24 @@ CRITERIA = {"name": "v2"}  # set by main (--criteria)
 def sizing(where):
     """How replicas are sized, in the slides' words: v2's sentences as presented, v3's for its sizing."""
     per = model.DEFAULTS["concurrent_requests"]
+    office = f"mínimo 1 por {MICRO_ONE} en horario de oficina y 0 fuera de él"
+    band = ("Costo en Container Apps: las réplicas suben y bajan con el tráfico, y se apagan fuera del horario de "
+            "oficina cuando no hay uso.")
     texts = {
-        "v2": {"example": f"1 por cada {per} TPS de cada hora, mínimo 1 por {MICRO_ONE}.",
-               "criteria": f"1 réplica por cada {per} TPS en el pico de cada hora (regla de escalado de Azure), mínimo "
-                           f"1 por {MICRO_ONE}.",
-               "traffic": f"Réplicas = 1 por cada {per} TPS del pico de la hora, mínimo 1.",
-               "cost": f"Según el tráfico de cada hora: 1 por cada {per} TPS, mínimo 1",
-               "band": "Costo en Container Apps: las réplicas siguen al tráfico de cada hora, con al menos 1 "
-                       "siempre encendida."},
-        "v3": {"example": f"cada 5 minutos con la capacidad por réplica medida hoy, mínimo 1 por {MICRO_ONE}.",
+        "v2": {"example": f"cada 5 minutos según el tráfico, 1 por cada {per} TPS; {office}.",
+               "criteria": f"1 por cada {per} TPS, cada 5 minutos de la hora más cargada del mes (regla de escalado de "
+                           f"Azure); {office}.",
+               "traffic": f"Réplicas = 1 por cada {per} TPS, cada 5 minutos de la hora más cargada del mes; mínimo 1 en "
+                          "horario de oficina, 0 fuera.",
+               "cost": f"Según el tráfico cada 5 minutos: 1 por cada {per} TPS; se apagan fuera de horario sin uso",
+               "band": band},
+        "v3": {"example": f"cada 5 minutos con la capacidad por réplica medida hoy; {office}.",
                "criteria": f"Cada 5 minutos de la hora más cargada del mes, con lo que hoy atiende una réplica en AKS "
-                           f"(al menos {per} TPS, regla de escalado de Azure); mínimo 1 por {MICRO_ONE}.",
+                           f"(al menos {per} TPS, regla de escalado de Azure); {office}.",
                "traffic": f"Réplicas cada 5 minutos de la hora más cargada del mes, con la capacidad medida hoy (al "
-                          f"menos {per} TPS por réplica), mínimo 1.",
-               "cost": "Cada 5 min según el tráfico y la capacidad medida; mínimo 1",
-               "band": "Costo en Container Apps: las réplicas siguen al tráfico cada 5 minutos, con al menos 1 "
-                       "siempre encendida."}}
+                          f"menos {per} TPS por réplica); mínimo 1 en horario de oficina, 0 fuera.",
+               "cost": "Cada 5 min según el tráfico y la capacidad medida; se apagan fuera de horario sin uso",
+               "band": band}}
     return texts[CRITERIA["name"]][where]
 
 
@@ -124,17 +126,15 @@ def slide_criteria(deck, source):
     for index, (title, meaning) in enumerate(conditions):
         v1.condition_card(slide, Inches(0.6) + (index % 2) * (width + gap), Inches(1.25) + (index // 2) * Inches(1.25),
                           width, height, str(index + 1), d.GREEN, title, meaning)
-    v1.box(slide, Inches(0.6), Inches(3.85), Inches(12.1), Inches(1.15), d.LIGHT)
-    d.text_box(slide, Inches(0.9), Inches(3.92), Inches(11.5), Inches(0.4), "Siempre se queda en AKS si:", size=15,
-               bold=True, color=d.NAVY)
-    d.text_box(slide, Inches(0.9), Inches(4.3), Inches(11.5), Inches(0.6),
-               ["• Trabaja con eventos (event-driven).", f"• Un {MICRO_ONE} es muy grande (más de 4 vCPU u 8 GB)."],
-               size=13, color=d.GREY)
-    d.text_box(slide, Inches(0.6), Inches(5.2), Inches(12.1), Inches(0.4),
+    v1.box(slide, Inches(0.6), Inches(3.85), Inches(12.1), Inches(0.75), d.LIGHT)
+    d.text_box(slide, Inches(0.9), Inches(3.85), Inches(11.5), Inches(0.75),
+               f"Siempre se queda en AKS si un {MICRO_ONE} demanda más CPU o memoria de la que soporta Container Apps.",
+               size=14, bold=True, color=d.NAVY, anchor=d.MSO_ANCHOR.MIDDLE)
+    d.text_box(slide, Inches(0.6), Inches(4.85), Inches(12.1), Inches(0.4),
                f"Solo se considera para migrar si ahorra al menos {d.percent(model.DEFAULTS['min_saving'])}.",
                size=15, bold=True, color=d.NAVY)
-    v1.box(slide, Inches(0.6), Inches(5.8), Inches(12.1), Inches(0.75), d.LIGHT)
-    d.text_box(slide, Inches(0.9), Inches(5.8), Inches(11.5), Inches(0.75), sizing("band"), size=14, color=d.NAVY,
+    v1.box(slide, Inches(0.6), Inches(5.45), Inches(12.1), Inches(0.75), d.LIGHT)
+    d.text_box(slide, Inches(0.9), Inches(5.45), Inches(11.5), Inches(0.75), sizing("band"), size=14, color=d.NAVY,
                anchor=d.MSO_ANCHOR.MIDDLE)
 
 
@@ -151,11 +151,14 @@ def slide_traffic(deck, example, profile, source):
     d.heading(slide, Inches(0.6), Inches(1.25), Inches(8.0), "Transacciones por segundo (TPS) por hora", size=14)
     d.line_chart(slide, Inches(0.5), Inches(1.6), Inches(8.2), Inches(4.4), hours, series, number_format="0.0")
     d.heading(slide, Inches(9.0), Inches(1.25), Inches(3.8), "Réplicas por " + MICRO_ONE, size=14)
-    d.kpi(slide, Inches(9.0), Inches(1.65), Inches(3.8), Inches(1.25), str(max(replicas) if replicas else 1),
+    count = lambda value: f"{value:.1f}".rstrip("0").rstrip(".")  # an hour's average of 5-minute replicas
+    d.kpi(slide, Inches(9.0), Inches(1.65), Inches(3.8), Inches(1.25), count(max(replicas) if replicas else 1),
           f"en su hora más cargada ({hours[busiest] if hours else '-'}:00, pico "
           f"{float(rows[busiest]['tps_peak']) if rows else 0:.1f} TPS)", value_color=d.RUST, value_size=28)
-    d.kpi(slide, Inches(9.0), Inches(3.05), Inches(3.8), Inches(1.25), str(min(replicas) if replicas else 1),
-          "el resto del día (mínimo)", value_color=d.GREEN, value_size=28)
+    low = min(replicas) if replicas else 1
+    d.kpi(slide, Inches(9.0), Inches(3.05), Inches(3.8), Inches(1.25), count(low),
+          "fuera de horario, sin uso: apagado" if low == 0 else "el resto del día (mínimo)", value_color=d.GREEN,
+          value_size=28)
     d.kpi(slide, Inches(9.0), Inches(4.45), Inches(3.8), Inches(1.25), pen(example["aca_month_pen"]),
           f"al mes en Container Apps ({int(example['microservices'])} {MICRO}); hoy {pen(example['aks_month_pen'])}",
           value_color=d.GREEN, value_size=24)
