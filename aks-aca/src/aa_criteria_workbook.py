@@ -81,7 +81,7 @@ SCALE_TO_ZERO_NOTE = [
     "So an hour with traffic only part of the time is billed only for its 5-minute buckets with traffic or right "
     "after it. By peak takes that hour's day with the fewest buckets off; by average, the average day; by busiest "
     "hour, its own buckets. With a minimum of 1 the hour is billed whole."]
-HIDDEN_SHEETS = ["Traffic", "Data", "TrafficData", "LatencyData", "LatencyLayers", "AllClusters", "Lists"]
+HIDDEN_SHEETS = ["Latency", "Traffic", "Data", "TrafficData", "LatencyData", "LatencyLayers", "AllClusters", "Lists"]
 TOP = 20  # rows of each Top costs table
 GREEN, AMBER = PatternFill("solid", fgColor="C6EFCE"), PatternFill("solid", fgColor="FFEB9C")
 BLOCK = 8  # Calculator: columns per day type (TPS min, average, peak, today, by peak, by busiest hour, by average,
