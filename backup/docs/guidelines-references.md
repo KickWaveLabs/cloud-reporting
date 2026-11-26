@@ -1,10 +1,10 @@
 # Backup guidelines: sources behind every figure
 
 Personal reference for the guidelines deck (`src/bu_guidelines_deck.py`). The deck shows only the
-regulation (slide 5). Use this file when someone asks where a limit, an RTO or a price comes from. All
+regulation (slide 6). Use this file when someone asks where a limit, an RTO or a price comes from. All
 links are public and were checked in November 2026.
 
-## Regulation (also on slide 5)
+## Regulation (also on slide 6)
 
 | Norm | What the deck uses | Link |
 |---|---|---|
@@ -16,11 +16,19 @@ links are public and were checked in November 2026.
 Local copies of the official texts, downloaded on 2026-11-16, are in [regulation/](regulation/):
 [Ley 26702](regulation/ley-26702-art-183.pdf) (cover and art. 183 only; the full SPIJ PDF is 59 MB),
 [Res. SBS 2660-2015](regulation/res-sbs-2660-2015.pdf), [Res. SBS 504-2021](regulation/res-sbs-504-2021.pdf)
-and [Circular BCRP 0011-2026](regulation/circular-bcrp-0011-2026.pdf). The examples on slide 5 come from
+and [Circular BCRP 0011-2026](regulation/circular-bcrp-0011-2026.pdf). The examples on slide 6 come from
 these texts: art. 183 gives none; SBS 2660-2015 art. 49.1 to 49.3 (operations and thresholds), 55 and 58;
 SBS 504-2021 art. 12.3 f) and h); BCRP Anexo V sec. VI and the definitions in art. 2.
 
-## Service limits (slide 2)
+## Granularity and snapshots (slide 2)
+
+| Figure | Source |
+|---|---|
+| Layers of the application stack (canal, backoffice, infra SW base, integration platforms without data at rest, security); logs follow their own hot/archive retention | Bank's Confluence page "Best-practices para la gestión de tiempos de retención de logs" (2024, internal) |
+| VM Instant Restore snapshots: Standard 1–5 days (default 2), Enhanced 1–30 days (default 7); Enhanced first snapshot is a full copy, then incremental; cost grows with daily churn (2%–7%) | <https://learn.microsoft.com/en-us/azure/backup/backup-instant-restore-capability> |
+| Incremental disk snapshots hold only the changes since the previous one and are billed by used size | <https://learn.microsoft.com/en-us/azure/virtual-machines/disks-incremental-snapshots> |
+
+## Service limits (slide 3)
 
 | Figure | Source |
 |---|---|
@@ -35,7 +43,7 @@ SBS 504-2021 art. 12.3 f) and h); BCRP Anexo V sec. VI and the definitions in ar
 | Cosmos DB: continuous 7, 30 or 35 days; 7 days free; changes backed up within 100 s | <https://learn.microsoft.com/en-us/azure/cosmos-db/continuous-backup-restore-introduction> |
 | Cosmos DB: LTR in a Backup vault up to 10 years, billed from July 1, 2026 | <https://learn.microsoft.com/en-us/azure/backup/backup-azure-cosmos-db-overview> |
 
-## RTO and RPO (slides 2 and 4)
+## RTO and RPO (slides 3 and 5)
 
 | Figure on the slide | Official figure | Source |
 |---|---|---|
@@ -48,7 +56,7 @@ SBS 504-2021 art. 12.3 f) and h); BCRP Anexo V sec. VI and the definitions in ar
 | Archive: rehydrate up to 15 h | Standard priority "might take up to 15 hours"; High under 1 hour for objects under 10 GB | <https://learn.microsoft.com/en-us/azure/storage/blobs/archive-rehydrate-overview> |
 | Vendors: ~2.3 h per TB at 1 Gbps | Calculation, not a vendor figure: 1,024 GB x 8 bits / 1 Gbps = 8,192 s. The bank's real link speed changes it | — |
 
-## Backup redundancy names (slides 2 and 4)
+## Backup redundancy names (slides 3 and 5)
 
 The deck shows LRS and ZRS only, the options the bank uses; replication and geo-redundant backup are out of
 its scope (review feedback, 2026-11-16). Keep in mind that LRS and ZRS backups do not survive the loss of a
@@ -63,7 +71,7 @@ for `bu_guidelines_cost.py`.
 | Cosmos DB | Continuous: the region's redundancy, not selectable. Periodic extra copies: LRS, ZRS or RA-GRS | Retail Prices API meters `Periodic Backup - LRS/ZRS/RA-GRS Data Stored`; continuous backup page above |
 | Archive (Azure Backup) | LRS and GRS; not supported on ZRS vaults | Archive tier page above |
 
-## Worked example (slide 3)
+## Worked example (slide 4)
 
 One real production database, picked by its application description: TTIB, Transferencias Interbancarias
 (Azure SQL Database Hyperscale, East US 2). SBS 2660-2015 art. 49 names transfers as an example of the
@@ -80,12 +88,12 @@ Copies are simulated week by week: the monthly copy is the month's first weekly 
 year's first, and a backup that meets two rules is kept once. The database starts with the copies the base
 rule already keeps. Change `EXAMPLE` and `EXAMPLE_SCENARIOS` in the script to use another database.
 
-## Prices (slide 4)
+## Prices (slide 5)
 
-Every price comes from the Azure Retail Prices API; slide 4 shows Central US only, LRS and ZRS, less
+Every price comes from the Azure Retail Prices API; slide 5 shows Central US only, LRS and ZRS, less
 the bank's 30% discount (`DISCOUNT` in the script, `--discount` to change it). On the October 2026 bill, SQL
 LTR came out about 38% below list, so 30% is on the conservative side. The exact meter names are in the
-speaker notes of slide 4.
+speaker notes of slide 5.
 
 | Page | Link |
 |---|---|

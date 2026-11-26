@@ -4,18 +4,20 @@
 Slides:
   1. Guidelines, platform-neutral (cloud or on-premise, any database engine, servers and file shares): the base
      short- and long-term rule, and where it changes by the data a system holds
-  2. How the rule applies in Azure: PITR and LTR in plain words, the rule per Azure service and the Azure setup
+  2. What gets a backup, by layer of the application stack (as in the bank's log retention best practice), and
+     how snapshots are kept: short-lived, with an expiry, never as long-term retention
+  3. How the rule applies in Azure: PITR and LTR in plain words, the rule per Azure service and the Azure setup
      for each regulated scope
-  3. Worked example: what one regulated production database would pay for backup under the base rule and under
+  4. Worked example: what one regulated production database would pay for backup under the base rule and under
      each regulated scope, per month and cumulative over 1, 5 and 10 years
-  4. Price per TB-month in Central US for LRS and ZRS backups, net of the bank's discount, against the vendors
-  5. References: the regulation behind slide 1, the examples each norm gives and the minimum time it asks to
+  5. Price per TB-month in Central US for LRS and ZRS backups, net of the bank's discount, against the vendors
+  6. References: the regulation behind slide 1, the examples each norm gives and the minimum time it asks to
      keep the data
      (Microsoft and pricing sources are in docs/)
 
 Prices come from the public Azure Retail Prices API (no sign-in, no subscription data). Retention limits and
 regulatory articles are fixed in this file, checked against the official texts in November 2026. The regulation
-is listed on slide 5; every Microsoft and pricing source is in docs/guidelines-references.md. Vendor tariffs are
+is listed on slide 6; every Microsoft and pricing source is in docs/guidelines-references.md. Vendor tariffs are
 the ones quoted in the backup guidelines review (unit to be confirmed).
 
 Usage:
@@ -47,7 +49,7 @@ GB_PER_TB = 1024
 
 # Vendor tariffs in US$ per TB-month, as quoted. The unit (protected or stored TB) is still to be confirmed.
 VENDORS = [("D3", 56.01, 7.92), ("Opción 1", 49.90, 12.84)]
-# The bank's discount on Azure list prices, applied to every Azure price on slides 3 and 4 (vendors quote net prices).
+# The bank's discount on Azure list prices, applied to every Azure price on slides 4 and 5 (vendors quote net prices).
 DISCOUNT = 0.30
 
 # (key, serviceName, productName, meterName) of every meter the deck prices. The deck shows LRS and ZRS only;
@@ -99,7 +101,7 @@ METERS = [
 # Protected instance fees are charged per block of source data (Azure Backup pricing page).
 INSTANCE_BLOCK_GB = {"vm_instance": 500, "pg_instance": 250, "cosmos_instance": 500}
 
-# Worked example on slide 3: one real production database that holds regulated data. Picked by its application
+# Worked example on slide 4: one real production database that holds regulated data. Picked by its application
 # description (interbank transfers are an example the SBS 2660-2015 art. 49 gives for the operations register).
 # Used size: Azure Monitor metric "storage", 2026-11-15. Billable PITR: the database's "Backup - RA-GRS Data Stored"
 # GB-month on the October 2026 bill (the volume does not depend on the redundancy). On that bill each LTR copy weighs
@@ -411,7 +413,7 @@ def slide_guidelines(deck):
           "que se detectan tarde.", False, GREY)],
         [("", False, GREY)],
         [("Aplica igual en nube y on-premise. ", True, NAVY),
-         ("La lámina 2 muestra cómo se configura en Azure.", False, GREY)]], size=9.5)
+         ("La lámina 3 muestra cómo se configura en Azure.", False, GREY)]], size=9.5)
 
     divider(slide, Inches(5.3), Inches(1.08), Inches(5.85))
 
@@ -461,7 +463,82 @@ def slide_guidelines(deck):
         "5 años: 20 copias) y la Circular BCRP 0011-2026 Anexo V sección VI (conservar los respaldos 10 años). "
         "Cumplimiento debe confirmar con qué frecuencia se guardan los respaldos de 10 años del LBTR (la circular no "
         "la fija) y qué aplicaciones guardan el registro de operaciones y el LBTR. "
-        "Ninguna norma fija un plazo para el corto plazo; 7 días aplica a todo.")
+        "Ninguna norma fija un plazo para el corto plazo; 7 días aplica a todo. "
+        "El LSEG_008 (Lineamiento de Respaldo y Retención de Información) no fija plazos de retención; este "
+        "lineamiento los fija.")
+
+
+def slide_layers(deck):
+    """Which layer of the application stack gets a backup, and how snapshots are kept. Platform-neutral, like
+    slide 1; the layers follow the bank's log retention best practice (Confluence, 2024)."""
+    slide = base_slide(deck, "Qué se respalda y cómo se usan los snapshots",
+                       "Fuente: Best-practices para la gestión de tiempos de retención de logs (2024); Microsoft "
+                       "Learn: Instant Restore y snapshots incrementales (revisado nov-2026).")
+
+    # Left: the decision is taken per application, by its type (the same types as the log best practice), and
+    # inside the application only the layer that holds data gets a backup.
+    left, width = Inches(0.35), Inches(6.7)
+    section_bar(slide, left, Inches(1.08), width, "Granularidad: se decide por aplicación, según su tipo", NAVY)
+    action = {"left": True, "size": 8.5}
+    no = {"left": True, "size": 8.5, "color": RUST}
+    rows = [
+        ["Canal", "Homebanking, Banca Móvil, Yape", "Transacciones del cliente",
+         ("Sí, su base de datos: lineamiento base + ámbito regulado (lámina 1)", action)],
+        ["Backoffice", "Contratos, libros contables, pedidos", "Documentos y registros internos",
+         ("Sí, su base de datos o archivos: lineamiento base + ámbito regulado", action)],
+        ["Plataformas de integración", "APIs, microservicios, middleware", "Nada en reposo",
+         ("No: se vuelven a desplegar desde el código y la imagen", no)],
+        ["Infraestructura y software base", "Servidores, sistemas operativos, red", "Configuración y métricas",
+         ("Solo si guarda datos propios; si no, se reconstruye desde su plantilla", action)],
+        ["Plataformas de seguridad", "SIEM, EDR, DLP", "Eventos y auditoría",
+         ("No es backup: lo rige la retención de logs", no)],
+    ]
+    grid = table(slide, left, Inches(1.55), width, ["Tipo de aplicación", "Ejemplos", "Qué guarda", "¿Backup?"],
+                 rows, [0.22, 0.25, 0.19, 0.34], row_height=0.74, size=9)
+    grid.rows[0].height = Inches(0.4)
+    note_box(slide, left, Inches(5.75), width, Inches(1.18), [
+        [("Dentro de la aplicación, solo la capa de datos. ", True, NAVY),
+         ("Se respaldan la base de datos y los archivos; la capa de cómputo (contenedores, App Service, servidores "
+          "sin datos) se vuelve a desplegar. Todos los recursos de la aplicación heredan su regla.", False, GREY)]],
+             size=9.5)
+
+    divider(slide, Inches(7.25), Inches(1.08), Inches(5.85))
+
+    # Right: snapshots are the fast, short-lived copy; the backup holds everything else.
+    left, width = Inches(7.45), Inches(5.53)
+    section_bar(slide, left, Inches(1.08), width, "Snapshots: retorno rápido, no backup", NAVY)
+    rows = [
+        ["Restauración rápida del backup", "2 días", ("Lo crea el backup. Los días 3 a 7 se restauran desde la "
+                                                      "copia del backup", action)],
+        ["Antes de un cambio", "Hasta 7 días\ntras el cambio", ("Nace con fecha de vencimiento y responsable", action)],
+        ["Disco o servidor eliminado", "Se borran", ("Si el dato es regulado, antes pasa al backup", action)],
+        ["Largo plazo", "Nunca", ("Va al backup de largo plazo o al archive", no)],
+    ]
+    grid = table(slide, left, Inches(1.55), width, ["Uso", "Cuánto se guarda", "Regla"], rows,
+                 [0.33, 0.22, 0.45], row_height=0.74, size=9)
+    grid.rows[0].height = Inches(0.4)
+    note_box(slide, left, Inches(4.95), width, Inches(1.98), [
+        [("Los snapshots se acumulan: ", True, NAVY),
+         ("cada uno guarda los cambios desde el anterior, así que el costo crece con cuántos se guardan y con "
+          "cuánto cambia el disco. Uno olvidado se sigue pagando todos los meses.", False, GREY)],
+        [("", False, GREY)],
+        [("Igual que los logs (hot → archive → se borra): ", True, NAVY),
+         ("snapshot por días (rápido, caro) → copia del backup por meses → archive por años (barato) → se "
+          "borra al vencer.", False, GREY)]], size=9.5)
+    slide.notes_slide.notes_text_frame.text = (
+        "Granularidad: el mismo criterio que el best practice de retención de logs, que fija la retención por tipo "
+        "de aplicación (canal, backoffice, infraestructura y software base, plataformas de integración, plataformas de "
+        "seguridad). La decisión se toma por aplicación y todos sus recursos la heredan. Dentro de la aplicación se "
+        "respalda la capa que guarda el dato: las bases de datos de canales y backoffice, y los servidores o "
+        "archivos que tengan datos propios. Las capas sin estado (contenedores, App Service, APIs, plataformas de "
+        "integración, que no guardan datos en reposo) se recuperan desplegando de nuevo desde el código, la imagen y "
+        "la plantilla de infraestructura; respaldarlas duplica copias sin agregar recuperación. Logs, métricas y "
+        "eventos de seguridad no son backup: su retención (hot y archive) la fija el best practice de logs. "
+        "Snapshots: en Azure Backup para VMs, la restauración instantánea guarda snapshots de 1 a 5 días con la "
+        "política Standard (2 por defecto) y de 1 a 30 con la Enhanced (7 por defecto). Con Enhanced el primer "
+        "snapshot es una copia completa del disco y los siguientes guardan solo los cambios, así que cada día extra "
+        "suma el cambio diario del disco (normalmente 2% a 7%). Los snapshots incrementales se cobran por el espacio "
+        "usado. Un snapshot manual sin vencimiento se paga hasta que alguien lo borra, aunque el disco ya no exista.")
 
 
 def slide_azure(deck):
@@ -811,6 +888,7 @@ def main():
     deck = Presentation()
     deck.slide_width, deck.slide_height = Inches(13.333), Inches(7.5)
     slide_guidelines(deck)
+    slide_layers(deck)
     slide_azure(deck)
     net = {region: {key: value * (1 - args.discount) for key, value in values.items()} for region, values in tb.items()}
     net_gb = {region: {key: value / GB_PER_TB for key, value in values.items()} for region, values in net.items()}

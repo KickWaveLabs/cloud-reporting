@@ -27,6 +27,9 @@ Guides:
   Copilot prompts to build the deck on the corporate laptop.
 - [docs/guidelines-compliance-checklist.md](docs/guidelines-compliance-checklist.md): questions to validate
   the guidelines deck with Compliance, and what to change in the script for each answer.
+- [docs/internal-guidelines-summary.md](docs/internal-guidelines-summary.md): what the bank's backup
+  guideline (LSEG_008) and log retention best practice say, how the deck uses them, and the cloud equivalent of
+  each control.
 - [docs/guidelines-references.md](docs/guidelines-references.md): the official source and link behind every
   limit, RTO and price in the guidelines deck; the deck itself only lists the regulation.
 
@@ -60,8 +63,9 @@ saving, risk count and calibrated cost empty.
 
 ## Guidelines deck
 
-`bu_guidelines_deck.py` builds the five-slide guidelines deck: the platform-neutral rule (cloud or on-premise,
-any database, servers and file shares) for regular and regulated data, how it maps to each Azure service with
+`bu_guidelines_deck.py` builds the six-slide guidelines deck: the platform-neutral rule (cloud or on-premise,
+any database, servers and file shares) for regular and regulated data, which layer of the application stack gets a
+backup and how snapshots are kept, how it maps to each Azure service with
 PITR and LTR explained, price per TB-month in Central US (LRS and ZRS, net of the bank's discount)
 against the vendors' quoted tariffs, a worked example with one regulated database (cost per month and over 1, 5
 and 10 years under each scope), and the references with the minimum period each norm sets. It needs no Azure sign-in and reads no estate data: prices come
@@ -80,7 +84,7 @@ configured today. It reads `results/backup-database/database_inventory.csv` and,
 inflated, so run `bu_database_used_storage.py` first. Open the workbook in Excel and save it once so the
 formulas calculate.
 
-Validate slides 1 and 2 with Compliance before sending it, using
+Validate slides 1 to 3 with Compliance before sending it, using
 [docs/guidelines-compliance-checklist.md](docs/guidelines-compliance-checklist.md). When an answer, a
 regulation or a Microsoft limit changes, edit the slide text and the reference lists in the script; the
 prices refresh on every run.
