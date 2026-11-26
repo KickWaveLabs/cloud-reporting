@@ -10,10 +10,10 @@ Decision of a cluster, in order (the first that applies):
   AKS               busiest hour above MAX_TPS (average TPS of the busiest hour of the day, as v1)
   AKS               more than MAX_SERVICES "micro"-services in the cluster
   AKS               BIA at AKS_FROM_BIA or above (MUY ALTA > ALTA > MEDIA > BAJA; NONE by default: no cluster)
+  AKS               shared: its traffic is on the Core layer, or its application is in SHARED_APPS (authentication
+                    and identity, used by several applications)
   AKS               many constant replicas today: at least MAX_REPLICAS_TODAY in all, its lowest hour at least
                     MIN_REPLICAS_CONSTANCY of its highest
-  AKS               shared: its traffic is on the Core layer, or its application is in SHARED_APPS (authentication
-                    and the like, used by several applications)
   ACA_WITH_REVIEW   critical (BIA ALTA or MUY ALTA) or growing past MAX_SERVICES with DESA
   ACA               otherwise
 The saving margin is not a criterion: at the end, a cluster that meets the criteria moves to Container Apps only when
@@ -57,7 +57,7 @@ DEFAULTS = {
     "concurrent_requests": 10, "traffic_share": 1.0, "sizing_basis": "PEAK",
     "min_replicas_office": 1, "min_replicas_offhours": 1,
     "aks_from_bia": "NONE", "max_replicas_today": 100, "min_replicas_constancy": 0.8,
-    "shared_apps": "AUTH,B2CC,CIAM,TOKE",
+    "shared_apps": "AUTH,ASOB,B2CC,CB2C,CIAM,TOKE,TOTP,TPWL,TRSA,BIOM",
     "capacity_from_today": "NO", "capacity_safety": 0.7, "size_from_usage": "NO", "usage_headroom": 2.0,
     "environment_fee": "NO",
     "requests_buffer": v1.REQUESTS_BUFFER, "environments_per_cluster": 1, "hours_month": v1.HOURS_MONTH,
@@ -165,13 +165,13 @@ def decide(row, variables):
     if threshold in BIA_LEVELS and row["bia"] in BIA_LEVELS and \
             BIA_LEVELS.index(row["bia"]) >= BIA_LEVELS.index(threshold):
         return "AKS", f"BIA {threshold} or above"
+    shared = {code.strip().upper() for code in variables["shared_apps"].split(",") if code.strip()}
+    if row["traffic_layer"] == "CORE" or row["cod_app"].upper() in shared:
+        return "AKS", "Shared: authentication or core, used by several applications"
     total, constancy = to_float(row.get("replicas_today_total")), to_float(row.get("replicas_today_constancy"))
     if total is not None and total >= variables["max_replicas_today"] and \
             (constancy or 0) >= variables["min_replicas_constancy"]:
         return "AKS", f"{total:.0f} constant replicas today"
-    shared = {code.strip().upper() for code in variables["shared_apps"].split(",") if code.strip()}
-    if row["traffic_layer"] == "CORE" or row["cod_app"].upper() in shared:
-        return "AKS", "Shared: authentication or core, used by several applications"
     reasons = []
     if row["bia"] in CRITICAL_BIA:
         reasons.append("Critical (BIA)")

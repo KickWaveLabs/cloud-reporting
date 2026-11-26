@@ -118,7 +118,7 @@ def write_variables(book, sheet, month, days, price_env_hour):
                       ("min_replicas_constancy", model.DEFAULTS["min_replicas_constancy"],
                        "...and constant (lowest hour / highest hour at least this) stay on AKS"),
                       ("shared_apps", model.DEFAULTS["shared_apps"],
-                       "Shared applications (authentication and the like, comma-separated) stay on AKS, as does "
+                       "Shared applications (authentication and identity, comma-separated) stay on AKS, as does "
                        "every cluster whose traffic is on the Core layer")]),
         ("Saving filter (applied at the end, not a criterion)",
          [("min_saving", model.DEFAULTS["min_saving"], "A cluster that meets the criteria moves only if it saves at "
@@ -653,8 +653,8 @@ def write_top_costs(book, sheet, applications, everything):
            f'"Event-driven",IF({flag("size_ok", "NO")},"A ""micro""-service over 4 vCPU / 8 GiB",'
            f'IF({flag("tps_ok", "NO")},"Busiest hour over max_tps",IF({flag("services_ok", "NO")},'
            f'"Over max_services ""micro""-services",IF({flag("bia_ok", "NO")},"BIA "&aks_from_bia&" or above",'
-           f'IF({flag("replicas_ok", "NO")},"Many constant replicas today",IF({flag("shared_ok", "NO")},'
-           f'"Shared: authentication or core",'
+           f'IF({flag("shared_ok", "NO")},"Shared: authentication or core",IF({flag("replicas_ok", "NO")},'
+           f'"Many constant replicas today",'
            f'IF({flag("group", "BELOW_MARGIN")},"Saves less than min_saving","")))))))))')
     left_formulas = [rank, get("cluster"), get("cod_app"), get("bia"), get("aks_month_pen"),
                      f'IF({meets},{get("saving_share")},"-")', get("group"), why]

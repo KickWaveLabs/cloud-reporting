@@ -252,8 +252,8 @@ Container Insights; one stopped PROD cluster without metrics.
   - Besides event-driven, size, TPS and "micro"-services, a cluster stays on AKS when it runs many constant
     replicas today (`max_replicas_today` 100 in all, `min_replicas_constancy` 80%: lowest hour over highest, from
     `replicas_today_total` and `replicas_today_constancy` in cluster_criteria_input.csv) or when it is shared: its
-    traffic is on the Core layer or its application is in `shared_apps` (authentication and the like; AUTH, B2CC,
-    CIAM, TOKE by default, to confirm). Critical (BIA) or growing clusters move with review.
+    traffic is on the Core layer or its application is in `shared_apps` (authentication and identity, from the
+    subscription names: AUTH, ASOB, B2CC, CB2C, CIAM, TOKE, TOTP, TPWL, TRSA, BIOM). Critical (BIA) or growing clusters move with review.
 - **v2** is tagged `v2` (2026-11-25). **v3** is the same model, scripts and variables with other defaults
   (`aa_v2_model.PRESETS["v3"]`, chosen with `--criteria v3` on the workbook and deck scripts; files end in `_v3`):
   - `sizing_basis` BUSIEST_HOUR;
