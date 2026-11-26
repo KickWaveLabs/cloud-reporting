@@ -8,9 +8,8 @@ each hour's traffic.
 Slides 1 and 2 are v1's (aa_deck_exec_v1.py). Then:
   3  hypothesis, with the real example costed by the v2 model
   4  criteria per cluster: four conditions, the rules that keep a cluster on AKS, the saving margin, how it is costed
-  5  how a cluster is sized: the example's traffic by hour (min / average / peak) and its replicas
-  6  result per cluster (groups of the v2 workbook's Results sheet)
-  7  saving: what moving the clusters of the ACA groups saves a month and a year
+  5  result per cluster (groups of the v2 workbook's Results sheet)
+  6  saving: what moving the clusters of the ACA groups saves a month and a year
 Reads only results/ (run aa_cluster_snapshot.py first). Output: aks_aca_corporate_<criteria>.pptx in the newest
 reports/<date>-aks-aca folder (or --output); next to it, cluster_decisions_<criteria>.csv with every cluster's figures.
 """
@@ -43,10 +42,6 @@ GROUPS = {
     "IN_DEVELOPMENT": ("En desarrollo", "Aún no sale a producción", d.SOFT),
 }
 MOVABLE = ("ACA", "ACA_WITH_REVIEW")
-# Sources of the sizing rule, named on the slides that use it; the links are in the v2 workbook (Variables), since
-# the corporate deck carries no URLs.
-SIZING_SOURCES = ("Escalado de Container Apps (1 réplica más por cada 10 solicitudes por segundo) y mínimo de 1 réplica en horario de oficina "
-                  "para evitar el arranque en frío: Microsoft Learn.")
 
 
 CRITERIA = {"name": "v2"}  # set by main (--criteria)
@@ -62,15 +57,11 @@ def sizing(where):
         "v2": {"example": f"cada 5 minutos según el tráfico, 1 por cada {per} TPS; {office}.",
                "criteria": f"1 por cada {per} TPS, cada 5 minutos de la hora más cargada del mes (regla de escalado de "
                            f"Azure); {office}.",
-               "traffic": f"Réplicas = 1 por cada {per} TPS, cada 5 minutos de la hora más cargada del mes; mínimo 1 en "
-                          "horario de oficina, 0 fuera.",
                "cost": f"Según el tráfico cada 5 minutos: 1 por cada {per} TPS; se apagan fuera de horario sin uso",
                "band": band},
         "v3": {"example": f"cada 5 minutos con la capacidad por réplica medida hoy; {office}.",
                "criteria": f"Cada 5 minutos de la hora más cargada del mes, con lo que hoy atiende una réplica en AKS "
                            f"(al menos {per} TPS, regla de escalado de Azure); {office}.",
-               "traffic": f"Réplicas cada 5 minutos de la hora más cargada del mes, con la capacidad medida hoy (al "
-                          f"menos {per} TPS por réplica); mínimo 1 en horario de oficina, 0 fuera.",
                "cost": "Cada 5 min según el tráfico y la capacidad medida; se apagan fuera de horario sin uso",
                "band": band}}
     return texts[CRITERIA["name"]][where]
@@ -136,34 +127,6 @@ def slide_criteria(deck, source):
     v1.box(slide, Inches(0.6), Inches(5.45), Inches(12.1), Inches(0.75), d.LIGHT)
     d.text_box(slide, Inches(0.9), Inches(5.45), Inches(11.5), Inches(0.75), sizing("band"), size=14, color=d.NAVY,
                anchor=d.MSO_ANCHOR.MIDDLE)
-
-
-def slide_traffic(deck, example, profile, source):
-    rows = [row for row in profile if row["scope"] == example["cluster"] and row["day_type"] == "weekday"]
-    rows.sort(key=lambda row: int(row["hour"]))
-    hours = [f"{int(row['hour']):02d}" for row in rows]
-    series = [("Pico (5 min)", [float(row["tps_peak"]) for row in rows], d.RUST),
-              ("Promedio", [float(row["tps_avg"]) for row in rows], d.NAVY),
-              ("Mínimo", [float(row["tps_min"]) for row in rows], d.SOFT)]
-    replicas = [model.replicas(row, model.DEFAULTS) for row in rows]
-    busiest = max(range(len(rows)), key=lambda index: float(rows[index]["tps_peak"])) if rows else 0
-    slide = d.base_slide(deck, f"Cómo se dimensiona: {example['cod_app']}, día de semana, hora por hora", source)
-    d.heading(slide, Inches(0.6), Inches(1.25), Inches(8.0), "Transacciones por segundo (TPS) por hora", size=14)
-    d.line_chart(slide, Inches(0.5), Inches(1.6), Inches(8.2), Inches(4.4), hours, series, number_format="0.0")
-    d.heading(slide, Inches(9.0), Inches(1.25), Inches(3.8), "Réplicas por " + MICRO_ONE, size=14)
-    count = lambda value: f"{value:.1f}".rstrip("0").rstrip(".")  # an hour's average of 5-minute replicas
-    d.kpi(slide, Inches(9.0), Inches(1.65), Inches(3.8), Inches(1.25), count(max(replicas) if replicas else 1),
-          f"en su hora más cargada ({hours[busiest] if hours else '-'}:00, pico "
-          f"{float(rows[busiest]['tps_peak']) if rows else 0:.1f} TPS)", value_color=d.RUST, value_size=28)
-    low = min(replicas) if replicas else 1
-    d.kpi(slide, Inches(9.0), Inches(3.05), Inches(3.8), Inches(1.25), count(low),
-          "fuera de horario, sin uso: apagado" if low == 0 else "el resto del día (mínimo)", value_color=d.GREEN,
-          value_size=28)
-    d.kpi(slide, Inches(9.0), Inches(4.45), Inches(3.8), Inches(1.25), pen(example["aca_month_pen"]),
-          f"al mes en Container Apps ({int(example['microservices'])} {MICRO}); hoy {pen(example['aks_month_pen'])}",
-          value_color=d.GREEN, value_size=24)
-    d.text_box(slide, Inches(0.6), Inches(6.15), Inches(12.1), Inches(0.5),
-               f"{sizing('traffic')} En AKS hoy las réplicas no siguen al tráfico.", size=11, color=d.GREY, italic=True)
 
 
 def slide_distribution(deck, rows, month, source):
@@ -274,7 +237,6 @@ def main():
                      f"{measured} Mínimos: calculadora de precios de Azure (East US 2, precios de lista). {v1.MONEY_NOTE}")
     slide_criteria(deck, f"Referencia: lineamiento ADT_019 del banco. Réplicas: {sizing('criteria')} "
                          "Fuente: Microsoft Learn.")
-    slide_traffic(deck, example, data["profile"], f"{traffic} {SIZING_SOURCES} {v1.MONEY_NOTE}")
     slide_distribution(deck, rows, estate["month"], f"{traffic} {v1.MONEY_NOTE}")
     slide_cost(deck, rows, f"{measured} Precios de lista: Azure Retail Prices API. {v1.MONEY_NOTE}")
     reports = sorted(glob.glob(os.path.join(aa.TOPIC_DIR, "reports", "*-aks-aca")))
