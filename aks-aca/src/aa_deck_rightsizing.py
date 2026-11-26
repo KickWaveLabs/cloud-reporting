@@ -4,15 +4,17 @@
 Five slides from the same figures as the right-sizing workbook (aa_rightsizing.py, default variables):
   1  the real pain: capacity paid and not used, few well-used clusters, the break-even hours
   2  well-used against badly used AKS: Container Apps against AKS by class, with examples
-  3  where the money goes: minimum clusters, idle capacity, system pool, empty clusters, non-production, autoscaling
+  3  where the waste is, as a share of the AKS bill: minimum clusters, idle capacity, system pool, empty clusters,
+     non-production, autoscaling
   4  pros and cons: optimized AKS, shared AKS and Container Apps
-  5  what to do: the levers and the size of the problem each one addresses
+  5  what each lever would save a month and a year, at most (the only slide with soles)
 Reads only results/. Output: aks_rightsizing.pptx in the newest reports/<date>-aks-aca folder (or --output).
 
 Usage: python aks-aca/src/aa_deck_rightsizing.py [--results DIR] [--output FILE]
 """
 
 import argparse
+import calendar
 import glob
 import os
 
@@ -47,8 +49,7 @@ def slide_pain(deck, summary, hours, ratio, source):
     idle = sum(entry["idle"] for entry in classes.values())
     count = sum(entry["clusters"] for entry in classes.values())
     slide = d.base_slide(deck, "El verdadero dolor no es AKS: es cómo lo usamos", source)
-    cards = [(d.percent(d.share_of(idle, total)), f"de lo que pagamos en AKS de negocio no se usa: {pen(idle)} al mes",
-              d.RUST),
+    cards = [(d.percent(d.share_of(idle, total)), "de la capacidad que pagamos en AKS de negocio no se usa", d.RUST),
              (f"{classes['OPTIMIZED']['clusters']} de {count}", "clusters aprovechan bien lo que pagan (60% o más)",
               d.ORANGE),
              (f"{hours:.0f} h", f"al día: una vCPU de Container Apps cuesta {ratio:.0f} veces la de AKS con reserva; "
@@ -62,20 +63,22 @@ def slide_pain(deck, summary, hours, ratio, source):
               "usa.", size=16, fill=d.CARD)
     d.text_box(slide, Inches(0.6), Inches(4.85), Inches(12.1), Inches(1.0),
                ["• Uso: CPU o memoria usada en promedio en horario de oficina, sobre lo que ofrecen sus servidores.",
-                "• Aplicaciones de negocio en producción; costo de octubre 2026 con IGV."], size=12, color=d.GREY)
+                "• Aplicaciones de negocio en producción. Lo que ahorraría cada palanca va al final."], size=12,
+               color=d.GREY)
 
 
 def slide_classes(deck, summary, source):
     classes = summary["classes"]
     slide = d.base_slide(deck, "AKS bien usado contra mal usado: Container Apps solo gana en los sobredimensionados",
                          source)
-    table = [["Cluster", "Clusters", "AKS hoy / mes", "No se usa / mes", "Container Apps sería"]]
+    total = sum(entry["aks"] for entry in classes.values())
+    table = [["Cluster", "Clusters", "Peso en el gasto", "Capacidad sin usar", "Container Apps sería"]]
     for kind, label, meaning, _ in KINDS:
         entry = classes[kind]
         ratio = entry["aca"] / entry["aks_costed"] if entry["aks_costed"] else 0
         verdict = f"{ratio:.1f} veces más caro" if ratio >= 1 else f"{d.percent(1 - ratio)} más barato"
-        table.append([f"{label} ({meaning})", d.number(entry["clusters"]), pen(entry["aks"]), pen(entry["idle"]),
-                      verdict])
+        table.append([f"{label} ({meaning})", d.number(entry["clusters"]), d.percent(d.share_of(entry["aks"], total)),
+                      d.percent(d.share_of(entry["idle"], entry["aks"])), verdict])
     d.table(slide, Inches(0.6), Inches(1.3), Inches(12.1), table, [0.32, 0.1, 0.18, 0.18, 0.22], highlight_column=4,
             row_height=0.45, size=13)
     rows = {row["cod_app"]: row for row in summary["rows"]}
@@ -86,7 +89,7 @@ def slide_classes(deck, summary, source):
         verdict = f"{aca / row['aks_pen']:.0f} veces más caro en Container Apps" if aca >= row["aks_pen"] else \
             f"{d.percent(1 - aca / row['aks_pen'])} más barato en Container Apps"
         d.kpi(slide, Inches(0.6) + index * (width + gap), Inches(3.5), width, Inches(1.6), code,
-              f"usa {d.percent(row['use'])} · {pen(row['aks_pen'])} al mes en AKS · {verdict}",
+              f"usa {d.percent(row['use'])} de su capacidad · {verdict}",
               value_color=dict((kind, colour) for kind, _, _, colour in KINDS).get(row["kind"], d.ORANGE),
               value_size=28, label_size=11)
     d.text_box(slide, Inches(0.6), Inches(5.3), Inches(12.1), Inches(0.7),
@@ -95,25 +98,27 @@ def slide_classes(deck, summary, source):
                "Container Apps.", size=11, italic=True, color=d.GREY)
 
 
-def slide_money(deck, summary, source):
-    slide = d.base_slide(deck, "Dónde se va la plata", source)
+def slide_money(deck, summary, total, source):
+    """Where the waste is, as a share of the whole AKS bill (production and non-production): no soles until the levers."""
+    slide = d.base_slide(deck, "Dónde está el desperdicio", source)
     classes = summary["classes"]
     idle = sum(entry["idle"] for entry in classes.values())
-    table = [["Dolor", "Qué pasa", "Cuántos", "Al mes"],
+    share = lambda value: d.percent(d.share_of(value, total))
+    table = [["Dolor", "Qué pasa", "Cuántos", "Peso en el gasto AKS"],
              ["Mínimo por cluster", f"Clusters dedicados de {v1.MIN_AKS_NODES} servidores o menos: pagan el piso "
                                     "aunque corran poco", f"{d.number(summary['minimum'][0])} clusters",
-              pen(summary["minimum"][1])],
-             ["Capacidad que no se usa", "Lo que se paga por servidores y no usan las aplicaciones",
-              f"{d.number(sum(entry['clusters'] for entry in classes.values()))} clusters", pen(idle)],
-             ["Servidores de sistema", "Parte de la memoria que se usa en los clusters es del propio Kubernetes",
-              d.percent(d.share_of(summary["system_mem"], summary["mem"])), "incluido arriba"],
+              share(summary["minimum"][1])],
+             ["Capacidad que no se usa", "Se paga por servidores que las aplicaciones no usan",
+              f"{d.number(sum(entry['clusters'] for entry in classes.values()))} clusters", share(idle)],
+             ["Servidores de sistema", "Parte de la memoria usada es del propio Kubernetes, no de la aplicación",
+              d.percent(d.share_of(summary["system_mem"], summary["mem"])) + " de la memoria", "-"],
              ["Clusters vacíos", "Producción creada antes de tener aplicación",
-              f"{d.number(summary['empty'][0])} clusters", pen(summary["empty"][1])],
+              f"{d.number(summary['empty'][0])} clusters", share(summary["empty"][1])],
              ["No productivos 24/7", "Desarrollo y certificación encendidos todo el mes",
-              f"{d.number(summary['nonprod'][0])} clusters", pen(summary["nonprod"][1])],
+              f"{d.number(summary['nonprod'][0])} clusters", share(summary["nonprod"][1])],
              ["Autoescalado quieto", f"{v1.MICRO_CAP} que no cambian de réplicas hace más de 3 meses",
               f"{d.number(summary['hpas_still'])} de {d.number(summary['hpas'])}", "-"]]
-    d.table(slide, Inches(0.6), Inches(1.3), Inches(12.1), table, [0.2, 0.52, 0.13, 0.15], highlight_column=3,
+    d.table(slide, Inches(0.6), Inches(1.3), Inches(12.1), table, [0.2, 0.5, 0.15, 0.15], highlight_column=3,
             row_height=0.5, size=12)
     d.text_box(slide, Inches(0.6), Inches(5.0), Inches(12.1), Inches(0.5),
                "Los dolores se superponen (un cluster en el mínimo también tiene capacidad sin usar): cada fila se lee "
@@ -135,23 +140,43 @@ def slide_options(deck, source):
     d.table(slide, Inches(0.6), Inches(1.3), Inches(12.1), table, [0.18, 0.27, 0.27, 0.28], row_height=0.6, size=12)
 
 
-def slide_levers(deck, summary, aca_saving, source):
-    classes = summary["classes"]
-    idle = sum(entry["idle"] for entry in classes.values())
-    slide = d.base_slide(deck, "Qué hacer: cada palanca ataca un dolor", source)
-    table = [["Palanca", "Ataca", "Tamaño del dolor / mes"],
-             ["Ajustar requests y servidores al uso real", "Capacidad que no se usa", pen(idle)],
-             ["Juntar aplicaciones chicas en un AKS compartido", "Mínimo por cluster y servidores de sistema",
-              pen(summary["minimum"][1])],
-             ["Apagar no productivos fuera de horario", "No productivos 24/7", pen(summary["nonprod"][1])],
-             ["Container Apps para aplicaciones chicas que duermen de noche", "Mínimo por cluster y noches",
-              f"ahorro estimado {pen(aca_saving)}"],
-             ["Crear producción solo cuando la aplicación esté lista", "Clusters vacíos", pen(summary["empty"][1])]]
-    d.table(slide, Inches(0.6), Inches(1.3), Inches(12.1), table, [0.45, 0.33, 0.22], highlight_column=2,
-            row_height=0.5, size=13)
-    d.note_box(slide, Inches(0.6), Inches(4.75), Inches(12.1), Inches(0.75),
-               "Con reservas de 3 años, apagar o achicar servidores solo ahorra si la reserva se ajusta a lo que queda "
-               "encendido.", size=12)
+def levers(results, month, summary, aca_saving, target=0.6):
+    """Saving a month of each lever, at most: right-size each cluster to the target use without going below the
+    dedicated minimum; what only sharing a cluster frees (that minimum); non-production off outside office hours;
+    Container Apps for the clusters the criteria move; the empty clusters."""
+    soles = (1 + v1.IGV) * v1.EXCHANGE_RATE
+    floor = v1.minimum_costs(month, v1.read_prices(results))[0] * soles
+    own = shared = 0.0
+    for row in summary["rows"]:
+        if row["use"] is None or row["use"] >= target:
+            continue
+        needed = row["aks_pen"] * row["use"] / target
+        kept = max(needed, min(row["aks_pen"], floor))
+        own += row["aks_pen"] - kept
+        shared += kept - needed
+    year, number = (int(part) for part in month.split("-"))
+    days = calendar.monthrange(year, number)[1]
+    off = 1 - v1.office_seconds(month) / (days * 86400)
+    return [("Ajustar requests y servidores al uso real",
+             f"Llevar cada cluster a {d.percent(target)} de uso, sin bajar de su mínimo", own),
+            ("Juntar aplicaciones chicas en un AKS compartido", "Lo que el mínimo de cada cluster no deja bajar", shared),
+            ("Apagar no productivos fuera de horario", f"El {d.percent(off)} de las horas del mes",
+             summary["nonprod"][1] * off),
+            ("Container Apps para aplicaciones chicas", "Los clusters que cumplen los criterios", aca_saving),
+            ("Crear producción solo cuando la aplicación esté lista", "Los clusters vacíos de hoy", summary["empty"][1])]
+
+
+def slide_levers(deck, rows, source):
+    slide = d.base_slide(deck, "Cuánto ahorraría cada palanca", source)
+    table = [["Palanca", "Cómo", "Ahorro / mes", "Ahorro / año"]]
+    for lever, how, saving in rows:
+        table.append([lever, how, f"hasta {pen(saving)}", f"hasta {pen(saving * 12)}"])
+    d.table(slide, Inches(0.6), Inches(1.3), Inches(12.1), table, [0.33, 0.33, 0.17, 0.17], highlight_column=2,
+            row_height=0.5, size=12)
+    d.note_box(slide, Inches(0.6), Inches(4.8), Inches(12.1), Inches(0.95),
+               "Las palancas se superponen (las aplicaciones chicas que pasan a Container Apps ya no se juntan): no se "
+               "suman. Con reservas de 3 años, apagar o achicar servidores solo ahorra si la reserva se ajusta a lo que "
+               "queda encendido.", size=12)
 
 
 def build(results, output):
@@ -166,9 +191,10 @@ def build(results, output):
     deck.slide_width, deck.slide_height = Inches(13.333), Inches(7.5)
     slide_pain(deck, summary, hours, aca_hour / aks_hour if aks_hour else 0, source)
     slide_classes(deck, summary, source)
-    slide_money(deck, summary, source)
+    slide_money(deck, summary, sum(v1.to_float(row["cost_month_usd"]) or 0 for row in data)
+                * (1 + v1.IGV) * v1.EXCHANGE_RATE, source)
     slide_options(deck, source)
-    slide_levers(deck, summary, aca_saving, source)
+    slide_levers(deck, levers(results, month, summary, aca_saving), source)
     exec_deck.english_numbers(deck)
     os.makedirs(os.path.dirname(os.path.abspath(output)), exist_ok=True)
     aa.keep_version(output)
