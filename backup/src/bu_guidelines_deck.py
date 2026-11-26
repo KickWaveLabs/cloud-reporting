@@ -478,55 +478,53 @@ def slide_layers(deck):
     # Left: the decision is taken per application, by its type (the same types as the log best practice), and
     # inside the application only the layer that holds data gets a backup.
     left, width = Inches(0.35), Inches(6.7)
-    section_bar(slide, left, Inches(1.08), width, "Granularidad: se decide por aplicación, según su tipo", NAVY)
+    section_bar(slide, left, Inches(1.08), width, "Granularidad: cada aplicación se respalda según lo que guarda", NAVY)
     action = {"left": True, "size": 8.5}
     no = {"left": True, "size": 8.5, "color": RUST}
     rows = [
-        ["Canal e integración", "Homebanking, Banca Móvil, Yape; APIs, middleware", "Nada en reposo: orquestan",
-         ("No: se vuelven a desplegar. La traza de cada transacción va en logs", no)],
-        ["Servicios de negocio (BS)", "Microservicios con lógica de negocio", "Datos de negocio en su base",
-         ("Sí: lineamiento base + ámbito regulado si su base guarda el registro", action)],
+        ["Canal e integración", "Homebanking, Banca Móvil, Yape; APIs, middleware", "No guardan datos: pasan la operación a otro sistema",
+         ("No: si fallan, se reinstalan. El rastro de cada operación queda en los logs", no)],
+        ["Servicios de negocio (BS)", "Servicios que ejecutan la operación del negocio", "Datos de negocio en su base",
+         ("Sí: regla base; más la regulada si guarda datos que pide una norma (lámina 1)", action)],
         ["Core y mainframe", "Cuentas, operaciones, contabilidad", "El resultado: saldos y movimientos",
-         ("Sí: lineamiento base + ámbito regulado (lámina 1)", action)],
+         ("Sí: regla base + regulada (lámina 1)", action)],
         ["Backoffice", "Contratos, libros contables, pedidos", "Documentos y registros internos",
-         ("Sí, su base de datos o archivos: lineamiento base + ámbito regulado", action)],
+         ("Sí, su base o archivos: regla base; más la regulada si aplica", action)],
         ["Infraestructura y software base", "Servidores, sistemas operativos, red", "Configuración y métricas",
-         ("Solo si guarda datos propios; si no, se reconstruye desde su plantilla", action)],
+         ("Solo si guarda datos; si no, se reinstala", action)],
         ["Plataformas de seguridad", "SIEM, EDR, DLP", "Eventos y auditoría",
-         ("No es backup: lo rige la retención de logs", no)],
+         ("No: son logs y tienen su propio plazo", no)],
     ]
     grid = table(slide, left, Inches(1.55), width, ["Tipo de aplicación", "Ejemplos", "Qué guarda", "¿Backup?"],
                  rows, [0.21, 0.23, 0.23, 0.33], row_height=0.62, size=8.5)
     grid.rows[0].height = Inches(0.36)
     note_box(slide, left, Inches(5.68), width, Inches(1.25), [
-        [("Manda lo que guarda la base, no lo que la aplicación procesa. ", True, NAVY),
-         ("Logs y backup son cosas distintas: la traza de la transacción se rige por la retención de logs; el "
-          "resultado queda en la base de BS, Core o mainframe y ahí va el backup regulado. Dentro de la "
-          "aplicación solo se respalda la capa de datos.", False, GREY)]], size=9)
+        [("Se respalda donde queda guardado el dato, no por donde pasa. ", True, NAVY),
+         ("El canal solo pasa la operación; el resultado queda en la base de BS, Core o mainframe, y ahí va el "
+          "backup. Los logs son otra cosa: tienen su propio plazo.", False, GREY)]], size=9)
 
     divider(slide, Inches(7.25), Inches(1.08), Inches(5.85))
 
     # Right: snapshots are the fast, short-lived copy; the backup holds everything else.
     left, width = Inches(7.45), Inches(5.53)
-    section_bar(slide, left, Inches(1.08), width, "Snapshots: retorno rápido, no backup", NAVY)
+    section_bar(slide, left, Inches(1.08), width, "Snapshots: foto rápida del disco, no reemplaza al backup", NAVY)
     rows = [
-        ["Restauración rápida del backup", "2 días", ("Lo crea el backup. Los días 3 a 7 se restauran desde la "
-                                                      "copia del backup", action)],
-        ["Antes de un cambio", "Hasta 7 días\ntras el cambio", ("Nace con fecha de vencimiento y responsable", action)],
-        ["Disco o servidor eliminado", "Se borran", ("Si el dato es regulado, antes pasa al backup", action)],
-        ["Largo plazo", "Nunca", ("Va al backup de largo plazo o al archive", no)],
+        ["Recuperar rápido", "2 días", ("Vuelve en minutos; para días anteriores se usa el backup", action)],
+        ["Antes de un cambio", "Hasta 7 días\ndespués", ("Siempre con fecha de borrado y un responsable", action)],
+        ["Si el servidor se elimina", "Se borran", ("Si guarda datos regulados, primero pasan al backup", action)],
+        ["Guardar meses o años", "No", ("Para eso está el backup", no)],
     ]
-    grid = table(slide, left, Inches(1.55), width, ["Uso", "Cuánto se guarda", "Regla"], rows,
+    grid = table(slide, left, Inches(1.55), width, ["Para qué", "Cuánto se guarda", "Regla"], rows,
                  [0.33, 0.22, 0.45], row_height=0.74, size=9)
     grid.rows[0].height = Inches(0.4)
     note_box(slide, left, Inches(4.95), width, Inches(1.98), [
-        [("Los snapshots se acumulan: ", True, NAVY),
-         ("cada uno guarda los cambios desde el anterior, así que el costo crece con cuántos se guardan y con "
-          "cuánto cambia el disco. Uno olvidado se sigue pagando todos los meses.", False, GREY)],
+        [("Se acumulan y se pagan cada mes: ", True, NAVY),
+         ("cada snapshot guarda lo que cambió desde el anterior. Uno olvidado se sigue pagando aunque el servidor "
+          "ya no exista.", False, GREY)],
         [("", False, GREY)],
-        [("Igual que los logs (hot → archive → se borra): ", True, NAVY),
-         ("snapshot por días (rápido, caro) → copia del backup por meses → archive por años (barato) → se "
-          "borra al vencer.", False, GREY)]], size=9.5)
+        [("Mismo ciclo que los logs: ", True, NAVY),
+         ("snapshot unos días (rápido, caro) → backup meses → archivo años (barato) → se borra.", False, GREY)]],
+             size=9.5)
     slide.notes_slide.notes_text_frame.text = (
         "Granularidad: el mismo criterio que el best practice de retención de logs, que fija la retención por tipo "
         "de aplicación (canal, backoffice, infraestructura y software base, plataformas de integración, plataformas de "
