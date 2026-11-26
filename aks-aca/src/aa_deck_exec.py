@@ -74,52 +74,58 @@ def pen(value):
 
 
 def slide_estate(deck, estate, apps, source):
-    """(Costs in US$, shown in soles.) The PROD application clusters, the base of the analysis, in large print; the whole AKS bill in small print."""
+    """(Costs in US$, shown in soles.) Left, the whole PROD universe and its split; right, the business application
+    clusters, the base of the analysis, in large print; below, what stays out of the analysis and its monthly cost."""
     month = v1.month_label(estate["month"])
     category = estate["by_category"]
     application = category.get(aa.APPLICATION, {"clusters": 0, "cost": 0})
     total = estate["prod_cost"]["AKS"] + estate["nonprod_cost"]
-    others = estate["prod"]["aks"] - application["clusters"]
-    slide = d.base_slide(deck, f"Producción: {application['clusters']} clusters AKS con aplicaciones, la base del "
-                               "análisis", source)
-    left, top, width, height = Inches(0.6), Inches(1.3), Inches(3.4), Inches(3.45)
+    slide = d.base_slide(deck, f"Producción: {application['clusters']} clusters AKS de aplicaciones de negocio, la "
+                               "base del análisis", source)
+    left, top, width, height = Inches(0.6), Inches(1.3), Inches(3.4), Inches(4.75)
     d.rounded(slide, left, top, width, height, d.CARD)
-    d.text_box(slide, left, top + Inches(0.1), width, Inches(0.4), "AKS", size=16, bold=True, color=d.WHITE,
-               align=d.PP_ALIGN.CENTER)
-    icon = Inches(1.0)
+    icon = Inches(0.8)
     slide.shapes.add_picture(os.path.join(v1.ICONS_DIR, "aks.png"), left + int((width - icon) / 2),
-                             top + Inches(0.6), height=icon)
-    d.text_box(slide, left, top + Inches(1.7), width, Inches(0.35), "Servidores encendidos 24/7", size=11,
-               color=d.SOFT, align=d.PP_ALIGN.CENTER)
-    d.text_box(slide, left, top + Inches(1.95), width, Inches(0.7), d.number(application["clusters"]), size=40,
+                             top + Inches(0.2), height=icon)
+    d.text_box(slide, left, top + Inches(1.05), width, Inches(0.7), d.number(estate["prod"]["aks"]), size=40,
                bold=True, color=d.ORANGE, align=d.PP_ALIGN.CENTER)
-    d.text_box(slide, left, top + Inches(2.62), width, Inches(0.3), "clusters con aplicaciones en producción",
-               size=12, color=d.SOFT, align=d.PP_ALIGN.CENTER)
-    d.text_box(slide, left + Inches(0.15), top + Inches(2.95), width - Inches(0.3), Inches(0.45),
-               f"+ {d.number(others)} de producción sin aplicaciones y {d.number(estate['nonprod_clusters'])} no "
-               "productivos", size=10, color=d.SOFT, align=d.PP_ALIGN.CENTER)
+    d.text_box(slide, left, top + Inches(1.75), width, Inches(0.3), "clusters AKS en producción", size=12,
+               color=d.SOFT, align=d.PP_ALIGN.CENTER)
+    split = [(aa.APPLICATION, "aplicaciones de negocio"), (aa.INFRASTRUCTURE, "infraestructura"),
+             (aa.NO_APPLICATIONS, "creados sin aplicaciones"), (aa.NO_DATA, "sin datos")]
+    row = top + Inches(2.25)
+    for code, label in split:
+        entry = category.get(code)
+        if not entry or not entry["clusters"]:
+            continue
+        base = code == aa.APPLICATION
+        d.text_box(slide, left + Inches(0.3), row, Inches(0.75), Inches(0.35), d.number(entry["clusters"]),
+                   size=16 if base else 13, bold=True, color=d.ORANGE if base else d.WHITE, align=d.PP_ALIGN.RIGHT)
+        d.text_box(slide, left + Inches(1.15), row + Inches(0.03), width - Inches(1.3), Inches(0.35), label,
+                   size=11, bold=base, color=d.WHITE if base else d.SOFT)
+        row += Inches(0.42)
+    d.text_box(slide, left, top + height - Inches(0.5), width, Inches(0.35),
+               f"+ {d.number(estate['nonprod_clusters'])} no productivos (certificación y desarrollo)", size=10,
+               color=d.SOFT, align=d.PP_ALIGN.CENTER)
     grid_left, gap = Inches(4.25), Inches(0.2)
     card_width = int((Inches(12.75) - grid_left - gap) / 2)
     cards = [(MICRO, d.number(v1.deployed_microservices(apps)), "desplegados en esos clusters", d.GREEN),
              ("Su peso en AKS", d.percent(d.share_of(application["cost"], total)),
               f"de todo lo que se paga en AKS ({month})", d.STEEL),
-             ("Costo mensual", v1.soles(application["cost"]), f"todo AKS: {v1.soles(total)} al mes", d.ORANGE),
-             ("Costo anual", v1.soles(application["cost"] * 12), f"todo AKS: {v1.soles(total * 12)} al año", d.RUST)]
+             ("Costo mensual", v1.soles(application["cost"]), f"de {v1.soles(total)} de todo AKS", d.ORANGE),
+             ("Costo anual", v1.soles(application["cost"] * 12), "costo mensual × 12", d.RUST)]
     for index, (label, value, detail, accent) in enumerate(cards):
         v1.accent_card(slide, grid_left + (index % 2) * (card_width + gap), top + (index // 2) * Inches(1.75),
                        card_width, Inches(1.6), label, value, detail, accent, value_size=30 if index >= 2 else 28)
-    rows = [["Clusters AKS en producción", "Clusters", f"Costo {month}"]]
-    for code, label in ((aa.APPLICATION, "Con aplicaciones (base del análisis)"),
-                        (aa.NO_APPLICATIONS, "Creados sin aplicaciones"),
-                        (aa.INFRASTRUCTURE, "Infraestructura (CI/CD, observabilidad, gateways)"),
-                        (aa.NO_DATA, "Sin datos")):
-        entry = category.get(code)
-        if entry and entry["clusters"]:
-            rows.append([label, d.number(entry["clusters"]), v1.soles(entry["cost"])])
-    d.table(slide, Inches(0.6), Inches(4.95), Inches(7.9), rows, [0.6, 0.15, 0.25], highlight_column=None,
-            row_height=0.32, size=11)
-    d.note_box(slide, Inches(8.85), Inches(4.95), Inches(3.9), Inches(0.85),
-               f"{v1.MICRO_CAP} = servicios de una aplicación desplegados en AKS.", size=11)
+    outside = [f"{label[0].upper() + label[1:]}: {v1.soles(category[code]['cost'])}" for code, label in split[1:]
+               if category.get(code, {}).get("clusters")]
+    outside.append(f"No productivos: {v1.soles(estate['nonprod_cost'])}")
+    box_top = top + Inches(3.55)
+    d.note_box(slide, grid_left, box_top, Inches(12.75) - grid_left, Inches(1.2), "", size=11)
+    d.text_box(slide, grid_left + Inches(0.25), box_top + Inches(0.1), Inches(8.0), Inches(0.35),
+               f"Fuera del análisis, al mes ({month}):", size=12, bold=True, color=d.NAVY)
+    d.text_box(slide, grid_left + Inches(0.25), box_top + Inches(0.45), Inches(8.0), Inches(0.7),
+               ["   ·   ".join(outside[:2]), "   ·   ".join(outside[2:])], size=11, color=d.GREY)
 
 
 THOUSANDS = re.compile(r"\d{1,3}(?:\.\d{3})+(?:,\d+)?|\d+,\d+")
