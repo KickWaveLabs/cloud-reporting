@@ -249,6 +249,11 @@ Container Insights; one stopped PROD cluster without metrics.
     in the one before, the 5-minute wait before it scales in). It needs `active_5min` in the metrics' hourly
     files, so rerun `aa_metrics.py` and `aa_cluster_snapshot.py` after updating.
   - The saving margin (`min_saving`, 10% by default) is applied at the end, not as a criterion.
+  - Besides event-driven, size, TPS and "micro"-services, a cluster stays on AKS when it runs many constant
+    replicas today (`max_replicas_today` 100 in all, `min_replicas_constancy` 80%: lowest hour over highest, from
+    `replicas_today_total` and `replicas_today_constancy` in cluster_criteria_input.csv) or when it is shared: its
+    traffic is on the Core layer or its application is in `shared_apps` (authentication and the like; AUTH, B2CC,
+    CIAM, TOKE by default, to confirm). Critical (BIA) or growing clusters move with review.
 - **v2** is tagged `v2` (2026-11-25). **v3** is the same model, scripts and variables with other defaults
   (`aa_v2_model.PRESETS["v3"]`, chosen with `--criteria v3` on the workbook and deck scripts; files end in `_v3`):
   - `sizing_basis` BUSIEST_HOUR;

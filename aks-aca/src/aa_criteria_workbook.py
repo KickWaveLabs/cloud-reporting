@@ -61,9 +61,10 @@ USD, PEN, PCT = '"$"#,##0.00', '"S/ "#,##0', "0%"
 CLUSTER_COLUMNS = ["cluster", "cod_app", "clusters_of_app", "bia", "microservices", "microservices_app",
                    "microservices_app_projected", "microservices_over_aca_size", "traffic_status", "traffic_layer",
                    "requests_month", "busiest_hour_tps", "peak_tps", "event_driven", "cost_month_usd",
-                   "no_traffic_reason"]
+                   "no_traffic_reason", "replicas_today_total", "replicas_today_constancy"]
 CLUSTER_NUMBERS = {"clusters_of_app", "microservices", "microservices_app", "microservices_app_projected",
-                   "microservices_over_aca_size", "requests_month", "busiest_hour_tps", "peak_tps", "cost_month_usd"}
+                   "microservices_over_aca_size", "requests_month", "busiest_hour_tps", "peak_tps", "cost_month_usd",
+                   "replicas_today_total", "replicas_today_constancy"}
 TRAFFIC_COLUMNS = ["scope", "scope_type", "day_type", "hour", "office", "days", "tps_min", "tps_avg", "tps_max_hour",
                    "tps_peak", "replicas_today_avg", "replicas_today_max", "off_5min_min", "off_5min_avg", "tps_per_replica_today"] + \
     model.BUSIEST_COLUMNS
@@ -111,7 +112,14 @@ def write_variables(book, sheet, month, days, price_env_hour):
         ("Criteria", [("max_tps", model.DEFAULTS["max_tps"], "Busiest hour up to this TPS (average of the hour)"),
                       ("max_services", model.DEFAULTS["max_services"], "Up to this many \"micro\"-services per cluster"),
                       ("aks_from_bia", model.DEFAULTS["aks_from_bia"],
-                       "Clusters with this BIA or above stay on AKS (MUY ALTA > ALTA > MEDIA > BAJA); NONE: no cluster")]),
+                       "Clusters with this BIA or above stay on AKS (MUY ALTA > ALTA > MEDIA > BAJA); NONE: no cluster"),
+                      ("max_replicas_today", model.DEFAULTS["max_replicas_today"],
+                       "Clusters running this many replicas or more today (all \"micro\"-services)..."),
+                      ("min_replicas_constancy", model.DEFAULTS["min_replicas_constancy"],
+                       "...and constant (lowest hour / highest hour at least this) stay on AKS"),
+                      ("shared_apps", model.DEFAULTS["shared_apps"],
+                       "Shared applications (authentication and the like, comma-separated) stay on AKS, as does "
+                       "every cluster whose traffic is on the Core layer")]),
         ("Saving filter (applied at the end, not a criterion)",
          [("min_saving", model.DEFAULTS["min_saving"], "A cluster that meets the criteria moves only if it saves at "
                                                         "least this share of its AKS cost")]),
@@ -165,7 +173,8 @@ def write_variables(book, sheet, month, days, price_env_hour):
             sheet.cell(row=row, column=1, value=label)
             cell = sheet.cell(row=row, column=2, value=value)
             cell.fill = EDITABLE
-            if label in ("bank_discount", "igv", "min_saving", "traffic_share", "capacity_safety"):
+            if label in ("bank_discount", "igv", "min_saving", "traffic_share", "capacity_safety",
+                         "min_replicas_constancy"):
                 cell.number_format = PCT
             sheet.cell(row=row, column=3, value=comment)
             if label in SOURCES:
@@ -494,10 +503,14 @@ def criteria_formulas():
         ("critical", f'IF(OR({c("bia")}="MUY ALTA",{c("bia")}="ALTA"),"YES","NO")'),
         ("growing", f'IF(AND(ISNUMBER({c("microservices_app_projected")}),N({c("microservices_app_projected")})>'
                     f'max_services,N({c("microservices_app")})<=max_services),"YES","NO")'),
-        ("app_over_15", f'IF(N({c("microservices_app")})>max_services,"YES","NO")'),
+        ("replicas_ok", f'IF(AND(ISNUMBER({c("replicas_today_total")}),N({c("replicas_today_total")})>='
+                        f'max_replicas_today,N({c("replicas_today_constancy")})>=min_replicas_constancy),"NO","YES")'),
+        ("shared_ok", f'IF(OR({c("traffic_layer")}="CORE",ISNUMBER(SEARCH(","&{c("cod_app")}&",",","&'
+                      'SUBSTITUTE(shared_apps," ","")&","))),"NO","YES")'),
         ("decision", f'IF({c("has_traffic")}="NO","NO_TRAFFIC",IF(OR({c("event_driven")}="YES",{c("size_ok")}="NO",'
-                     f'{c("tps_ok")}="NO",{c("services_ok")}="NO",{c("bia_ok")}="NO"),"AKS",IF(OR({c("critical")}="YES",'
-                     f'{c("growing")}="YES",{c("app_over_15")}="YES"),"ACA_WITH_REVIEW","ACA")))'),
+                     f'{c("tps_ok")}="NO",{c("services_ok")}="NO",{c("bia_ok")}="NO",{c("replicas_ok")}="NO",'
+                     f'{c("shared_ok")}="NO"),"AKS",IF(OR({c("critical")}="YES",'
+                     f'{c("growing")}="YES"),"ACA_WITH_REVIEW","ACA")))'),
         ("replica_seconds", f'SUMIFS(Traffic[replica_seconds],Traffic[scope],{c("cluster")},Traffic[scope_type],'
                             '"CLUSTER")'),
         ("usd_per_second", service_cost(f'Services[cluster]={c("cluster")}')),
@@ -640,7 +653,9 @@ def write_top_costs(book, sheet, applications, everything):
            f'"Event-driven",IF({flag("size_ok", "NO")},"A ""micro""-service over 4 vCPU / 8 GiB",'
            f'IF({flag("tps_ok", "NO")},"Busiest hour over max_tps",IF({flag("services_ok", "NO")},'
            f'"Over max_services ""micro""-services",IF({flag("bia_ok", "NO")},"BIA "&aks_from_bia&" or above",'
-           f'IF({flag("group", "BELOW_MARGIN")},"Saves less than min_saving","")))))))')
+           f'IF({flag("replicas_ok", "NO")},"Many constant replicas today",IF({flag("shared_ok", "NO")},'
+           f'"Shared: authentication or core",'
+           f'IF({flag("group", "BELOW_MARGIN")},"Saves less than min_saving","")))))))))')
     left_formulas = [rank, get("cluster"), get("cod_app"), get("bia"), get("aks_month_pen"),
                      f'IF({meets},{get("saving_share")},"-")', get("group"), why]
     formula_table(sheet, "TopApplications", [(header, shown(value)) for header, value in zip(left, left_formulas)],

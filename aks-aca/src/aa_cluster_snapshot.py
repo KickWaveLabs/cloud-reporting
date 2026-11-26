@@ -40,7 +40,9 @@ Outputs (in --output-dir, results/aa-cluster-snapshot by default):
                                application), traffic layer and figures, cost, the inputs of every v2 criterion, and
                                exact_replica_seconds: replica-seconds per "micro"-service Container Apps would run
                                replaying every 5-minute bucket of the month with the model's default variables (a
-                               reference for how conservative each sizing is; it does not follow the workbook)
+                               reference for how conservative each sizing is; it does not follow the workbook);
+                               replicas_today_total (replicas of all its "micro"-services today on AKS, average over
+                               the hours) and replicas_today_constancy (its lowest hour over its highest, 1 = constant)
   traffic_hourly_profile.csv   scope x day type x hour, as above
   api_cluster_map.csv          PROD AKS API -> cluster and how it was attributed
   cluster_snapshot_summary.json
@@ -116,6 +118,16 @@ def choose_layer(requests_by_layer):
 
 BUCKETS = 12  # 5-minute buckets in an hour
 BUSIEST_COLUMNS = [f"busiest_hour_5min_{minute:02d}" for minute in range(0, 60, 5)]
+
+
+def replica_figures(slots, microservices):
+    """Total replicas today (average per "micro"-service x "micro"-services, averaged over the hours) and how
+    constant they are (lowest hour / highest hour)."""
+    values = [average for average, _ in slots.values()]
+    if not values or not max(values):
+        return {"replicas_today_total": "", "replicas_today_constancy": ""}
+    return {"replicas_today_total": round(sum(values) / len(values) * microservices, 1),
+            "replicas_today_constancy": round(min(values) / max(values), 3)}
 
 
 def exact_replica_seconds(month, series, variables):
@@ -347,6 +359,7 @@ def main():
             "event_driven": "YES" if aa.event_driven(layer) else "NO",
             "cost_month_usd": round(cost.get(cluster_id, 0), 2), "month": cost_month,
             "no_traffic_reason": reason,
+            **replica_figures(replicas_today.get(cluster_id, {}), int(snap.to_float(row["microservices"]) or 0)),
             "exact_replica_seconds": exact_replica_seconds(month, series.get(cluster_id, {}), model.DEFAULTS)
             if layer else ""})
     output = azure.Output(args.output_dir, ",")

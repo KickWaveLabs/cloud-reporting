@@ -36,7 +36,7 @@ MICRO, MICRO_ONE = v1.MICRO, v1.MICRO_ONE
 GROUPS = {
     "AKS": ("Se queda en AKS", "No cumple una condición o una regla de AKS", d.NAVY),
     "BELOW_MARGIN": ("Cumple, pero ahorra poco", "Ahorra menos del margen: se queda en AKS", d.STEEL),
-    "ACA_WITH_REVIEW": ("Container Apps, con revisión", "Crítica, crece o su aplicación pasa de 15", d.ORANGE),
+    "ACA_WITH_REVIEW": ("Container Apps, con revisión", "Crítica o crece", d.ORANGE),
     "ACA": ("Candidato a Container Apps", "Cumple todo y ahorra", d.GREEN),
     "IN_USE": ("En uso, sin medición", "Tiene uso, pero su tráfico no se ve", d.SOFT),
     "NOT_IN_USE": ("Sin uso", "Por revisar", d.GREY),
@@ -110,8 +110,7 @@ def slide_criteria(deck, source):
     slide = d.base_slide(deck, "Para pasar a Container Apps: dos condiciones por cluster", source)
     width, height, gap = Inches(5.9), Inches(1.2), Inches(0.3)
     for index, (title, meaning) in enumerate((("Hasta 100 TPS", "En su hora más cargada del día (promedio de la hora)."),
-                                              (f"Hasta 15 {MICRO}", "En el cluster. Si su aplicación tiene más, se "
-                                                                    "revisa."))):
+                                              (f"Hasta 15 {MICRO}", "En el cluster."))):
         v1.condition_card(slide, Inches(0.6) + index * (width + gap), Inches(1.3), width, height, str(index + 1), d.GREEN,
                           title, meaning)
     v1.condition_card(slide, Inches(0.6), Inches(2.7), Inches(12.1), Inches(1.2), "3", v1.YELLOW,
@@ -121,14 +120,16 @@ def slide_criteria(deck, source):
     d.text_box(slide, Inches(0.85), Inches(4.2), Inches(5.5), Inches(0.4), "Siempre se queda en AKS si:", size=15,
                bold=True, color=d.NAVY)
     d.text_box(slide, Inches(0.85), Inches(4.6), Inches(5.5), Inches(0.9),
-               ["• Solo consume eventos (Event Hubs, Service Bus).", f"• Un {MICRO_ONE} pide más de 4 vCPU u 8 GB."],
-               size=13, color=d.GREY)
+               ["• Solo consume eventos (Event Hubs, Service Bus).", f"• Un {MICRO_ONE} pide más de 4 vCPU u 8 GB.",
+                f"• Corre hoy {model.DEFAULTS['max_replicas_today']} réplicas o más, constantes todo el día.",
+                "• Es compartida por varias aplicaciones: autenticación o Core."],
+               size=12, color=d.GREY)
     v1.box(slide, Inches(6.8), Inches(4.1), Inches(5.9), Inches(1.5), d.LIGHT)
     d.text_box(slide, Inches(7.05), Inches(4.2), Inches(5.5), Inches(0.4), "Antes de mover, se valida:", size=15,
                bold=True, color=d.ORANGE)
     d.text_box(slide, Inches(7.05), Inches(4.6), Inches(5.5), Inches(0.9),
-               ["• Si es crítica (BIA alta o muy alta).", f"• Si crece o su aplicación pasa de 15 {MICRO}."], size=13,
-               color=d.GREY)
+               ["• Si es crítica (BIA alta o muy alta).", f"• Si crece con lo que está en desarrollo y pasaría de 15 "
+                                                          f"{MICRO}."], size=12, color=d.GREY)
     d.text_box(slide, Inches(0.6), Inches(5.85), Inches(12.1), Inches(0.4),
                f"Al final, un cluster pasa solo si ahorra al menos {d.percent(model.DEFAULTS['min_saving'])} de lo que "
                "cuesta hoy en AKS.", size=14, bold=True, color=d.NAVY)
@@ -218,8 +219,7 @@ def slide_cost(deck, rows, source):
                f"ahorran menos de {d.percent(model.DEFAULTS['min_saving'])} se quedan en AKS. "
                + ("Incluye el tamaño de cada réplica según su uso real. " if CRITERIA["name"] == "v3" else "")
                + ("Incluye el cargo por entorno con endpoint privado. "
-                  if model.DEFAULTS["environment_fee"] == "YES" else "")
-               + f"Detalle por cluster en el Excel de criterios {CRITERIA['name']}.", size=11)
+                  if model.DEFAULTS["environment_fee"] == "YES" else ""), size=11)
     d.note_box(slide, Inches(0.6), Inches(5.75), Inches(12.1), Inches(0.6),
                "Beneficio adicional sin monto: menos clusters que actualizar y mantener (horas-hombre de los equipos).",
                size=11)
