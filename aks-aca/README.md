@@ -98,6 +98,8 @@ python aks-aca/src/aa_workbook.py
 python aks-aca/src/aa_deck.py        # after opening the workbook in Excel and saving it
 python aks-aca/src/aa_criteria_workbook.py   # --criteria v1 | v2 (default) | v3; v2 and v3 after aa_cluster_snapshot.py
 python aks-aca/src/aa_deck_exec.py           # --criteria v1 | v2 (default) | v3
+python aks-aca/src/aa_rightsizing.py         # right-sizing workbook, after aa_cluster_snapshot.py
+python aks-aca/src/aa_deck_rightsizing.py    # right-sizing deck (Spanish)
 ```
 
 | Step | Scope by default | Time on 2026-11-10 | Check |
@@ -278,6 +280,19 @@ Container Insights; one stopped PROD cluster without metrics.
   Every switch can be turned on or off in either workbook's Variables. `environment_fee` (the Dedicated plan
   management hour per environment, charged with a private endpoint or planned maintenance) is off in both until a
   private endpoint is confirmed.
+
+### Right-sizing
+
+The criteria compare Container Apps with AKS as it is used today. One vCPU of a reserved AKS node costs about a
+quarter of a Container Apps vCPU (`Breakeven` sheet: Container Apps wins only if a vCPU is on less than ~6 hours a
+day), so a well-used AKS cluster stays cheaper and the saving comes from capacity paid and not used.
+`aa_rightsizing.py` writes `results/aa-rightsizing/cluster_rightsizing.csv` (one row per AKS cluster with cost in the
+month, any environment; PROD with CPU and memory used in office hours against allocatable, system pool, autoscaling
+and the criteria v2 Container Apps cost) and `aks_rightsizing.xlsx` (Summary by class, Pain points, Clusters,
+Breakeven, Variables; the cluster table is a Power Query connection to the CSV). Use = the busier of CPU and memory,
+average in office hours over allocatable; `optimized_use` 60% and `partly_use` 30% are editable.
+`aa_deck_rightsizing.py` builds `aks_rightsizing.pptx` (five slides in Spanish) from the same figures. Pain points
+overlap: each row stands alone.
 
 ## Tracing a figure
 
