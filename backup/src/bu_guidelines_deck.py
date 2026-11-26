@@ -4,20 +4,17 @@
 Slides:
   1. Guidelines, platform-neutral (cloud or on-premise, any database engine, servers and file shares): the base
      short- and long-term rule, and where it changes by the data a system holds
-  2. What gets a backup, by layer of the application stack (as in the bank's log retention best practice), and
-     how snapshots are kept: short-lived, with an expiry, never as long-term retention
-  3. How the rule applies in Azure: PITR and LTR in plain words, the rule per Azure service and the Azure setup
-     for each regulated scope
-  4. Worked example: what one regulated production database would pay for backup under the base rule and under
-     each regulated scope, per month and cumulative over 1, 5 and 10 years
-  5. Price per TB-month in Central US for LRS and ZRS backups, net of the bank's discount, against the vendors
-  6. References: the regulation behind slide 1, the examples each norm gives and the minimum time it asks to
+  2. Decision tree (docs/diagrams/backup-decision-tree.drawio, exported to PNG) that gives each application a
+     backup plan code, P0 to P4, and what each plan keeps
+  3. How the base plan is configured in Azure (VM, SQL Database, Cosmos DB) and how VM snapshots are kept
+  4. Price per TB-month in Central US for LRS and ZRS backups, net of the bank's discount, against the vendors
+  5. References: the regulation behind slide 1, the examples each norm gives and the minimum time it asks to
      keep the data
      (Microsoft and pricing sources are in docs/)
 
 Prices come from the public Azure Retail Prices API (no sign-in, no subscription data). Retention limits and
 regulatory articles are fixed in this file, checked against the official texts in November 2026. The regulation
-is listed on slide 6; every Microsoft and pricing source is in docs/guidelines-references.md. Vendor tariffs are
+is listed on slide 5; every Microsoft and pricing source is in docs/guidelines-references.md. Vendor tariffs are
 the ones quoted in the backup guidelines review (unit to be confirmed).
 
 Usage:
@@ -49,7 +46,7 @@ GB_PER_TB = 1024
 
 # Vendor tariffs in US$ per TB-month, as quoted. The unit (protected or stored TB) is still to be confirmed.
 VENDORS = [("D3", 56.01, 7.92), ("Opción 1", 49.90, 12.84)]
-# The bank's discount on Azure list prices, applied to every Azure price on slides 4 and 5 (vendors quote net prices).
+# The bank's discount on Azure list prices, applied to every Azure price on slide 4 (vendors quote net prices).
 DISCOUNT = 0.30
 
 # (key, serviceName, productName, meterName) of every meter the deck prices. The deck shows LRS and ZRS only;
@@ -101,27 +98,6 @@ METERS = [
 # Protected instance fees are charged per block of source data (Azure Backup pricing page).
 INSTANCE_BLOCK_GB = {"vm_instance": 500, "pg_instance": 250, "cosmos_instance": 500}
 
-# Worked example on slide 4: one real production database that holds regulated data. Picked by its application
-# description (interbank transfers are an example the SBS 2660-2015 art. 49 gives for the operations register).
-# Used size: Azure Monitor metric "storage", 2026-11-15. Billable PITR: the database's "Backup - RA-GRS Data Stored"
-# GB-month on the October 2026 bill (the volume does not depend on the redundancy). On that bill each LTR copy weighs
-# about the whole database (Hyperscale copies are snapshots), so the example prices one copy at the used size.
-EXAMPLE = {
-    "app": "TTIB · Transferencias Interbancarias",
-    "engine": "Azure SQL Database Hyperscale",
-    "region": "eastus2", "region_label": "East US 2",
-    "used_gb": 2435, "pitr_billable_gb": 5166,
-    "pitr_key": "hs_pitr_zrs", "ltr_key": "hs_ltr_zrs",
-}
-# (label, rule, weekly copies kept, monthly copies kept, yearly copies kept). The base rule is what the database
-# already keeps when the example starts.
-EXAMPLE_SCENARIOS = [
-    ("Lineamiento base\n(cualquier otro dato)", "4 semanales + 12 mensuales", 4, 12, 0),
-    ("Libros, KYC (si la app borra) y LBTR", "Base + 1 anual por 10 años", 4, 12, 10),
-    ("Registro de operaciones", "4 semanales + 60 mensuales (5 años)", 4, 60, 0),
-    ("Registro de operaciones,\nsi la app borra antes de 10 años", "60 mensuales + 1 anual por 10 años", 4, 60, 10),
-]
-EXAMPLE_YEARS = (1, 5, 10)
 
 # Palette of the team's deck: royal blue header ending in a rust tip, navy cards.
 NAVY = RGBColor(0x1E, 0x3A, 0x78)
@@ -468,84 +444,59 @@ def slide_guidelines(deck):
         "lineamiento los fija.")
 
 
+TREE_PNG = os.path.join(TOPIC_DIR, "docs", "diagrams", "backup-decision-tree.png")
+# Backup plans that the decision tree assigns. (code, name, short term, long term, also, fill). The rules come from
+# slide 1; the tree itself lives in docs/diagrams/backup-decision-tree.drawio and is exported to PNG.
+PLANS = [
+    ("P0", "Sin backup", "–", "–", "No guarda datos: se reinstala. Los logs tienen su propio plazo", GREY),
+    ("PN", "No productivo", "7 días", "–", "–", SOFT),
+    ("P1", "Base", "7 días", "4 semanales + 12 mensuales", "–", NAVY),
+    ("P2", "Base + 10 años", "7 días", "Base + 1 anual por 10 años",
+     "Solo si la aplicación borra libros, KYC u operaciones inusuales antes de 10 años", RUST),
+    ("P3", "Registro de operaciones", "7 días", "Base + 1 por trimestre por 5 años (20 copias)",
+     "Copia inmutable. Si la aplicación borra el dato antes de 10 años: + 1 anual por 10 años", RUST),
+    ("P4", "LBTR", "7 días", "Base + 1 anual por 10 años", "Prueba de restauración 1 vez al año, documentada", RUST),
+]
+
+
 def slide_layers(deck):
-    """Which layer of the application stack gets a backup, and how snapshots are kept. Platform-neutral, like
-    slide 1; the layers follow the bank's log retention best practice (Confluence, 2024)."""
-    slide = base_slide(deck, "Qué se respalda y cómo se usan los snapshots",
-                       "Fuente: Best-practices para la gestión de tiempos de retención de logs (2024); Microsoft "
-                       "Learn: Instant Restore y snapshots incrementales (revisado nov-2026).")
-
-    # Left: the decision is taken per application, by its type (the same types as the log best practice), and
-    # inside the application only the layer that holds data gets a backup.
-    left, width = Inches(0.35), Inches(6.7)
-    section_bar(slide, left, Inches(1.08), width, "Granularidad: cada aplicación se respalda según lo que guarda", NAVY)
-    action = {"left": True, "size": 8.5}
-    no = {"left": True, "size": 8.5, "color": RUST}
-    rows = [
-        ["Canal e integración", "Homebanking, Banca Móvil, Yape; APIs, middleware", "No guardan datos: pasan la operación a otro sistema",
-         ("No: si fallan, se reinstalan. El rastro de cada operación queda en los logs", no)],
-        ["Servicios de negocio (BS)", "Servicios que ejecutan la operación del negocio", "Datos de negocio en su base",
-         ("Sí: mínimo la regla base; más la regulada si guarda datos que pide una norma (lámina 1)", action)],
-        ["Core y mainframe", "Cuentas, operaciones, contabilidad", "El resultado: saldos y movimientos",
-         ("Sí: mínimo la regla base; más la regulada si aplica (lámina 1)", action)],
-        ["Backoffice", "Contratos, libros contables, pedidos", "Documentos y registros internos",
-         ("Sí, su base o archivos: mínimo la regla base; más la regulada si aplica", action)],
-        ["Infraestructura y software base", "Servidores, sistemas operativos, red", "Configuración y métricas",
-         ("Si guarda datos: mínimo la regla base. Si no, se reinstala", action)],
-        ["Plataformas de seguridad", "SIEM, EDR, DLP", "Eventos y auditoría",
-         ("No: son logs y tienen su propio plazo", no)],
-    ]
-    grid = table(slide, left, Inches(1.55), width, ["Tipo de aplicación", "Ejemplos", "Qué guarda", "¿Backup?"],
-                 rows, [0.21, 0.23, 0.23, 0.33], row_height=0.62, size=8.5)
-    grid.rows[0].height = Inches(0.36)
-    note_box(slide, left, Inches(5.68), width, Inches(1.25), [
-        [("Se respalda donde queda guardado el dato, no por donde pasa. ", True, NAVY),
-         ("El canal solo pasa la operación; el resultado queda en la base de BS, Core o mainframe, y ahí va el "
-          "backup. Los logs son otra cosa: tienen su propio plazo.", False, GREY)]], size=9)
-
-    divider(slide, Inches(7.25), Inches(1.08), Inches(5.85))
-
-    # Right: snapshots are the fast, short-lived copy; the backup holds everything else.
-    left, width = Inches(7.45), Inches(5.53)
-    section_bar(slide, left, Inches(1.08), width, "Snapshots: foto rápida del disco, no reemplaza al backup", NAVY)
-    rows = [
-        ["Recuperar rápido", "2 días", ("Vuelve en minutos; para días anteriores se usa el backup", action)],
-        ["Antes de un cambio", "Hasta 7 días\ndespués", ("Siempre con fecha de borrado y un responsable", action)],
-        ["Si el servidor se elimina", "Se borran", ("Si guarda datos regulados, primero pasan al backup", action)],
-        ["Guardar meses o años", "No", ("Para eso está el backup", no)],
-    ]
-    grid = table(slide, left, Inches(1.55), width, ["Para qué", "Cuánto se guarda", "Regla"], rows,
-                 [0.33, 0.22, 0.45], row_height=0.74, size=9)
-    grid.rows[0].height = Inches(0.4)
-    note_box(slide, left, Inches(4.95), width, Inches(1.98), [
-        [("Se acumulan y se pagan cada mes: ", True, NAVY),
-         ("cada snapshot guarda lo que cambió desde el anterior. Uno olvidado se sigue pagando aunque el servidor "
-          "ya no exista.", False, GREY)],
-        [("", False, GREY)],
-        [("Mismo ciclo que los logs: ", True, NAVY),
-         ("snapshot unos días (rápido, caro) → backup meses → archivo años (barato) → se borra.", False, GREY)]],
-             size=9.5)
+    """Decision tree that gives each application its backup plan, and what each plan keeps."""
+    slide = base_slide(deck, "Qué plan de backup le toca a cada aplicación",
+                       "El árbol aplica la lámina 1. Fuente del árbol: docs/diagrams/backup-decision-tree.drawio.")
+    width = Inches(12.63)
+    picture = slide.shapes.add_picture(TREE_PNG, Inches(0.35), Inches(1.05), width=width)
+    top = picture.top + picture.height + Inches(0.15)
+    rows = []
+    for code, name, short, long_term, also, fill in PLANS:
+        text = NAVY if fill == SOFT else WHITE
+        rows.append([(code, {"fill": fill, "color": text, "bold": True}), (name, {"bold": True, "color": NAVY}),
+                     short, long_term, (also, {"left": True, "size": 8.5})])
+    grid = table(slide, Inches(0.35), top, width, ["Código", "Plan", "Corto plazo", "Largo plazo", "Además"], rows,
+                 [0.07, 0.17, 0.1, 0.28, 0.38], row_height=0.36, size=9)
+    grid.rows[0].height = Inches(0.3)
+    text_box(slide, Inches(0.35), Inches(6.72), width, Inches(0.3), [[
+        ("Si aplica más de una respuesta, se toma el plan más alto (P4 > P3 > P2 > P1). ", True, NAVY),
+        ("El dato regulado suele estar en las bases de BS, Core o mainframe.", False, GREY)]], size=9)
     slide.notes_slide.notes_text_frame.text = (
-        "Granularidad: el mismo criterio que el best practice de retención de logs, que fija la retención por tipo "
-        "de aplicación (canal, backoffice, infraestructura y software base, plataformas de integración, plataformas de "
-        "seguridad). La decisión se toma por aplicación y todos sus recursos la heredan. El ámbito regulado lo define lo que guarda la base de datos, no lo que la aplicación procesa: el canal solo orquesta y no guarda datos: la traza de cada transacción queda en los logs (retención de logs: hot 1 año, archive hasta 10) y el resultado (saldos, movimientos) queda en la base de los servicios de negocio (BS), Core o mainframe; ahí va el backup regulado. Auditoría dentro de una base (tablas de auditoría de la aplicación): es dato de la base y viaja en su backup con la regla base; la conservación que exige el lineamiento de registros de auditoría se cumple enviándola al repositorio de logs, no alargando el backup. La auditoría propia del motor (por ejemplo, SQL Auditing hacia Storage o Log Analytics) es log, no backup. Dentro de la aplicación se "
-        "respalda la capa que guarda el dato: las bases de datos de canales y backoffice, y los servidores o "
-        "archivos que tengan datos propios. Las capas sin estado (contenedores, App Service, APIs, plataformas de "
-        "integración, que no guardan datos en reposo) se recuperan desplegando de nuevo desde el código, la imagen y "
-        "la plantilla de infraestructura; respaldarlas duplica copias sin agregar recuperación. Logs, métricas y "
-        "eventos de seguridad no son backup: su retención (hot y archive) la fija el best practice de logs. "
-        "Snapshots: en Azure Backup para VMs, la restauración instantánea guarda snapshots de 1 a 5 días con la "
-        "política Standard (2 por defecto) y de 1 a 30 con la Enhanced (7 por defecto). Con Enhanced el primer "
-        "snapshot es una copia completa del disco y los siguientes guardan solo los cambios, así que cada día extra "
-        "suma el cambio diario del disco (normalmente 2% a 7%). Los snapshots incrementales se cobran por el espacio "
-        "usado. Un snapshot manual sin vencimiento se paga hasta que alguien lo borra, aunque el disco ya no exista.")
+        "El árbol se recorre por aplicación y da un código de plan. Primero: si la aplicación no guarda datos propios "
+        "(canal e integración solo pasan la operación; las plataformas de seguridad guardan logs), no lleva backup: "
+        "se reinstala, y la traza de cada operación queda en los logs con su propia retención. Las bases que guardan "
+        "datos regulados suelen estar en los servicios de negocio (BS), Core o mainframe. "
+        "Ambientes no productivos: solo corto plazo. En producción, el plan depende del dato que guarda la base: "
+        "LBTR (Circular BCRP 0011-2026), registro de operaciones (Res. SBS 2660-2015 arts. 49 y 54), libros "
+        "contables, KYC u operaciones inusuales (Ley 26702 art. 183; Res. SBS 2660-2015 arts. 55 y 58), o cualquier "
+        "otro dato (plan base). Si aplica más de una respuesta, se toma el plan más alto. "
+        "La ley pide conservar libros, KYC e inusuales 10 años: si la aplicación ya los guarda ese tiempo, basta el "
+        "plan base; si los borra antes, el backup anual por 10 años los cubre. "
+        "El LSEG_008 no fija plazos de retención; este árbol los fija por aplicación.")
+
 
 
 def slide_azure(deck):
-    """How the platform-neutral rule maps to each Azure service, with PITR and LTR explained in plain words."""
-    slide = base_slide(deck, "Cómo se aplica en Azure",
-                       "Fuente: Microsoft Learn (revisado nov-2026): retención, redundancia y tiempos de restauración de "
-                       "cada servicio.")
+    """How the base rule is configured in each Azure service, and how VM snapshots of Azure Backup are kept."""
+    slide = base_slide(deck, "Cómo se configura en Azure",
+                       "Fuente: Microsoft Learn (revisado nov-2026): retención, snapshots, redundancia y tiempos de "
+                       "restauración de cada servicio.")
 
     terms = [
         ("PITR = recuperación a un punto en el tiempo",
@@ -555,8 +506,7 @@ def slide_azure(deck):
          "Copias completas que Azure guarda aparte de la base: semanales, mensuales o anuales, hasta 10 años. "
          "Es el largo plazo."),
         ("Bóveda (vault) de Azure Backup",
-         "Donde se guardan las copias de VMs, Files, PostgreSQL y Cosmos DB. Inmutable: nadie la borra antes "
-         "de su vencimiento."),
+         "Donde se guardan las copias de VMs y Cosmos DB. Inmutable: nadie la borra antes de su vencimiento."),
     ]
     for index, (title, text) in enumerate(terms):
         left = Inches(0.35 + index * 4.25)
@@ -565,62 +515,59 @@ def slide_azure(deck):
                  [[(title, True, ORANGE)], [(text, False, WHITE)]], size=9, anchor=MSO_ANCHOR.MIDDLE)
 
     # Left: the base rule per Azure service.
-    left, width = Inches(0.35), Inches(6.35)
-    section_bar(slide, left, Inches(2.2), width, "Lineamiento base por servicio (todo PROD)", NAVY)
+    left, width = Inches(0.35), Inches(6.7)
+    section_bar(slide, left, Inches(2.2), width, "Plan base por servicio (P1)", NAVY)
     rows = [
-        ["Azure Backup: VM y Files", "1 diario, se guardan 7", "4 semanales, 12 mensuales (bóveda)"],
+        ["Azure Backup: VM", "1 diario, se guardan 7", "4 semanales, 12 mensuales (bóveda)"],
         ["Azure SQL Database", "PITR 7 días", "LTR: 4 semanales, 12 mensuales"],
-        ["Azure SQL Managed Instance", "PITR 7 días", "LTR: 4 semanales, 12 mensuales"],
-        ["PostgreSQL Flexible", "PITR 7 días", "4 semanales, 12 mensuales (bóveda)"],
-        ["MySQL Flexible", "PITR 7 días", "Sin largo plazo (Microsoft lo pausó)"],
         ["Cosmos DB", "Continuo 7 días (sin costo)", "4 semanales, 12 mensuales (bóveda)"],
     ]
     grid = table(slide, left, Inches(2.65), width, ["Servicio", "Corto plazo", "Largo plazo"], rows,
-                 [0.36, 0.26, 0.38], row_height=0.48, size=9)
+                 [0.32, 0.3, 0.38], row_height=0.62, size=9.5)
     grid.rows[0].height = Inches(0.36)
+    text_box(slide, left, Inches(4.95), width, Inches(0.5), [[
+        ("Los otros planes ", True, NAVY),
+        ("(P2 a P4) agregan copias de largo plazo en el mismo LTR o bóveda: anuales por 10 años o mensuales por 5 "
+         "años.", False, GREY)]], size=9)
 
-    # Right: what the regulated scopes of slide 1 mean in Azure.
-    left, width = Inches(6.9), Inches(6.08)
-    section_bar(slide, left, Inches(2.2), width, "Ámbitos regulados: cómo se configura", RUST)
-    action = {"left": True, "size": 8.5}
-    scopes = [
-        ["Libros, KYC e inusuales\n(si la aplicación borra antes)",
-         ("• SQL: LTR anual guardado 10 años\n• VM: punto anual en la bóveda, pasado a Archive", action)],
-        ["Registro de operaciones\n(copia trimestral, 5 años)",
-         ("• SQL LTR no tiene frecuencia trimestral: 60 mensuales cubren los 5 años\n"
-          "• Alternativa: copia trimestral a Archive inmutable (solo las 20 copias)", action)],
-        ["Sistemas del LBTR\n(respaldos 10 años)",
-         ("• LTR anual guardado 10 años\n• Restauración de prueba anual, documentada", action)],
-        ["MySQL Flexible", ("• Sin LTR: export (mysqldump) a Blob inmutable si un ámbito lo exige", action)],
+    divider(slide, Inches(7.25), Inches(2.2), Inches(3.75))
+
+    # Right: VM snapshots that Azure Backup creates; the only snapshots this guideline covers.
+    left, width = Inches(7.45), Inches(5.53)
+    section_bar(slide, left, Inches(2.2), width, "Snapshots de VM (Azure Backup)", NAVY)
+    action = {"left": True, "size": 9}
+    rows = [
+        ["Recuperar rápido", "2 días", ("Vuelve en minutos; para días anteriores se usa la bóveda", action)],
+        ["Antes de un cambio", "Hasta 7 días\ndespués", ("Siempre con fecha de borrado y un responsable", action)],
     ]
-    grid = table(slide, left, Inches(2.65), width, ["Ámbito", "En Azure"], scopes, [0.36, 0.64],
-                 row_height=0.74, size=9, header_fill=RUST_DARK)
+    grid = table(slide, left, Inches(2.65), width, ["Para qué", "Cuánto se guarda", "Regla"], rows,
+                 [0.3, 0.22, 0.48], row_height=0.62, size=9.5)
     grid.rows[0].height = Inches(0.36)
+    text_box(slide, left, Inches(4.35), width, Inches(0.9), [[
+        ("Se pagan cada mes: ", True, NAVY),
+        ("cada snapshot guarda lo que cambió desde el anterior. Más días de snapshot cuestan más y no reemplazan "
+         "la copia de la bóveda.", False, GREY)]], size=9)
 
     note_box(slide, Inches(0.35), Inches(6.12), Inches(12.63), Inches(0.82), [
         [("Redundancia del backup: ", True, NAVY),
          ("PROD: ZRS (copias en 3 zonas de la región). No productivo: LRS. Archive solo existe en bóvedas LRS.",
           False, GREY)],
         [("Tiempos: ", True, NAVY),
-         ("SQL restaura normalmente en < 12 h; Archive tarda hasta 15 h en rehidratar, dentro de las 48 h hábiles "
-          "que da la SBS. SQL Managed Instance no admite LTR inmutable.", False, GREY)]], size=9.5)
+         ("SQL restaura normalmente en < 12 h; Cosmos DB, 30 a 90 min por TB; Archive tarda hasta 15 h en "
+          "rehidratar, dentro de las 48 h hábiles que da la SBS.", False, GREY)]], size=9.5)
     slide.notes_slide.notes_text_frame.text = (
         "PITR (point-in-time restore): Azure toma backups completos, diferenciales y del log cada 5 a 10 minutos en "
-        "SQL (hasta 5 minutos en PostgreSQL y MySQL) y con eso restaura la base a cualquier minuto dentro de los "
-        "días de retención. Es el corto plazo del lineamiento. "
+        "SQL y con eso restaura la base a cualquier minuto dentro de los días de retención. Es el corto plazo. "
         "LTR (long-term retention): copias completas que se guardan aparte, con su propia retención (semanal, "
-        "mensual o anual, hasta 10 años). Es el largo plazo. "
-        "SQL LTR no tiene frecuencia trimestral: 60 mensuales cubren los 5 años guardando 60 copias; una copia "
-        "trimestral a Archive inmutable guarda solo las 20 que pide la norma. "
-        "Redundancia: LRS guarda 3 copias en un datacenter; ZRS, 3 copias en zonas distintas de la misma región. "
-        "En SQL, ZRS cuesta lo mismo que LRS. Las bóvedas ZRS no admiten Archive: el largo plazo en una bóveda ZRS "
-        "queda en la capa estándar. "
-        "Azure Backup cubre VMs y Azure Files (Recovery Services vault). El largo plazo de PostgreSQL y Cosmos DB va a "
-        "un Backup vault de Azure Backup, aparte de la base; su PITR nativo queda en el servicio. "
-        "MySQL Flexible: el largo plazo con Azure Backup está en pausa por Microsoft; si un ámbito lo exige, el export "
-        "(mysqldump) a Blob inmutable lo reemplaza. PostgreSQL: semanal, mensual o anual, máximo 1 TiB, restaura "
-        "como archivos. SQL Managed Instance no admite LTR inmutable. Archive: puntos mensuales y anuales con más de "
-        "6 meses; rehidratar toma hasta 15 h, menos que las 48 h hábiles de la SBS.")
+        "mensual o anual, hasta 10 años). Es el largo plazo. SQL LTR no tiene frecuencia trimestral: el plan P3 usa "
+        "60 mensuales para cubrir los 5 años. "
+        "Cosmos DB: continuo 7 días es gratis (solo se cobra restaurar); el largo plazo va a un Backup vault. Hoy 30 "
+        "de las 41 cuentas Cosmos de producción ya usan continuo 7 días y 11 siguen en periódico. "
+        "Snapshots de VM: Azure Backup guarda snapshots locales para restaurar rápido, de 1 a 5 días con la política "
+        "Standard (2 por defecto) y de 1 a 30 con la Enhanced (7 por defecto). Con Enhanced el primer snapshot es una "
+        "copia completa del disco y los siguientes guardan solo los cambios (normalmente 2% a 7% al día). "
+        "Redundancia: LRS guarda 3 copias en un datacenter; ZRS, 3 copias en zonas distintas de la misma región. En "
+        "SQL, ZRS cuesta lo mismo que LRS. Las bóvedas ZRS no admiten Archive.")
 
 
 def slide_prices(deck, tb, retrieved, discount):
@@ -645,37 +592,24 @@ def slide_prices(deck, tb, retrieved, discount):
                 (f"{amount(value)}  (según su servicio)", {"color": RUST, "bold": True, "span": 2}),
                 ("Según su política", {"size": 8}), (rto, small), ("Confirmar TB protegido o almacenado", small)]
 
-    sql_label = "SQL Database / Managed Instance"
-    sql_equal = all(prices[f"sqldb_{kind}"] == prices[f"sqlmi_{kind}"]
-                    for kind in ("pitr_lrs", "pitr_zrs", "ltr_lrs", "ltr_zrs"))
-    if not sql_equal:
-        raise SystemExit("SQL Database and SQL Managed Instance backup prices differ; split their rows.")
+    sql_label = "SQL Database"
     rows = [
         ["Corto plazo: recuperación operativa"],
         priced("Azure Backup · VM (bóveda)", ("vault_lrs", "vault_zrs"),
                "24 h (4 h Enhanced)", f"Snapshot: más rápido; bóveda: {vault_hours}",
                f"+ {usd(prices['vm_instance'])}/TB protegido"),
-        priced("Azure Backup · Files (bóveda)",
-               ("files_vault_lrs", "files_vault_zrs"),
-               "24 h (diario)", "Snapshot: archivos al instante", "+ instancia protegida"),
         priced(f"{sql_label} · PITR", ("sqldb_pitr_lrs", "sqldb_pitr_zrs"),
                "5 a 10 min", "Normalmente < 12 h", "Gratis hasta el tamaño de la base"),
-        priced("PostgreSQL / MySQL · PITR", ("pg_pitr", "mysql_pitr_zrs"),
-               "≤ 5 min", "Minutos a pocas horas", "Gratis hasta el tamaño del storage"),
-        priced("Cosmos DB · continuo 30 días", ("cosmos_30d", "cosmos_30d"), "~100 s",
-               "~30 a 90 min por TB", "Por región; la redundancia la fija la región"),
-        priced("Cosmos DB · periódico (copias extra)",
-               ("cosmos_periodic_lrs", "cosmos_periodic_zrs"),
-               "Según intervalo", "Sin cifra publicada", "2 copias gratis; se cobran las extra"),
+        ["Cosmos DB · continuo 7 días", ("Sin costo", {"span": 2, "color": GREEN, "bold": True}),
+         ("~100 s", {"size": 8}), ("~30 a 90 min por TB", small), ("Solo se cobra restaurar", small)],
         *[vendor(name, active, "Active", f"Restaurar + traer: {transfer}") for name, active, _ in VENDORS],
         ["Largo plazo: retención"],
         priced("Azure Backup · Archive (VM)", ("archive_lrs", None), "1 mes",
                f"Rehidratar ≤ 15 h + {vault_hours}", "Puntos > 6 meses; mínimo 180 días", best=True),
         priced(f"{sql_label} · LTR", ("sqldb_ltr_lrs", "sqldb_ltr_zrs"),
                "1 semana", "Normalmente < 12 h", "Solo backups completos"),
-        priced("PostgreSQL / Cosmos · Backup vault", ("vault_lrs", "vault_zrs"),
-               "1 sem. / 1 día", "Cosmos ~30 a 90 min/TB; PG: horas",
-               f"+ PG {usd(prices['pg_instance'])} · Cosmos {usd(prices['cosmos_instance'])}/TB protegido"),
+        priced("Cosmos DB · Backup vault", ("vault_lrs", "vault_zrs"),
+               "1 día", "~30 a 90 min por TB", f"+ {usd(prices['cosmos_instance'])}/TB protegido"),
         *[vendor(name, archive, "Archive", f"Su Archive + {transfer}") for name, _, archive in VENDORS],
     ]
 
@@ -719,18 +653,16 @@ def slide_prices(deck, tb, retrieved, discount):
         f"Precios de Azure en Central US: lista de la API menos {discount:.0%} de descuento del banco. East US 2 cuesta "
         "lo mismo en bóvedas y entre 14% y 23% menos en bases de datos. "
         "Cada precio por GB-mes se multiplica por 1.024. Las instancias protegidas se cobran por bloque de datos de "
-        "origen: VM US$10 por 500 GB, PostgreSQL US$7,5 por 250 GB, Cosmos DB US$25 por 500 GB (precio de lista). "
-        "Redundancia: solo LRS y ZRS, las que usa el banco. PostgreSQL Flexible publica un solo medidor de backup "
-        "(zonal en regiones con zonas), por eso LRS y ZRS valen lo mismo. Cosmos DB continuo usa la redundancia "
-        "de la región. Archive no admite bóvedas ZRS. "
-        "El PITR de SQL, PostgreSQL y MySQL solo cobra lo que excede el almacenamiento gratis. "
+        "origen: VM US$10 por 500 GB, Cosmos DB US$25 por 500 GB (precio de lista). "
+        "Redundancia: solo LRS y ZRS, las que usa el banco. Cosmos DB continuo 7 días no cobra almacenamiento de "
+        "backup, solo cada restauración. Archive no admite bóvedas ZRS. "
+        "El PITR de SQL solo cobra lo que excede el almacenamiento gratis (el tamaño de la base). "
         "Azure Backup guarda incrementales: los TB almacenados son menos que los TB protegidos. "
         f"RTO de VM desde la bóveda: Microsoft considera óptimos 30 MB/s y da el ejemplo de 2 TB en hasta 20 h; a "
         f"30 MB/s, 1 TB toma {vault_hours}. Cosmos DB: restaurar 1 TB toma típicamente 30 a 90 min (FAQ de "
         "restauración en la misma cuenta). "
-        "RPO y RTO: SQL Database y Managed Instance (log cada 5 a 10 min; restaurar normalmente toma menos de 12 h, "
-        "una base grande o muy activa puede tomar varias horas); PostgreSQL (RPO hasta 5 min; recuperar toma de "
-        "minutos a pocas horas); MySQL (log cada 5 min); Cosmos DB (cambios respaldados en 100 s); Archive "
+        "RPO y RTO: SQL Database (log cada 5 a 10 min; restaurar normalmente toma menos de 12 h, una base grande o "
+        "muy activa puede tomar varias horas); Cosmos DB (cambios respaldados en 100 s); Archive "
         "(rehidratar hasta 15 h en prioridad Standard, menos de 1 h en High para objetos menores a 10 GB). "
         f"Proveedores: el dato vuelve por la red; {transfer} es el mínimo teórico (1.024 GB x 8 bits / 1 Gbps), sin "
         "latencia ni protocolo, y el ancho de banda real del enlace del banco lo reduce o lo amplía. "
@@ -762,96 +694,6 @@ def ltr_copies_per_month(policy, months, base=(4, 12, 0)):
         count = sum(kept(policy, now, week) for week in existing + list(range(now + 1)))
         per_month[min(months - 1, math.floor(now / WEEKS_PER_MONTH))].append(count)
     return [sum(values) / len(values) for values in per_month]
-
-
-def example_costs(prices_gb):
-    """Monthly cost in years 1, 5 and 10 and the cumulative cost over 1, 5 and 10 years, per scenario."""
-    months = 12 * max(EXAMPLE_YEARS)
-    pitr = EXAMPLE["pitr_billable_gb"] * prices_gb[EXAMPLE["pitr_key"]]
-    results = []
-    for label, rule, weekly, monthly, yearly in EXAMPLE_SCENARIOS:
-        copies = ltr_copies_per_month((weekly, monthly, yearly), months)
-        cost = [count * EXAMPLE["used_gb"] * prices_gb[EXAMPLE["ltr_key"]] + pitr for count in copies]
-        results.append({"label": label, "rule": rule, "copies": round(copies[-1]),
-                        "monthly": [cost[12 * year - 1] for year in EXAMPLE_YEARS],
-                        "cumulative": [sum(cost[:12 * year]) for year in EXAMPLE_YEARS]})
-    return pitr, results
-
-
-def slide_example(deck, prices_gb, discount):
-    region = EXAMPLE["region"]
-    pitr, results = example_costs(prices_gb[region])
-    base, register = results[0], results[2]
-    tb = EXAMPLE["used_gb"] / GB_PER_TB
-    slide = base_slide(deck, "Ejemplo: costo del backup de una base regulada",
-                       f"Fuente: Azure Retail Prices API ({EXAMPLE['region_label']}, región de la base), precio de lista "
-                       f"menos {discount:.0%}; tamaño y volumen de PITR medidos en la base (nov-2026). Ámbito a validar "
-                       "con el dueño de la aplicación y Cumplimiento.")
-    note_box(slide, Inches(0.35), Inches(1.08), Inches(12.63), Inches(0.78), [
-        [("Base de ejemplo: ", True, NAVY),
-         (f"{EXAMPLE['app']} ({EXAMPLE['engine']}, {EXAMPLE['region_label']}), {amount(tb)} TB usados. "
-          "Las transferencias son un ejemplo que la SBS 2660-2015 da para el registro de operaciones.", False, GREY)],
-        [("Supuestos: ", True, NAVY),
-         (f"tamaño constante, redundancia ZRS, {discount:.0%} de descuento; cada copia de largo plazo pesa lo que la "
-          f"base. El corto plazo (PITR 7 días) cuesta {usd(pitr, 0)} al mes en todos los escenarios.", False, GREY)]],
-        size=9.5)
-
-    def money(value):
-        return usd(value, 0)
-
-    highlight = {"fill": RGBColor(0xF6, 0xE9, 0xE4)}
-    rows = []
-    for index, result in enumerate(results):
-        style = highlight if index == 2 else {}
-        rows.append([(result["label"], style), (result["rule"], {**style, "size": 8.5}),
-                     (str(result["copies"]), style),
-                     *[(money(value), style) for value in result["monthly"]],
-                     *[(money(value), {**style, "bold": True, "color": NAVY}) for value in result["cumulative"]]])
-    years = [f"año {year}" for year in EXAMPLE_YEARS]
-    header = ["Ámbito", "Qué se guarda", "Copias completas\n(año 10)",
-              *[f"Al mes,\n{label}" for label in years], *[f"Acumulado\n{year} año{'s' if year > 1 else ''}"
-                                                            for year in EXAMPLE_YEARS]]
-    grid = table(slide, Inches(0.35), Inches(2.0), Inches(12.63), header, rows,
-                 [0.19, 0.19, 0.09, 0.085, 0.085, 0.085, 0.09, 0.09, 0.095], row_height=0.6, size=9.5)
-    grid.rows[0].height = Inches(0.5)
-    text_box(slide, Inches(0.35), Inches(4.92), Inches(12.63), Inches(0.28), [[
-        ("Fila resaltada: ", True, RUST),
-        ("el ámbito que aplicaría a esta base. Acumulado = suma de lo que se paga mes a mes desde hoy, partiendo de "
-         "las copias que la base ya tiene con el lineamiento base.", False, GREY)]], size=8.5)
-
-    extra_10 = register["cumulative"][-1] - base["cumulative"][-1]
-    ratio = register["monthly"][-1] / base["monthly"][-1]
-    takeaways = [
-        ("Qué muestra", "El corto plazo cuesta lo mismo en todos los ámbitos. La diferencia es el largo plazo y "
-                        "crece cada año, a medida que se acumulan copias, hasta que vencen las más antiguas."),
-        ("¿Conviene?", f"El registro de operaciones cuesta {ratio:.0f} veces el base al mes ({money(extra_10)} más en "
-                       f"10 años): SQL no tiene copia trimestral y guarda {register['copies']} copias completas para "
-                       "cumplir 20. La copia anual por 10 años suma poco."),
-        ("Mejor estrategia", "Aplicar cada ámbito solo a la base que guarda ese dato. Para el registro: exportar cada "
-                             "trimestre solo sus tablas a almacenamiento inmutable y dejar la base en el lineamiento "
-                             "base."),
-    ]
-    for index, (title, text) in enumerate(takeaways):
-        left = Inches(0.35 + index * 4.25)
-        rounded(slide, left, Inches(5.3), Inches(4.13), Inches(1.6), CARD)
-        text_box(slide, left + Inches(0.12), Inches(5.3), Inches(3.89), Inches(1.6),
-                 [[(title, True, ORANGE)], [(text, False, WHITE)]], size=9.5, anchor=MSO_ANCHOR.MIDDLE)
-    slide.notes_slide.notes_text_frame.text = (
-        f"Base elegida por la descripción de su aplicación: {EXAMPLE['app']}. La SBS 2660-2015 art. 49 pone las "
-        "transferencias nacionales e internacionales como ejemplo del registro de operaciones; falta confirmar con el "
-        "dueño qué tablas guardan ese registro. "
-        f"Tamaño usado: {EXAMPLE['used_gb']:,} GB (métrica storage de Azure Monitor, 15-nov-2026); creció cerca de 1 TB "
-        "en el último año, así que con crecimiento el costo sube en la misma proporción. "
-        f"PITR 7 días: {EXAMPLE['pitr_billable_gb']:,} GB-mes facturables en octubre de 2026 (lo que excede el tamaño "
-        "de la base, gratis en Hyperscale). "
-        f"Precios de Hyperscale en {EXAMPLE['region_label']}, ZRS, lista menos {discount:.0%}: PITR "
-        f"{usd(prices_gb[region][EXAMPLE['pitr_key']], 3)} y LTR {usd(prices_gb[region][EXAMPLE['ltr_key']], 4)} por "
-        "GB-mes. En octubre la factura real de esta base salió 30% bajo lista en LTR y 43% en PITR. "
-        "Copias: se simula semana a semana; la copia mensual es la primera semanal del mes y la anual la primera del "
-        "año, y una copia que cumple dos reglas se guarda una sola vez. La base parte con las copias del lineamiento "
-        "base. Hoy la base guarda 4 semanales, 12 mensuales y 5 anuales en RA-GRS (geo), que cuesta el doble que ZRS. "
-        "La exportación trimestral del registro cumple la norma (pide copia del registro, no de la base) y pesa una "
-        "fracción de la base; necesita trabajo de la aplicación y validación de Cumplimiento.")
 
 
 def slide_references(deck):
@@ -891,8 +733,6 @@ def main():
     slide_layers(deck)
     slide_azure(deck)
     net = {region: {key: value * (1 - args.discount) for key, value in values.items()} for region, values in tb.items()}
-    net_gb = {region: {key: value / GB_PER_TB for key, value in values.items()} for region, values in net.items()}
-    slide_example(deck, net_gb, args.discount)
     slide_prices(deck, net, f"{today:%d-%m-%Y}", args.discount)
     slide_references(deck)
     os.makedirs(os.path.dirname(os.path.abspath(output)), exist_ok=True)

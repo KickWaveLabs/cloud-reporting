@@ -63,14 +63,13 @@ saving, risk count and calibrated cost empty.
 
 ## Guidelines deck
 
-`bu_guidelines_deck.py` builds the six-slide guidelines deck: the platform-neutral rule (cloud or on-premise,
-any database, servers and file shares) for regular and regulated data, which layer of the application stack gets a
-backup and how snapshots are kept, how it maps to each Azure service with
-PITR and LTR explained, price per TB-month in Central US (LRS and ZRS, net of the bank's discount)
-against the vendors' quoted tariffs, a worked example with one regulated database (cost per month and over 1, 5
-and 10 years under each scope), and the references with the minimum period each norm sets. It needs no Azure sign-in and reads no estate data: prices come
-from the public Azure Retail Prices API, and the rules, regulatory articles and the example database's
-measured size are fixed in the script.
+`bu_guidelines_deck.py` builds the five-slide guidelines deck: the platform-neutral rule (cloud or on-premise,
+any database, servers and file shares) for regular and regulated data; the decision tree that gives each application
+a backup plan code (P0 to P4), drawn in [docs/diagrams/backup-decision-tree.drawio](docs/diagrams/backup-decision-tree.drawio)
+and embedded as its exported PNG (re-export the PNG after editing the diagram); how the base plan is configured in
+Azure (VM, SQL Database, Cosmos DB) and how VM snapshots are kept; price per TB-month in Central US (LRS and ZRS, net
+of the bank's discount) against the vendors' quoted tariffs; and the references with the minimum period each norm
+sets. It needs no Azure sign-in and reads no estate data: prices come from the public Azure Retail Prices API.
 
 ```bash
 python backup/src/bu_guidelines_deck.py   # backup/reports/<date>-lineamientos/lineamientos_backup.pptx
