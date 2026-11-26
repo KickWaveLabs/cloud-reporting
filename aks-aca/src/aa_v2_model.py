@@ -59,7 +59,7 @@ import aa_common as aa
 import aa_deck_exec_v1 as v1
 
 DEFAULTS = {
-    "max_tps": 100, "max_services": 15, "min_saving": 0.10,
+    "max_tps": 100, "max_services": 15, "min_saving": 0.0,
     "concurrent_requests": 10, "traffic_share": 1.0, "sizing_basis": "BUSIEST_HOUR",
     "min_replicas_office": 1, "min_replicas_offhours": 0,
     "aks_from_bia": "NONE", "max_replicas_vs_aks": 0.8,

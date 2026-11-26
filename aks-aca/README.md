@@ -250,7 +250,7 @@ Container Insights; one stopped PROD cluster without metrics.
     zero: that hour is billed only for its 5-minute buckets that cannot be at zero (no traffic in the bucket nor
     in the one before, the 5-minute wait before it scales in). It needs `active_5min` in the metrics' hourly
     files, so rerun `aa_metrics.py` and `aa_cluster_snapshot.py` after updating.
-  - The saving margin (`min_saving`, 10% by default) is applied at the end, not as a criterion.
+  - The saving margin (`min_saving`, 0% by default: a cluster moves when it saves anything; 10% is a stricter option in the workbook) is applied at the end, not as a criterion, and the deck does not mention it.
   - An event-driven cluster (Event Hubs / Service Bus) is counted as in use without measured traffic (group
     IN_USE): its load is messages, and how many one replica handles is not measured yet, so it is not costed.
   - High or constant load (`rule_high_load`): high, more than `max_avg_tps` (20) TPS on average over the day (the
