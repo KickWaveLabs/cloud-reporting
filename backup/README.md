@@ -63,18 +63,25 @@ saving, risk count and calibrated cost empty.
 
 ## Guidelines deck
 
-`bu_guidelines_deck.py` builds the five-slide guidelines deck: the platform-neutral rule (cloud or on-premise,
+`bu_guidelines_deck.py` builds the six-slide guidelines deck: the platform-neutral rule (cloud or on-premise,
 any database, servers and file shares) for regular and regulated data; the decision tree that gives each application
 a backup plan code (P0 to P4), drawn in [docs/diagrams/backup-decision-tree.drawio](docs/diagrams/backup-decision-tree.drawio)
 and embedded as its exported PNG (re-export the PNG after editing the diagram); how the base plan is configured in
 Azure (VM, SQL Database, Cosmos DB) and how VM snapshots are kept; price per TB-month in Central US (LRS and ZRS, net
-of the bank's discount) against the vendors' quoted tariffs; and the references with the minimum period each norm
+of the bank's discount) against the vendors' quoted tariffs; the monthly cost of 1 TB under each plan (the
+calculator's model); and the references with the minimum period each norm
 sets. It needs no Azure sign-in and reads no estate data: prices come from the public Azure Retail Prices API.
 
 ```bash
 python backup/src/bu_guidelines_deck.py   # backup/reports/<date>-lineamientos/lineamientos_backup.pptx
 python backup/src/bu_guidelines_cost.py   # costo_lineamiento_bases.xlsx in the same folder
+python backup/src/bu_guidelines_calculator.py   # calculadora_backup.xlsx in the same folder
 ```
+
+`bu_guidelines_calculator.py` writes the cost calculator for application teams: one row per application and
+service (VM, SQL Database, Cosmos DB) with its size and plan code, and the monthly cost in Azure, D3 and Opción 1.
+Region, discount, redundancy (LRS, ZRS, GRS) and Archive are chosen at the top; assumptions and prices are editable.
+Its model (`plan_cost` in `bu_guidelines_deck.py`) also feeds slide 5. Open it in Excel and save once.
 
 `bu_guidelines_cost.py` is a working file, not part of the deck: LTR cost per database today and under the
 proposed rule, with a scope drop-down per database and a sheet that shows how VMs, Files and databases are

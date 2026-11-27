@@ -8,13 +8,15 @@ Slides:
      backup plan code, P0 to P4, and what each plan keeps
   3. How the base plan is configured in Azure (VM, SQL Database, Cosmos DB) and how VM snapshots are kept
   4. Price per TB-month in Central US for LRS and ZRS backups, net of the bank's discount, against the vendors
-  5. References: the regulation behind slide 1, the examples each norm gives and the minimum time it asks to
+  5. Monthly cost of 1 TB of data under each plan, per service, in Azure and at the vendors (the calculator's
+     model, bu_guidelines_calculator.py)
+  6. References: the regulation behind slide 1, the examples each norm gives and the minimum time it asks to
      keep the data
      (Microsoft and pricing sources are in docs/)
 
 Prices come from the public Azure Retail Prices API (no sign-in, no subscription data). Retention limits and
 regulatory articles are fixed in this file, checked against the official texts in November 2026. The regulation
-is listed on slide 5; every Microsoft and pricing source is in docs/guidelines-references.md. Vendor tariffs are
+is listed on slide 6; every Microsoft and pricing source is in docs/guidelines-references.md. Vendor tariffs are
 the ones quoted in the backup guidelines review (unit to be confirmed).
 
 Usage:
@@ -678,6 +680,91 @@ def slide_prices(deck, tb, retrieved, discount):
 
 WEEKS_PER_MONTH = 365.25 / 12 / 7
 
+# ---------------------------------------------------------------------------
+# Cost model shared by the calculator workbook (bu_guidelines_calculator.py) and the plan cost slide
+# ---------------------------------------------------------------------------
+
+# Long-term copies of each plan as (weekly, monthly, yearly) kept. Azure has no quarterly copy, so P3 keeps 60
+# monthly copies to cover the 20 quarterly ones over 5 years.
+PLAN_POLICIES = {"P1": (4, 12, 0), "P2": (4, 12, 10), "P3": (4, 60, 0), "P4": (4, 12, 10)}
+# Editable in the workbook. SQL LTR weight: billed LTR GB / (used GB x copies kept) on the October 2026 bill. The
+# VM and Cosmos DB weights are assumptions (vault copies are incremental): calibrate them with the bill.
+ASSUMPTIONS = {
+    "vm_daily_change": 0.03,    # share of a VM's data that changes per day (Microsoft: usually 2% to 7%)
+    "sql_pitr_factor": 1.0,     # billable PITR GB per GB of database (PITR is free up to the database size)
+    "sql_ltr_weight": 0.43,     # each SQL LTR copy, as a share of the database size
+    "vm_ltr_weight": 0.10,      # each VM long-term point in the vault, as a share of the VM data
+    "cosmos_ltr_weight": 0.10,  # each Cosmos DB long-term copy after the first full one
+}
+# Azure Backup moves a point to Archive after 3 months in the standard tier, only if it keeps 6 more months.
+ARCHIVE_AFTER_WEEKS, ARCHIVE_MIN_LEFT_WEEKS = 13, 26
+REDUNDANCY_KEYS = {"vault": {"LRS": "vault_lrs", "ZRS": "vault_zrs", "GRS": "vault_grs"},
+                   "archive": {"LRS": "archive_lrs", "GRS": "archive_grs"},
+                   "sql_pitr": {"LRS": "sqldb_pitr_lrs", "ZRS": "sqldb_pitr_zrs", "GRS": "sqldb_pitr_geo"},
+                   "sql_ltr": {"LRS": "sqldb_ltr_lrs", "ZRS": "sqldb_ltr_zrs", "GRS": "sqldb_ltr_geo"}}
+SERVICES = ("VM", "SQL Database", "Cosmos DB")
+
+
+def steady_copies(policy):
+    """Long-term copies kept once the plan is in steady state (average over one year), and the share of them that
+    Azure Backup can hold in Archive. A copy is kept as long as the longest rule it satisfies."""
+    weekly, monthly, yearly = policy
+    counts, archived = [], []
+    for now in range(1040, 1092):
+        kept_now = in_archive = 0
+        for taken in range(now - int(max(weekly, monthly * WEEKS_PER_MONTH, yearly * 52.2)) - 2, now + 1):
+            first = lambda span: math.floor(taken / span) != math.floor((taken - 1) / span)
+            retention = max(weekly, monthly * WEEKS_PER_MONTH if monthly and first(WEEKS_PER_MONTH) else 0,
+                            yearly * 12 * WEEKS_PER_MONTH if yearly and first(12 * WEEKS_PER_MONTH) else 0)
+            age = now - taken
+            if age < retention:
+                kept_now += 1
+                if retention >= ARCHIVE_AFTER_WEEKS + ARCHIVE_MIN_LEFT_WEEKS and age >= ARCHIVE_AFTER_WEEKS:
+                    in_archive += 1
+        counts.append(kept_now)
+        archived.append(in_archive)
+    return sum(counts) / len(counts), sum(archived) / sum(counts)
+
+
+def plan_cost(service, size_tb, plan, prices, short="ZRS", long_term="LRS", archive=True, assumptions=ASSUMPTIONS):
+    """Monthly cost of one service under one plan. prices: net US$ per TB-month (and per protected TB for instance
+    fees). Vendors store the same short- and long-term volume at their Active and Archive tariffs."""
+    a = assumptions
+    stored = plan in PLAN_POLICIES
+    copies, share = steady_copies(PLAN_POLICIES[plan]) if stored else (0, 0)
+    if not stored:
+        short_tb = 0
+    elif service == "VM":
+        short_tb = size_tb * (1 + 6 * a["vm_daily_change"])
+    elif service == "SQL Database":
+        short_tb = size_tb * a["sql_pitr_factor"]
+    else:
+        short_tb = 0  # Cosmos DB continuous 7 days has no backup storage charge
+    if not copies:
+        long_tb = 0
+    elif service == "VM":
+        long_tb = copies * size_tb * a["vm_ltr_weight"]
+    elif service == "SQL Database":
+        long_tb = copies * size_tb * a["sql_ltr_weight"]
+    else:
+        long_tb = size_tb * (1 + (copies - 1) * a["cosmos_ltr_weight"])
+    price = lambda kind, redundancy: prices[REDUNDANCY_KEYS[kind][redundancy]]
+    if service == "VM":
+        short_cost = short_tb * price("vault", short) + (size_tb * prices["vm_instance"] if stored else 0)
+        vault = price("vault", long_term)
+        long_price = (share * price("archive", long_term) + (1 - share) * vault
+                      if archive and long_term in REDUNDANCY_KEYS["archive"] else vault)
+    elif service == "SQL Database":
+        short_cost = short_tb * price("sql_pitr", short)
+        long_price = price("sql_ltr", long_term)
+    else:
+        short_cost = 0
+        long_price = price("vault", long_term)
+    long_cost = long_tb * long_price + (size_tb * prices["cosmos_instance"] if service == "Cosmos DB" and copies else 0)
+    vendors = {name: short_tb * active + long_tb * archive_price for name, active, archive_price in VENDORS}
+    return {"copies": copies, "short_tb": short_tb, "long_tb": long_tb, "azure": short_cost + long_cost, **vendors}
+
+
 
 def kept(policy, now, taken):
     """True when the weekly LTR backup taken in week `taken` is still kept in week `now` under (W, M, Y): the
@@ -700,6 +787,67 @@ def ltr_copies_per_month(policy, months, base=(4, 12, 0)):
         count = sum(kept(policy, now, week) for week in existing + list(range(now + 1)))
         per_month[min(months - 1, math.floor(now / WEEKS_PER_MONTH))].append(count)
     return [sum(values) / len(values) for values in per_month]
+
+
+def slide_plan_costs(deck, net, discount):
+    """Monthly cost of 1 TB of data under each plan, per service, in Azure and at the vendors (the calculator's
+    model, bu_guidelines_calculator.py)."""
+    prices = net["centralus"]
+    short, long_term = SHORT_REDUNDANCY.upper(), LONG_REDUNDANCY.upper()
+    names = [name for name, _, _ in VENDORS]
+    results = {(service, plan): plan_cost(service, 1, plan, prices, short, long_term)
+               for service in SERVICES for plan in PLAN_POLICIES}
+    slide = base_slide(deck, "Cuánto cuesta cada plan: 1 TB de datos al mes",
+                       f"Fuente: calculadora de backup (Excel), Azure Retail Prices API (Central US) menos {discount:.0%}; "
+                       f"corto plazo {short}, largo plazo {long_term} con Archive en VM. Proveedores: tarifas cotizadas.")
+    text_box(slide, Inches(0.35), Inches(1.0), Inches(12.63), Inches(0.3), [[
+        ("US$ al mes por cada TB de datos que se respalda", True, NAVY),
+        (", con todas las copias del plan ya acumuladas. P0 y PN no tienen costo de backup. En verde, la opción más "
+         "barata de cada servicio.", False, GREY)]], size=9)
+    rows = []
+    for plan in PLAN_POLICIES:
+        name = next(entry[1] for entry in PLANS if entry[0] == plan)
+        cells = [(f"{plan} · {name}", {"bold": True, "color": NAVY})]
+        for service in SERVICES:
+            result = results[service, plan]
+            values = [result["azure"], *[result[vendor] for vendor in names]]
+            best = min(values)
+            cells += [(usd(value, 0), {"color": GREEN, "bold": True} if value == best else {}) for value in values]
+        rows.append(cells)
+    columns = ["Plan"] + [f"{service}\n{option}" for service in SERVICES for option in ["Azure", *names]]
+    grid = table(slide, Inches(0.35), Inches(1.4), Inches(12.63), columns, rows,
+                 [0.19] + [0.09] * 9, row_height=0.5, size=10)
+    grid.rows[0].height = Inches(0.55)
+
+    vm, sql, cosmos = (results[service, "P1"] for service in SERVICES)
+    takeaways = [
+        ("VM", f"Azure es el más barato en todos los planes ({usd(vm['azure'], 0)} al mes en P1): la bóveda guarda "
+               "solo cambios y las copias viejas pasan a Archive."),
+        ("SQL Database", f"Azure cuesta más ({usd(sql['azure'], 0)} en P1) por el PITR de 7 días y porque cada copia "
+                         "LTR pesa 43% de la base. Los proveedores no incluyen recuperar a cualquier minuto."),
+        ("Antes de decidir", "Los proveedores deben confirmar si cobran por TB protegido o almacenado, y el tiempo "
+                             "de traer los datos de vuelta. La calculadora permite probar LRS, ZRS y GRS."),
+    ]
+    for index, (title, text) in enumerate(takeaways):
+        left = Inches(0.35 + index * 4.25)
+        rounded(slide, left, Inches(4.35), Inches(4.13), Inches(1.5), CARD)
+        text_box(slide, left + Inches(0.12), Inches(4.35), Inches(3.89), Inches(1.5),
+                 [[(title, True, ORANGE)], [(text, False, WHITE)]], size=9.5, anchor=MSO_ANCHOR.MIDDLE)
+    text_box(slide, Inches(0.35), Inches(6.0), Inches(12.63), Inches(0.9), [
+        [("Supuestos (editables en la calculadora): ", True, NAVY),
+         (f"VM cambia {ASSUMPTIONS['vm_daily_change']:.0%} al día y cada copia de largo plazo pesa "
+          f"{ASSUMPTIONS['vm_ltr_weight']:.0%}; SQL factura PITR por {ASSUMPTIONS['sql_pitr_factor']:.0f} vez su "
+          f"tamaño y cada LTR pesa {ASSUMPTIONS['sql_ltr_weight']:.0%} (factura de oct-2026); Cosmos continuo 7 días "
+          f"gratis y cada copia en bóveda después de la primera pesa {ASSUMPTIONS['cosmos_ltr_weight']:.0%}. Los "
+          "proveedores guardan el mismo volumen a su tarifa Active (corto) y Archive (largo).", False, GREY)]],
+             size=9)
+    slide.notes_slide.notes_text_frame.text = (
+        "La tabla sale del mismo modelo que la calculadora en Excel (bu_guidelines_calculator.py): copias de largo "
+        "plazo de cada plan en régimen (P1 ≈ 15, P2 y P4 ≈ 24, P3 ≈ 63, porque Azure no tiene copia trimestral y "
+        "usa 60 mensuales), por el peso de cada copia y el precio por TB. En VM, las copias con más de 3 meses y al "
+        "menos 6 meses de vida pasan a Archive (solo en LRS o GRS). Cosmos suma la instancia protegida de la bóveda. "
+        "Los pesos de copia de VM y Cosmos son supuestos: calibrarlos con la factura. "
+        "Proveedores: se asume que guardan el mismo volumen que Azure; si cobran por TB protegido, el costo cambia.")
 
 
 def slide_references(deck):
@@ -740,6 +888,7 @@ def main():
     slide_azure(deck)
     net = {region: {key: value * (1 - args.discount) for key, value in values.items()} for region, values in tb.items()}
     slide_prices(deck, net, f"{today:%d-%m-%Y}", args.discount)
+    slide_plan_costs(deck, net, args.discount)
     slide_references(deck)
     os.makedirs(os.path.dirname(os.path.abspath(output)), exist_ok=True)
     deck.save(output)
