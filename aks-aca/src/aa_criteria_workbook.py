@@ -956,11 +956,14 @@ def write_usage(sheet, top, left=USAGE_COLUMN):
         cpu.series[0].tx = SeriesLabel(v="CPU used")
         cpu.series[0].graphicalProperties.line.solidFill = "C0504D"
         cpu.series[0].graphicalProperties.line.width = 28575
-        cpu.y_axis.axId, cpu.y_axis.title, cpu.y_axis.crosses = 200, "CPU", "max"
+        cpu.y_axis.axId, cpu.y_axis.crosses = 200, "max"
         cpu.y_axis.majorGridlines, cpu.y_axis.delete = None, False
-        cpu.y_axis.numFmt = NumFmt(formatCode="0%", sourceLinked=False)
+        cpu.y_axis.numFmt = NumFmt(formatCode="0.0%", sourceLinked=False)
         cpu.y_axis.scaling.min = 0
         traffic += cpu
+        # room on the right for the CPU axis labels (the legend names the line)
+        traffic.layout = Layout(manualLayout=ManualLayout(layoutTarget="inner", xMode="edge", yMode="edge", x=0.1,
+                                                          y=0.13, w=0.78, h=0.6))
         sheet.add_chart(traffic, anchor)
     # Capacity of the nodes in office hours (weekday): what the "micro"-services request and what is used, as a share
     # of what the nodes offer. Requests far above use: right-size the requests; requests far below 100%: too many nodes.
@@ -990,7 +993,6 @@ def write_usage(sheet, top, left=USAGE_COLUMN):
     capacity_chart = BarChart()
     capacity_chart.type, capacity_chart.grouping, capacity_chart.varyColors = "bar", "clustered", False
     capacity_chart.title, capacity_chart.height, capacity_chart.width = "Capacity: requested and used", 8, 16
-    capacity_chart.y_axis.title = "Share of what the nodes offer"
     capacity_chart.add_data(Reference(sheet, min_col=left + 1, max_col=left + 3, min_row=box, max_row=box + 2),
                             titles_from_data=True)
     for series, colour in zip(capacity_chart.series, ("A5A5A5", "4472C4", "C0504D")):
@@ -1001,23 +1003,27 @@ def write_usage(sheet, top, left=USAGE_COLUMN):
     capacity_chart.y_axis.numFmt = NumFmt(formatCode="0%", sourceLinked=False)
     capacity_chart.y_axis.scaling.min, capacity_chart.y_axis.scaling.max, capacity_chart.y_axis.majorUnit = 0, 1, 0.25
     capacity_chart.legend.position = "b"
-    sheet.add_chart(capacity_chart, "AM2")
-    # Memory by hour, weekday only: it does not follow the traffic (weekend looks the same).
-    memory = BarChart()
-    memory.type, memory.grouping, memory.overlap, memory.gapWidth = "col", "percentStacked", 100, 40
-    memory.title, memory.height, memory.width = "Weekday memory: apps, system, unused", 8, 16
-    memory.y_axis.title, memory.x_axis.title = "Share of the nodes' memory", "Hour"
-    memory.add_data(Reference(sheet, min_col=left + 2, max_col=left + 4, min_row=top, max_row=last),
-                    titles_from_data=True)
-    for series, name, colour in zip(memory.series, ("Applications", "System pool", "Unused"),
-                                    ("4472C4", "C0504D", "D9D9D9")):
-        series.tx = SeriesLabel(v=name)
-        series.graphicalProperties.solidFill = colour
-        series.graphicalProperties.line.solidFill = colour
-    memory.set_categories(hours)
-    hour_axis(memory)
-    memory.y_axis.numFmt = NumFmt(formatCode="0%", sourceLinked=False)
-    sheet.add_chart(memory, "AM20")
+    capacity_chart.legend.overlay = False
+    capacity_chart.layout = Layout(manualLayout=ManualLayout(layoutTarget="inner", xMode="edge", yMode="edge", x=0.12,
+                                                             y=0.13, w=0.84, h=0.58))
+    sheet.add_chart(capacity_chart, "AC38")
+    # Memory by hour, weekday and weekend: applications, system pool and unused (grey). It does not follow the traffic.
+    for block, day, anchor in ((0, "Weekday", "AM2"), (4, "Weekend", "AM20")):
+        memory = BarChart()
+        memory.type, memory.grouping, memory.overlap, memory.gapWidth = "col", "percentStacked", 100, 40
+        memory.title, memory.height, memory.width = f"{day} memory: apps, system, unused", 8, 16
+        memory.y_axis.title, memory.x_axis.title = "Share of the nodes' memory", "Hour"
+        memory.add_data(Reference(sheet, min_col=left + 2 + block, max_col=left + 4 + block, min_row=top, max_row=last),
+                        titles_from_data=True)
+        for series, name, colour in zip(memory.series, ("Applications", "System pool", "Unused"),
+                                        ("4472C4", "C0504D", "D9D9D9")):
+            series.tx = SeriesLabel(v=name)
+            series.graphicalProperties.solidFill = colour
+            series.graphicalProperties.line.solidFill = colour
+        memory.set_categories(hours)
+        hour_axis(memory)
+        memory.y_axis.numFmt = NumFmt(formatCode="0%", sourceLinked=False)
+        sheet.add_chart(memory, anchor)
     for offset in range(len(headers)):
         sheet.column_dimensions[get_column_letter(left + offset)].width = 12
 
