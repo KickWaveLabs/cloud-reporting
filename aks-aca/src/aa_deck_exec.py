@@ -275,24 +275,24 @@ def slide_criteria(deck, source):
         (f"No más de {model.DEFAULTS['max_tps']} TPS", "Promedio de su hora pico, en los días del mes."),
         (f"No más de {model.DEFAULTS['max_services']} {MICRO}", "En el cluster."),
         ("No es compartida", "No es autenticación ni Core.") if model.DEFAULTS["rule_shared"] == "YES" else None,
-        ("Sin carga alta ni constante", f"Hasta {model.DEFAULTS['max_avg_tps'] * 86400 / 1e6:.1f} millones de solicitudes al día "
-                                        f"({model.DEFAULTS['max_avg_tps']} TPS).") if model.DEFAULTS["rule_high_load"] == "YES" else None,
+        ("Sin carga alta ni constante", f"No más de {model.DEFAULTS['max_avg_tps'] * 86400 / 1e6:.1f} millones de solicitudes al "
+                                        "día, y baja de noche.") if model.DEFAULTS["rule_high_load"] == "YES" else None,
         ("Sin carga constante", f"Usaría menos del {d.percent(model.DEFAULTS['max_replicas_vs_aks'])} de "
                                 "las réplicas de hoy.") if model.DEFAULTS["rule_constant_load"] == "YES" else None]
     conditions = [condition for condition in conditions if condition]  # the rules switched off in the variables
     words = {2: "dos", 3: "tres", 4: "cuatro", 5: "cinco"}
     slide = d.base_slide(deck, f"Para pasar a Container Apps: {words[len(conditions)]} criterios por cluster", source)
-    width, height, gap = Inches(5.9), Inches(1.1), Inches(0.3)
+    width, height, gap = Inches(5.9), Inches(1.3), Inches(0.3)
     for index, (title, meaning) in enumerate(conditions):
         alone = index == len(conditions) - 1 and index % 2 == 0  # an odd last card takes the whole row
-        v1.condition_card(slide, Inches(0.6) + (index % 2) * (width + gap), Inches(1.25) + (index // 2) * Inches(1.25),
+        v1.condition_card(slide, Inches(0.6) + (index % 2) * (width + gap), Inches(1.25) + (index // 2) * Inches(1.45),
                           2 * width + gap if alone else width, height, str(index + 1), d.GREEN, title, meaning)
-    v1.box(slide, Inches(0.6), Inches(3.85), Inches(12.1), Inches(0.75), d.LIGHT)
-    d.text_box(slide, Inches(0.9), Inches(3.85), Inches(11.5), Inches(0.75),
+    v1.box(slide, Inches(0.6), Inches(4.2), Inches(12.1), Inches(0.75), d.LIGHT)
+    d.text_box(slide, Inches(0.9), Inches(4.2), Inches(11.5), Inches(0.75),
                f"Siempre se queda en AKS si un {MICRO_ONE} demanda más CPU o memoria de la que soporta Container Apps.",
                size=14, bold=True, color=d.NAVY, anchor=d.MSO_ANCHOR.MIDDLE)
-    v1.box(slide, Inches(0.6), Inches(4.85), Inches(12.1), Inches(0.75), d.LIGHT)
-    d.text_box(slide, Inches(0.9), Inches(4.85), Inches(11.5), Inches(0.75), sizing("band"), size=14, color=d.NAVY,
+    v1.box(slide, Inches(0.6), Inches(5.2), Inches(12.1), Inches(0.75), d.LIGHT)
+    d.text_box(slide, Inches(0.9), Inches(5.2), Inches(11.5), Inches(0.75), sizing("band"), size=14, color=d.NAVY,
                anchor=d.MSO_ANCHOR.MIDDLE)
 
 
