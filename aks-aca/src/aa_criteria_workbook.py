@@ -86,12 +86,12 @@ HIDDEN_SHEETS = ["Latency", "Traffic", "Data", "TrafficData", "LatencyData", "La
                  "UsageData"]
 USAGE_COLUMNS = ["cluster", "cod_app", "day_type", "hour", "cpu_used_avg", "cpu_system_avg", "cpu_allocatable",
                  "mem_used_avg_gib", "mem_system_avg_gib", "mem_allocatable_gib"]
-USAGE_COLUMN = 40  # Calculator: column AN, the CPU and memory of each hour, right of their charts (9 columns)
+USAGE_COLUMN = 50  # Calculator: column AX, the CPU and memory of each hour, right of their charts (9 columns)
 TOP = 20  # rows of each Top costs table
 GREEN, AMBER = PatternFill("solid", fgColor="C6EFCE"), PatternFill("solid", fgColor="FFEB9C")
 BLOCK = 8  # Calculator: columns per day type (TPS min, average, peak, today, by peak, by busiest hour, by average,
 #            chosen)
-FIVE_MINUTES_COLUMN = 50  # Calculator: column AX, right of the CPU and memory table
+FIVE_MINUTES_COLUMN = 60  # Calculator: column BH, right of the CPU and memory table
 HOUR_LABEL_STEP = 4  # hours 0, 4, 8 ... 20 on the charts: office hours are 8:00 to 19:59
 LISTS = {"sizing_basis": '"PEAK,BUSIEST_HOUR,AVERAGE"', "capacity_from_today": '"NO,YES"',
          "size_from_usage": '"NO,YES"', "environment_fee": '"NO,YES"',
@@ -911,8 +911,8 @@ def write_calculator(sheet, default_scope):
 
 def write_usage(sheet, top, left=USAGE_COLUMN):
     """CPU and memory the nodes use each hour, as a share of what they offer (weekday and weekend), and charts next to
-    the TPS ones: TPS against CPU (each on its own axis, since CPU moves in a few percent), and the memory used by the
-    applications and by the system pool on a 0-100% axis (it does not follow the traffic)."""
+    the TPS ones: CPU at its own scale (it moves in a few percent) and memory split into applications, system pool and
+    unused (it does not follow the traffic)."""
     sheet.cell(row=top - 1, column=left, value="CPU and memory used each hour (share of what the nodes offer)").font = BOLD
     parts = ["CPU", "memory, applications", "memory, system", "memory, unused"]
     headers = ["Hour"] + [f"Weekday {part}" for part in parts] + [f"Weekend {part}" for part in parts]
@@ -937,43 +937,34 @@ def write_usage(sheet, top, left=USAGE_COLUMN):
                 sheet.cell(row=row, column=left + block + offset, value="=" + value).number_format = PCT
     last = top + 24
     hours = Reference(sheet, min_col=left, min_row=top + 1, max_row=last)
-    # TPS against CPU: CPU on the left axis at its own scale, the hour's TPS on the right one.
-    for block, tps_block, title, anchor in ((0, 0, "Weekday: TPS against CPU", "AC2"),
-                                            (4, BLOCK, "Weekend: TPS against CPU", "AC38")):
+    # Next to each TPS chart: CPU at its own scale (it moves in a few percent), then the memory: applications, system
+    # pool and unused (grey), stacked to 100% of what the nodes offer.
+    for block, day, row_anchor in ((0, "Weekday", 2), (4, "Weekend", 20)):
         cpu = LineChart()
-        cpu.title, cpu.height, cpu.width = title, 8, 16
-        cpu.y_axis.title, cpu.x_axis.title = "CPU used", "Hour"
+        cpu.title, cpu.height, cpu.width = f"{day} CPU used", 8, 16
+        cpu.y_axis.title, cpu.x_axis.title = "Share of the nodes' CPU", "Hour"
         cpu.add_data(Reference(sheet, min_col=left + 1 + block, min_row=top, max_row=last), titles_from_data=True)
         cpu.series[0].tx = SeriesLabel(v="CPU used")
         cpu.set_categories(hours)
         hour_axis(cpu)
         cpu.y_axis.numFmt = NumFmt(formatCode="0%", sourceLinked=False)  # after hour_axis, which sets "0"
         cpu.y_axis.scaling.min = 0
-        tps = LineChart()
-        tps.add_data(Reference(sheet, min_col=3 + tps_block, max_col=4 + tps_block, min_row=top, max_row=last),
-                     titles_from_data=True)
-        for series, name in zip(tps.series, ("TPS average", "TPS peak")):
+        sheet.add_chart(cpu, f"AC{row_anchor}")
+        memory = BarChart()
+        memory.type, memory.grouping, memory.overlap, memory.gapWidth = "col", "percentStacked", 100, 40
+        memory.title, memory.height, memory.width = f"{day} memory: apps, system, unused", 8, 16
+        memory.y_axis.title, memory.x_axis.title = "Share of the nodes' memory", "Hour"
+        memory.add_data(Reference(sheet, min_col=left + 2 + block, max_col=left + 4 + block, min_row=top, max_row=last),
+                        titles_from_data=True)
+        for series, name, colour in zip(memory.series, ("Applications", "System pool", "Unused"),
+                                        ("4472C4", "C0504D", "D9D9D9")):
             series.tx = SeriesLabel(v=name)
-        tps.y_axis.axId, tps.y_axis.title, tps.y_axis.crosses = 200, "TPS", "max"
-        tps.y_axis.majorGridlines, tps.y_axis.delete = None, False
-        tps.y_axis.numFmt = NumFmt(formatCode="0", sourceLinked=False)
-        cpu += tps
-        sheet.add_chart(cpu, anchor)
-    # Memory: applications, system pool and unused, stacked to 100% of what the nodes offer.
-    # Memory used, stacked on a 0-100% axis: the empty space above is what the nodes offer and nobody uses.
-    memory = BarChart()
-    memory.type, memory.grouping, memory.overlap = "col", "stacked", 100
-    memory.title, memory.height, memory.width = "Weekday memory used: apps and system", 8, 16
-    memory.y_axis.title, memory.x_axis.title = "Share of the nodes' memory", "Hour"
-    memory.add_data(Reference(sheet, min_col=left + 2, max_col=left + 3, min_row=top, max_row=last),
-                    titles_from_data=True)
-    for series, name in zip(memory.series, ("Applications", "System pool")):
-        series.tx = SeriesLabel(v=name)
-    memory.set_categories(hours)
-    hour_axis(memory)
-    memory.y_axis.numFmt = NumFmt(formatCode="0%", sourceLinked=False)
-    memory.y_axis.scaling.min, memory.y_axis.scaling.max, memory.y_axis.majorUnit = 0, 1, 0.25
-    sheet.add_chart(memory, "AC20")
+            series.graphicalProperties.solidFill = colour
+            series.graphicalProperties.line.solidFill = colour
+        memory.set_categories(hours)
+        hour_axis(memory)
+        memory.y_axis.numFmt = NumFmt(formatCode="0%", sourceLinked=False)
+        sheet.add_chart(memory, f"AM{row_anchor}")
     for offset in range(len(headers)):
         sheet.column_dimensions[get_column_letter(left + offset)].width = 12
 
