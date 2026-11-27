@@ -260,6 +260,10 @@ Container Insights; one stopped PROD cluster without metrics.
     weekday hour at `min_quiet_share` (50%) of the weekday average or more. Only minimum and average are used. The
     replicas-against-today rule below is off by default (`rule_constant_load` NO).
   - The deck and the workbook keep the file they overwrite in `versions/` next to them, named by its last change.
+  - The Calculator also charts, next to the TPS, the CPU and memory the cluster's nodes use each hour as a share of
+    what they offer (weekday and weekend, with the system pool's memory), from
+    `aa-metrics/aks_usage_hourly_profile.csv` (written by `aa_metrics.py` from the same hourly node series as the
+    monthly file; rerun it, the finished month comes from its cache).
   - Besides size, TPS and "micro"-services, a cluster stays on AKS when its load is high and
     constant: Container Apps would run, on average over the month, at least `max_replicas_vs_aks` (80%) of the
     replicas it runs today (`aca_replicas` / `replicas_today_total` from cluster_criteria_input.csv), so it would

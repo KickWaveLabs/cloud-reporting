@@ -39,6 +39,7 @@ from openpyxl.chart import BarChart, LineChart, Reference
 from openpyxl.chart.label import DataLabelList
 from openpyxl.chart.layout import Layout, ManualLayout
 from openpyxl.chart.legend import Legend
+from openpyxl.chart.data_source import NumFmt
 from openpyxl.chart.series import SeriesLabel
 from openpyxl.formatting.rule import FormulaRule
 from openpyxl.styles import Alignment, Font, PatternFill
@@ -81,12 +82,16 @@ SCALE_TO_ZERO_NOTE = [
     "So an hour with traffic only part of the time is billed only for its 5-minute buckets with traffic or right "
     "after it. By peak takes that hour's day with the fewest buckets off; by average, the average day; by busiest "
     "hour, its own buckets. With a minimum of 1 the hour is billed whole."]
-HIDDEN_SHEETS = ["Latency", "Traffic", "Data", "TrafficData", "LatencyData", "LatencyLayers", "AllClusters", "Lists"]
+HIDDEN_SHEETS = ["Latency", "Traffic", "Data", "TrafficData", "LatencyData", "LatencyLayers", "AllClusters", "Lists",
+                 "UsageData"]
+USAGE_COLUMNS = ["cluster", "cod_app", "day_type", "hour", "cpu_used_avg", "cpu_system_avg", "cpu_allocatable",
+                 "mem_used_avg_gib", "mem_system_avg_gib", "mem_allocatable_gib"]
+USAGE_COLUMN = 40  # Calculator: column AN, the CPU and memory of each hour, right of their charts
 TOP = 20  # rows of each Top costs table
 GREEN, AMBER = PatternFill("solid", fgColor="C6EFCE"), PatternFill("solid", fgColor="FFEB9C")
 BLOCK = 8  # Calculator: columns per day type (TPS min, average, peak, today, by peak, by busiest hour, by average,
 #            chosen)
-FIVE_MINUTES_COLUMN = 36  # Calculator: column AJ, right of the charts
+FIVE_MINUTES_COLUMN = 47  # Calculator: column AU, right of the CPU and memory table
 HOUR_LABEL_STEP = 4  # hours 0, 4, 8 ... 20 on the charts: office hours are 8:00 to 19:59
 LISTS = {"sizing_basis": '"PEAK,BUSIEST_HOUR,AVERAGE"', "capacity_from_today": '"NO,YES"',
          "size_from_usage": '"NO,YES"', "environment_fee": '"NO,YES"',
@@ -341,6 +346,21 @@ def query_clusters(folder):
     Sorted = Table.Sort(Typed, {{{{"cod_app", Order.Ascending}}, {{"cluster", Order.Ascending}}}})
 in
     Sorted'''
+
+
+def query_usage(folder):
+    numbers = [c for c in USAGE_COLUMNS if c not in ("cluster", "cod_app", "day_type")]
+    return v1wb.query_head(folder) + f'''    Usage = ReadCsv("aa-metrics", "aks_usage_hourly_profile.csv"),
+    Columns = Table.SelectColumns(Usage, {{{m_list(USAGE_COLUMNS)}}}),
+    Typed = {m_typed("Columns", numbers)}
+in
+    Typed'''
+
+
+def usage_rows(results):
+    rows = aa.read_csv(os.path.join(results, "aa-metrics", "aks_usage_hourly_profile.csv"))
+    return [[number(row[c]) if c not in ("cluster", "cod_app", "day_type") else row[c] for c in USAGE_COLUMNS]
+            for row in rows]
 
 
 def query_traffic(folder):
@@ -854,7 +874,8 @@ def write_calculator(sheet, default_scope):
         for column, formula in formulas.items():
             sheet.cell(row=cost_top + offset, column=column, value="=" + formula).number_format = fmt
     sheet.cell(row=cost_top + len(meters) + 2, column=1,
-               value="By peak is the figure presented, the most conservative; by busiest hour replays each hour's "
+               value=f"By {model.DEFAULTS['sizing_basis'].lower().replace('_', ' ')} is the figure presented. By peak "
+                     "is the most conservative; by busiest hour replays each hour's "
                      "busiest occurrence in the month 5 minutes at a time; by average is the optimistic one.")
     for offset, text in enumerate(SCALE_TO_ZERO_NOTE, start=3):
         sheet.cell(row=cost_top + len(meters) + offset, column=1, value=text)
@@ -879,12 +900,56 @@ def write_calculator(sheet, default_scope):
     replicas_chart.set_categories(Reference(sheet, min_col=1, min_row=top + 1, max_row=last))
     hour_axis(replicas_chart)
     sheet.add_chart(replicas_chart, "S38")
+    write_usage(sheet, top)
     write_five_minutes(sheet, top)
     sheet.column_dimensions["A"].width = 40
     for column in "BCDEFGHIJKLMNOPQ":
         sheet.column_dimensions[column].width = 13
 
 
+
+
+def write_usage(sheet, top, left=USAGE_COLUMN):
+    """CPU and memory the nodes use each hour, as a share of what they offer (weekday and weekend), with the system
+    pool's part of the memory, and a chart of each next to the TPS charts: traffic against use, hour by hour."""
+    sheet.cell(row=top - 1, column=left, value="CPU and memory used each hour (share of what the nodes offer)").font = BOLD
+    headers = ["Hour", "Weekday CPU", "Weekday memory", "Weekday memory, system", "Weekend CPU", "Weekend memory",
+               "Weekend memory, system"]
+    for offset, header in enumerate(headers):
+        sheet.cell(row=top, column=left + offset, value=header).font = BOLD
+    is_cluster = 'COUNTIF(Criteria[cluster],$B$2)>0'
+    for hour in range(24):
+        row = top + 1 + hour
+        sheet.cell(row=row, column=left, value=hour)
+        for block, day_type in ((0, "weekday"), (3, "weekend")):
+            # SUMIFS takes no IF for its range: one per scope (a cluster, or every cluster of an application)
+            total = lambda column, day=day_type: (
+                f'IF({is_cluster},SUMIFS(UsageData[{column}],UsageData[cluster],$B$2,UsageData[day_type],"{day}",'
+                f'UsageData[hour],{hour}),SUMIFS(UsageData[{column}],UsageData[cod_app],$B$2,UsageData[day_type],'
+                f'"{day}",UsageData[hour],{hour}))')
+            shares = [(total("cpu_used_avg"), total("cpu_allocatable")),
+                      (total("mem_used_avg_gib"), total("mem_allocatable_gib")),
+                      (total("mem_system_avg_gib"), total("mem_allocatable_gib"))]
+            for offset, (used, offered) in enumerate(shares, start=1):
+                cell = sheet.cell(row=row, column=left + block + offset,
+                                  value=f'=IF({offered}>0,{used}/{offered},"")')
+                cell.number_format = PCT
+    last = top + 24
+    for block, title, anchor in ((0, "Weekday CPU and memory by hour", "AC2"), (3, "Weekend CPU and memory by hour", "AC20")):
+        chart = LineChart()
+        chart.title, chart.height, chart.width = title, 8, 16
+        chart.y_axis.title, chart.x_axis.title = "Share of the nodes", "Hour"
+        chart.y_axis.scaling.min, chart.y_axis.scaling.max, chart.y_axis.majorUnit = 0, 1, 0.25
+        chart.add_data(Reference(sheet, min_col=left + 1 + block, max_col=left + 3 + block, min_row=top, max_row=last),
+                       titles_from_data=True)
+        for series, name in zip(chart.series, ("CPU", "Memory", "Memory, system pool")):
+            series.tx = SeriesLabel(v=name)
+        chart.set_categories(Reference(sheet, min_col=left, min_row=top + 1, max_row=last))
+        hour_axis(chart)
+        chart.y_axis.numFmt = NumFmt(formatCode="0%", sourceLinked=False)  # after hour_axis, which sets "0"
+        sheet.add_chart(chart, anchor)
+    for offset in range(len(headers)):
+        sheet.column_dimensions[get_column_letter(left + offset)].width = 12
 
 
 def write_five_minutes(sheet, top, left=FIVE_MINUTES_COLUMN):
@@ -1094,7 +1159,7 @@ def build(results, output, criteria="v2"):
     month = clusters[0]["month"] if clusters else ""
     book = Workbook()
     names = ["Results", "Top costs", "Criteria", "Apps", "Calculator", "Latency", "Traffic", "Services", "Prices", "Variables",
-             "Data", "TrafficData", "LatencyData", "LatencyLayers", "AllClusters", "Lists"]
+             "Data", "TrafficData", "LatencyData", "LatencyLayers", "AllClusters", "Lists", "UsageData"]
     sheets = {}
     for index, name in enumerate(names):
         sheets[name] = book.active if index == 0 else book.create_sheet(name)
@@ -1116,6 +1181,7 @@ def build(results, output, criteria="v2"):
     write_query_table(sheets["Lists"], "Scopes", ["scope"], [[scope] for scope in scopes])
     all_clusters = all_cluster_rows(results)
     write_query_table(sheets["AllClusters"], "AllClusters", ALL_CLUSTER_COLUMNS, all_clusters)
+    write_query_table(sheets["UsageData"], "UsageData", USAGE_COLUMNS, usage_rows(results))
     write_traffic(sheets["Traffic"], len(traffic_data))
     write_criteria(sheets["Criteria"], len(clusters_data))
     write_apps(sheets["Apps"], codes)
@@ -1141,8 +1207,9 @@ def build(results, output, criteria="v2"):
         ("LatencyLayers", "LatencyLayers", "LatencyLayers", query_latency_layers(folder), LATENCY_LAYER_COLUMNS),
         ("Lists", "Scopes", "Scopes", query_scopes(folder), ["scope"]),
         ("Apps", "AppList", "AppList", query_apps(folder), ["cod_app"]),
-        ("AllClusters", "AllClusters", "AllClusters", query_all_clusters(folder), ALL_CLUSTER_COLUMNS)])
-    aa.azure.LOG.info("Wrote %s (criteria %s, %d clusters, 8 Power Query connections to %s)", output, criteria,
+        ("AllClusters", "AllClusters", "AllClusters", query_all_clusters(folder), ALL_CLUSTER_COLUMNS),
+        ("UsageData", "UsageData", "UsageData", query_usage(folder), USAGE_COLUMNS)])
+    aa.azure.LOG.info("Wrote %s (criteria %s, %d clusters, 9 Power Query connections to %s)", output, criteria,
                       len(clusters), folder)
 
 

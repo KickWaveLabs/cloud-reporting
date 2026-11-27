@@ -19,6 +19,8 @@ APIM (per API, 5-minute points):
 Outputs (in --output-dir):
   aks_usage_monthly.csv   cluster x pool x month: nodes, allocatable, used (office avg, off-hours avg,
                           p95, max) for CPU and memory
+  aks_usage_hourly_profile.csv  cluster x weekday/weekend x Lima hour: CPU and memory used (average over the days,
+                          maximum), the system pool's part and what the nodes offer (allocatable)
   apim_api_monthly.csv    APIM x API x month: requests (office / off-hours), peak 5 minutes and hour,
                           share of office buckets with traffic, off-hours wake-ups and active buckets
   apim_hourly_profile.csv APIM x API x weekday/weekend x Lima hour: average requests per hour
@@ -121,6 +123,36 @@ def cluster_usage(ctx, cluster, pools, start, end, args):
             "mem_used_p95_gib": round(percentile(mem_all, 0.95), 2),
             "mem_used_max_gib": round(max(bucket["mem_max"] / GIB for _, bucket in points), 2),
         })
+    # Hour-by-hour profile of the cluster (every pool together), weekday and weekend in Lima time, for the criteria
+    # workbook's Calculator: what the nodes use against what they offer each hour of the day.
+    totals = defaultdict(lambda: {"cpu": 0.0, "cpu_max": 0.0, "mem": 0.0, "mem_max": 0.0, "cpu_system": 0.0,
+                                  "mem_system": 0.0})
+    for (pool, moment), bucket in hourly.items():
+        entry = totals[moment]
+        entry["cpu"] += bucket["cpu_avg"] / 1000
+        entry["cpu_max"] += bucket["cpu_max"] / 1000
+        entry["mem"] += bucket["mem_avg"] / GIB
+        entry["mem_max"] += bucket["mem_max"] / GIB
+        if pool_modes.get(pool) == "System":
+            entry["cpu_system"] += bucket["cpu_avg"] / 1000
+            entry["mem_system"] += bucket["mem_avg"] / GIB
+    slots = defaultdict(list)
+    for moment, entry in totals.items():
+        local = moment.astimezone(aa.LIMA)
+        offered = allocatable.get(moment, {})
+        slots[(local.strftime("%Y-%m"), "weekday" if local.weekday() < 5 else "weekend", local.hour)].append(
+            dict(entry, cpu_allocatable=offered.get("cpu", 0), mem_allocatable=offered.get("mem", 0) / GIB))
+    profile = [{"cluster": cluster["name"], "cluster_id": cluster["id"].lower(), "month": month, "day_type": day_type,
+                "hour": hour, "days": len(points),
+                "cpu_used_avg": round(mean([p["cpu"] for p in points]), 3),
+                "cpu_used_max": round(max(p["cpu_max"] for p in points), 3),
+                "cpu_system_avg": round(mean([p["cpu_system"] for p in points]), 3),
+                "cpu_allocatable": round(mean([p["cpu_allocatable"] for p in points]), 2),
+                "mem_used_avg_gib": round(mean([p["mem"] for p in points]), 2),
+                "mem_used_max_gib": round(max(p["mem_max"] for p in points), 2),
+                "mem_system_avg_gib": round(mean([p["mem_system"] for p in points]), 2),
+                "mem_allocatable_gib": round(mean([p["mem_allocatable"] for p in points]), 2)}
+               for (month, day_type, hour), points in sorted(slots.items())]
     # Cluster-wide allocatable, one row per month with pool = "*".
     by_month = defaultdict(list)
     for moment, values in allocatable.items():
@@ -132,7 +164,7 @@ def cluster_usage(ctx, cluster, pools, start, end, args):
             "cpu_allocatable_avg": round(mean([v["cpu"] for v in values if "cpu" in v] or [0]), 2),
             "mem_allocatable_avg_gib": round(mean([v["mem"] / GIB for v in values if "mem" in v] or [0]), 2),
         })
-    return rows
+    return rows, profile
 
 
 # ---------------------------------------------------------------------------
@@ -357,15 +389,18 @@ def main():
     azure.LOG.info("Window %s to %s (UTC); %d clusters, %d APIM", aa.iso_z(start), aa.iso_z(end), len(clusters), len(services))
     output = azure.Output(args.output_dir, args.delimiter)
 
-    usage_rows = []
+    usage_rows, usage_profile = [], []
     if not args.skip_aks:
         pools_by_cluster = defaultdict(list)
         for pool in pools:
             pools_by_cluster[pool["cluster_id"]].append(pool)
         for result in ctx.parallel(lambda cluster: cluster_usage(ctx, cluster, pools_by_cluster[cluster["id"].lower()],
                                                                  start, end, args), clusters, label="aks-metrics"):
-            usage_rows.extend(result or [])
+            rows, hours = result or ([], [])
+            usage_rows.extend(rows)
+            usage_profile.extend(hours)
         output.csv("aks_usage_monthly.csv", aa.with_cod_app(usage_rows, "cluster", cluster_codes))
+        output.csv("aks_usage_hourly_profile.csv", aa.with_cod_app(usage_profile, "cluster", cluster_codes))
 
     api_rows, profile_rows, hourly_rows = [], [], []
     if not args.skip_apim:
