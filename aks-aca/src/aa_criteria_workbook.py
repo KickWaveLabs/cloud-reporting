@@ -910,9 +910,9 @@ def write_calculator(sheet, default_scope):
 
 
 def write_usage(sheet, top, left=USAGE_COLUMN):
-    """CPU and memory the nodes use each hour, as a share of what they offer (weekday and weekend), and two charts
-    next to the TPS ones: TPS against CPU (each on its own axis, since CPU moves in a few percent), and memory split
-    into applications, system pool and unused (it does not follow the traffic)."""
+    """CPU and memory the nodes use each hour, as a share of what they offer (weekday and weekend), and charts next to
+    the TPS ones: TPS against CPU (each on its own axis, since CPU moves in a few percent), and the memory used by the
+    applications and by the system pool on a 0-100% axis (it does not follow the traffic)."""
     sheet.cell(row=top - 1, column=left, value="CPU and memory used each hour (share of what the nodes offer)").font = BOLD
     parts = ["CPU", "memory, applications", "memory, system", "memory, unused"]
     headers = ["Hour"] + [f"Weekday {part}" for part in parts] + [f"Weekend {part}" for part in parts]
@@ -960,17 +960,19 @@ def write_usage(sheet, top, left=USAGE_COLUMN):
         cpu += tps
         sheet.add_chart(cpu, anchor)
     # Memory: applications, system pool and unused, stacked to 100% of what the nodes offer.
+    # Memory used, stacked on a 0-100% axis: the empty space above is what the nodes offer and nobody uses.
     memory = BarChart()
-    memory.type, memory.grouping, memory.overlap = "col", "percentStacked", 100
-    memory.title, memory.height, memory.width = "Weekday memory: apps, system, unused", 8, 16
+    memory.type, memory.grouping, memory.overlap = "col", "stacked", 100
+    memory.title, memory.height, memory.width = "Weekday memory used: apps and system", 8, 16
     memory.y_axis.title, memory.x_axis.title = "Share of the nodes' memory", "Hour"
-    memory.add_data(Reference(sheet, min_col=left + 2, max_col=left + 4, min_row=top, max_row=last),
+    memory.add_data(Reference(sheet, min_col=left + 2, max_col=left + 3, min_row=top, max_row=last),
                     titles_from_data=True)
-    for series, name in zip(memory.series, ("Applications", "System pool", "Unused")):
+    for series, name in zip(memory.series, ("Applications", "System pool")):
         series.tx = SeriesLabel(v=name)
     memory.set_categories(hours)
     hour_axis(memory)
     memory.y_axis.numFmt = NumFmt(formatCode="0%", sourceLinked=False)
+    memory.y_axis.scaling.min, memory.y_axis.scaling.max, memory.y_axis.majorUnit = 0, 1, 0.25
     sheet.add_chart(memory, "AC20")
     for offset in range(len(headers)):
         sheet.column_dimensions[get_column_letter(left + offset)].width = 12
