@@ -46,6 +46,9 @@ GB_PER_TB = 1024
 
 # Vendor tariffs in US$ per TB-month, as quoted. The unit (protected or stored TB) is still to be confirmed.
 VENDORS = [("D3", 56.01, 7.92), ("Opción 1", 49.90, 12.84)]
+# Redundancy the deck prices: short term in ZRS (three zones), long term in LRS so VM copies can go to Archive
+# (Archive does not exist on ZRS vaults). To be confirmed with the boss; the calculator offers LRS, ZRS and GRS.
+SHORT_REDUNDANCY, LONG_REDUNDANCY = "zrs", "lrs"
 # The bank's discount on Azure list prices, applied to every Azure price on slide 4 (vendors quote net prices).
 DISCOUNT = 0.30
 
@@ -369,7 +372,7 @@ def slide_guidelines(deck):
 
     # Left: the rule every production system follows, whatever the platform.
     left, width = Inches(0.35), Inches(4.75)
-    section_bar(slide, left, Inches(1.08), width, "Lineamiento base: todo PROD", NAVY)
+    section_bar(slide, left, Inches(1.08), width, "Lineamiento base: solo producción", NAVY)
     rows = [
         ["Bases de datos\n(cualquier motor)", "Volver a cualquier\nmomento de los\núltimos 7 días",
          "4 semanales\n12 mensuales"],
@@ -388,8 +391,10 @@ def slide_guidelines(deck):
          ("copias completas guardadas meses o años. Cubren la conservación que pide la norma y los errores "
           "que se detectan tarde.", False, GREY)],
         [("", False, GREY)],
-        [("Aplica igual en nube y on-premise. ", True, NAVY),
-         ("La lámina 3 muestra cómo se configura en Azure.", False, GREY)]], size=9.5)
+        [("", False, GREY)],
+        [("Desarrollo y certificación: ", True, NAVY),
+         ("no se habilita backup. Aplica igual en nube y on-premise; la lámina 3 muestra Azure.", False, GREY)]],
+             size=9.5)
 
     divider(slide, Inches(5.3), Inches(1.08), Inches(5.85))
 
@@ -449,10 +454,12 @@ TREE_PNG = os.path.join(TOPIC_DIR, "docs", "diagrams", "backup-decision-tree.png
 # slide 1; the tree itself lives in docs/diagrams/backup-decision-tree.drawio and is exported to PNG.
 PLANS = [
     ("P0", "Sin backup", "–", "–", "No guarda datos: se reinstala. Los logs tienen su propio plazo", GREY),
-    ("PN", "No productivo", "7 días", "–", "–", SOFT),
+    ("PN", "No productivo (DESA, CERT)", "–", "–",
+     "No se habilita backup; queda solo el que el servicio trae y no se puede apagar (PITR de SQL, mínimo 1 día)",
+     SOFT),
     ("P1", "Base", "7 días", "4 semanales + 12 mensuales", "–", NAVY),
     ("P2", "Base + 10 años", "7 días", "Base + 1 anual por 10 años",
-     "Solo si la aplicación borra libros, KYC u operaciones inusuales antes de 10 años", RUST),
+     "La ley pide conservar libros, KYC e inusuales 10 años; aplica si la aplicación los borra antes", RUST),
     ("P3", "Registro de operaciones", "7 días", "Base + 1 por trimestre por 5 años (20 copias)",
      "Copia inmutable. Si la aplicación borra el dato antes de 10 años: + 1 anual por 10 años", RUST),
     ("P4", "LBTR", "7 días", "Base + 1 anual por 10 años", "Prueba de restauración 1 vez al año, documentada", RUST),
@@ -472,11 +479,19 @@ def slide_layers(deck):
         rows.append([(code, {"fill": fill, "color": text, "bold": True}), (name, {"bold": True, "color": NAVY}),
                      short, long_term, (also, {"left": True, "size": 8.5})])
     grid = table(slide, Inches(0.35), top, width, ["Código", "Plan", "Corto plazo", "Largo plazo", "Además"], rows,
-                 [0.07, 0.17, 0.1, 0.28, 0.38], row_height=0.36, size=9)
-    grid.rows[0].height = Inches(0.3)
-    text_box(slide, Inches(0.35), Inches(6.72), width, Inches(0.3), [[
-        ("Si aplica más de una respuesta, se toma el plan más alto (P4 > P3 > P2 > P1). ", True, NAVY),
-        ("El dato regulado suele estar en las bases de BS, Core o mainframe.", False, GREY)]], size=9)
+                 [0.07, 0.17, 0.1, 0.28, 0.38], row_height=0.31, size=8.5)
+    grid.rows[0].height = Inches(0.28)
+    text_box(slide, Inches(0.35), Inches(6.08), width, Inches(0.95), [
+        [("Si aplica más de una respuesta, se toma el plan más alto (P4 > P3 > P2 > P1). ", True, NAVY),
+         ("El dato regulado suele estar en las bases de BS, Core o mainframe.", False, GREY)],
+        [("LBTR: ", True, NAVY),
+         ("sistema de pagos interbancarios de alto valor del BCRP (Liquidación Bruta en Tiempo Real). ", False, GREY),
+         ("Registro de operaciones: ", True, NAVY),
+         ("el que pide la SBS para operaciones de US$10 mil o más, o varias que suman US$50 mil al mes. ", False,
+          GREY)],
+        [("KYC: ", True, NAVY), ("datos para conocer al cliente (identificación, actividad). ", False, GREY),
+         ("Operaciones inusuales: ", True, NAVY),
+         ("las que se revisan y reportan por lavado de activos.", False, GREY)]], size=8.5)
     slide.notes_slide.notes_text_frame.text = (
         "El árbol se recorre por aplicación y da un código de plan. Primero: si la aplicación no guarda datos propios "
         "(canal e integración solo pasan la operación; las plataformas de seguridad guardan logs), no lleva backup: "
@@ -550,8 +565,8 @@ def slide_azure(deck):
 
     note_box(slide, Inches(0.35), Inches(6.12), Inches(12.63), Inches(0.82), [
         [("Redundancia del backup: ", True, NAVY),
-         ("PROD: ZRS (copias en 3 zonas de la región). No productivo: LRS. Archive solo existe en bóvedas LRS.",
-          False, GREY)],
+         ("corto plazo en ZRS (copias en 3 zonas de la región); largo plazo en LRS, que permite pasar las copias de "
+          "VM a Archive. A confirmar.", False, GREY)],
         [("Tiempos: ", True, NAVY),
          ("SQL restaura normalmente en < 12 h; Cosmos DB, 30 a 90 min por TB; Archive tarda hasta 15 h en "
           "rehidratar, dentro de las 48 h hábiles que da la SBS.", False, GREY)]], size=9.5)
@@ -576,40 +591,31 @@ def slide_prices(deck, tb, retrieved, discount):
     transfer = f"~{GB_PER_TB * 8 / 3600:.1f} h/TB a 1 Gbps".replace(".", ",")
     vault_hours = f"~{GB_PER_TB * 1024 / 30 / 3600:.0f} h/TB"
 
-    def priced(label, keys, rpo, rto, extra, best=False):
-        """keys = meter keys for LRS and ZRS; None when the option doesn't exist."""
+    def priced(label, key, rpo, rto, extra, best=False):
         options = {"color": GREEN, "bold": True} if best else {}
-        cells = []
-        for key in keys:
-            if key is None:
-                cells.append(("–", {}))
-            else:
-                cells.append((amount(prices[key]), options))
-        return [label, *cells, (rpo, {"size": 8}), (rto, small), (extra, small)]
+        return [label, (amount(prices[key]), options), (rpo, {"size": 8}), (rto, small), (extra, small)]
 
     def vendor(name, value, tier, rto):
-        return [(f"{name} · {tier}", {"color": RUST}),
-                (f"{amount(value)}  (según su servicio)", {"color": RUST, "bold": True, "span": 2}),
+        return [(f"{name} · {tier}", {"color": RUST}), (amount(value), {"color": RUST, "bold": True}),
                 ("Según su política", {"size": 8}), (rto, small), ("Confirmar TB protegido o almacenado", small)]
 
-    sql_label = "SQL Database"
+    short, long_term = SHORT_REDUNDANCY, LONG_REDUNDANCY
     rows = [
         ["Corto plazo: recuperación operativa"],
-        priced("Azure Backup · VM (bóveda)", ("vault_lrs", "vault_zrs"),
-               "24 h (4 h Enhanced)", f"Snapshot: más rápido; bóveda: {vault_hours}",
-               f"+ {usd(prices['vm_instance'])}/TB protegido"),
-        priced(f"{sql_label} · PITR", ("sqldb_pitr_lrs", "sqldb_pitr_zrs"),
-               "5 a 10 min", "Normalmente < 12 h", "Gratis hasta el tamaño de la base"),
-        ["Cosmos DB · continuo 7 días", ("Sin costo", {"span": 2, "color": GREEN, "bold": True}),
+        priced("Azure Backup · VM (bóveda)", f"vault_{short}", "24 h (4 h Enhanced)",
+               f"Snapshot: más rápido; bóveda: {vault_hours}", f"+ {usd(prices['vm_instance'])}/TB protegido"),
+        priced("SQL Database · PITR", f"sqldb_pitr_{short}", "5 a 10 min", "Normalmente < 12 h",
+               "Gratis hasta el tamaño de la base"),
+        ["Cosmos DB · continuo 7 días", ("Sin costo", {"color": GREEN, "bold": True}),
          ("~100 s", {"size": 8}), ("~30 a 90 min por TB", small), ("Solo se cobra restaurar", small)],
         *[vendor(name, active, "Active", f"Restaurar + traer: {transfer}") for name, active, _ in VENDORS],
         ["Largo plazo: retención"],
-        priced("Azure Backup · Archive (VM)", ("archive_lrs", None), "1 mes",
+        priced("Azure Backup · Archive (VM)", f"archive_{long_term}", "1 mes",
                f"Rehidratar ≤ 15 h + {vault_hours}", "Puntos > 6 meses; mínimo 180 días", best=True),
-        priced(f"{sql_label} · LTR", ("sqldb_ltr_lrs", "sqldb_ltr_zrs"),
-               "1 semana", "Normalmente < 12 h", "Solo backups completos"),
-        priced("Cosmos DB · Backup vault", ("vault_lrs", "vault_zrs"),
-               "1 día", "~30 a 90 min por TB", f"+ {usd(prices['cosmos_instance'])}/TB protegido"),
+        priced("SQL Database · LTR", f"sqldb_ltr_{long_term}", "1 semana", "Normalmente < 12 h",
+               "Solo backups completos"),
+        priced("Cosmos DB · Backup vault", f"vault_{long_term}", "1 día", "~30 a 90 min por TB",
+               f"+ {usd(prices['cosmos_instance'])}/TB protegido"),
         *[vendor(name, archive, "Archive", f"Su Archive + {transfer}") for name, _, archive in VENDORS],
     ]
 
@@ -618,27 +624,27 @@ def slide_prices(deck, tb, retrieved, discount):
                        f"{discount:.0%} de descuento del banco; 1 TB = 1.024 GB. Proveedores: tarifas cotizadas.")
     text_box(slide, Inches(0.35), Inches(1.0), Inches(12.63), Inches(0.28), [[
         ("Unidad: US$ por TB almacenado al mes", True, NAVY),
-        (f", Central US, Azure con {discount:.0%} de descuento. – = el servicio no ofrece esa redundancia.",
-         False, GREY)]], size=9)
+        (f", Central US, Azure con {discount:.0%} de descuento. Corto plazo en {short.upper()} (3 zonas de la "
+         f"región); largo plazo en {long_term.upper()}, que permite Archive.", False, GREY)]], size=9)
     grid = table(slide, Inches(0.35), Inches(1.3), Inches(12.63),
-                 ["Opción", "LRS", "ZRS", "RPO", "RTO aprox. (restaurar)", "Qué más se cobra"], rows,
-                 [0.25, 0.08, 0.08, 0.11, 0.2, 0.28], row_height=0.28, size=8.5)
+                 ["Opción", "Costo", "RPO", "RTO aprox. (restaurar)", "Qué más se cobra"], rows,
+                 [0.27, 0.12, 0.12, 0.21, 0.28], row_height=0.28, size=8.5)
     grid.rows[0].height = Inches(0.36)
     for r, values in enumerate(rows, start=1):
         if len(values) == 1:
             grid.rows[r].height = Inches(0.26)
 
-    vault_protected = prices["vault_zrs"] + prices["vm_instance"]
+    vault_protected = prices[f"vault_{short}"] + prices["vm_instance"]
     actives = [active for _, active, _ in VENDORS]
     archives = [archive for _, _, archive in VENDORS]
     takeaways = [
         ("Largo plazo", f"Archive LRS de Azure: {usd(prices['archive_lrs'])} por TB, "
                         f"{'más barato' if prices['archive_lrs'] < min(archives) else 'frente a'} que el Archive de "
                         f"los proveedores ({' y '.join(amount(value) for value in archives)})."),
-        ("PITR vs LTR", f"En SQL, el PITR ZRS cuesta {prices['sqldb_pitr_zrs'] / prices['sqldb_ltr_zrs']:.0f} veces "
-                        f"el LTR ZRS por TB ({amount(prices['sqldb_pitr_zrs'])} vs "
-                        f"{amount(prices['sqldb_ltr_zrs'])}): PITR corto y LTR para retener."),
-        ("Corto plazo", f"Bóveda ZRS + instancia VM = {usd(vault_protected)} por TB protegido, "
+        ("PITR vs LTR", f"En SQL, el PITR cuesta {prices[f'sqldb_pitr_{short}'] / prices[f'sqldb_ltr_{long_term}']:.0f} "
+                        f"veces el LTR por TB ({amount(prices[f'sqldb_pitr_{short}'])} vs "
+                        f"{amount(prices[f'sqldb_ltr_{long_term}'])}): PITR corto y LTR para retener."),
+        ("Corto plazo", f"Bóveda {short.upper()} + instancia VM = {usd(vault_protected)} por TB protegido, "
                         f"{'más barato' if vault_protected < min(actives) else 'frente a'} que los proveedores "
                         f"({amount(min(actives))}–{amount(max(actives))}), que además suman la transferencia "
                         f"({transfer})."),
@@ -654,7 +660,7 @@ def slide_prices(deck, tb, retrieved, discount):
         "lo mismo en bóvedas y entre 14% y 23% menos en bases de datos. "
         "Cada precio por GB-mes se multiplica por 1.024. Las instancias protegidas se cobran por bloque de datos de "
         "origen: VM US$10 por 500 GB, Cosmos DB US$25 por 500 GB (precio de lista). "
-        "Redundancia: solo LRS y ZRS, las que usa el banco. Cosmos DB continuo 7 días no cobra almacenamiento de "
+        "Redundancia: corto plazo en ZRS (3 zonas), largo plazo en LRS para poder usar Archive; GRS duplica el costo y se ve en la calculadora. Cosmos DB continuo 7 días no cobra almacenamiento de "
         "backup, solo cada restauración. Archive no admite bóvedas ZRS. "
         "El PITR de SQL solo cobra lo que excede el almacenamiento gratis (el tamaño de la base). "
         "Azure Backup guarda incrementales: los TB almacenados son menos que los TB protegidos. "
