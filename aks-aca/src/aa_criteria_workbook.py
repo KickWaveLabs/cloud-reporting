@@ -937,34 +937,87 @@ def write_usage(sheet, top, left=USAGE_COLUMN):
                 sheet.cell(row=row, column=left + block + offset, value="=" + value).number_format = PCT
     last = top + 24
     hours = Reference(sheet, min_col=left, min_row=top + 1, max_row=last)
-    # Next to each TPS chart: CPU at its own scale (it moves in a few percent), then the memory: applications, system
-    # pool and unused (grey), stacked to 100% of what the nodes offer.
-    for block, day, row_anchor in ((0, "Weekday", 2), (4, "Weekend", 20)):
+    # Traffic and CPU: the hour's average TPS as columns (left axis) and the CPU used as a line (right axis, its own
+    # scale), weekday and weekend, next to the TPS charts.
+    for block, tps_block, day, anchor in ((0, 0, "Weekday", "AC2"), (4, BLOCK, "Weekend", "AC20")):
+        traffic = BarChart()
+        traffic.type, traffic.varyColors, traffic.gapWidth = "col", False, 30
+        traffic.title, traffic.height, traffic.width = f"{day}: traffic and CPU", 8, 16
+        traffic.y_axis.title, traffic.x_axis.title = "TPS (average of the hour)", "Hour"
+        traffic.add_data(Reference(sheet, min_col=3 + tps_block, min_row=top, max_row=last), titles_from_data=True)
+        traffic.series[0].tx = SeriesLabel(v="TPS average")
+        traffic.series[0].graphicalProperties.solidFill = "B4C7E7"
+        traffic.series[0].graphicalProperties.line.solidFill = "B4C7E7"
+        traffic.set_categories(hours)
+        hour_axis(traffic)
         cpu = LineChart()
-        cpu.title, cpu.height, cpu.width = f"{day} CPU used", 8, 16
-        cpu.y_axis.title, cpu.x_axis.title = "Share of the nodes' CPU", "Hour"
+        cpu.varyColors = False
         cpu.add_data(Reference(sheet, min_col=left + 1 + block, min_row=top, max_row=last), titles_from_data=True)
         cpu.series[0].tx = SeriesLabel(v="CPU used")
-        cpu.set_categories(hours)
-        hour_axis(cpu)
-        cpu.y_axis.numFmt = NumFmt(formatCode="0%", sourceLinked=False)  # after hour_axis, which sets "0"
+        cpu.series[0].graphicalProperties.line.solidFill = "C0504D"
+        cpu.series[0].graphicalProperties.line.width = 28575
+        cpu.y_axis.axId, cpu.y_axis.title, cpu.y_axis.crosses = 200, "CPU", "max"
+        cpu.y_axis.majorGridlines, cpu.y_axis.delete = None, False
+        cpu.y_axis.numFmt = NumFmt(formatCode="0%", sourceLinked=False)
         cpu.y_axis.scaling.min = 0
-        sheet.add_chart(cpu, f"AC{row_anchor}")
-        memory = BarChart()
-        memory.type, memory.grouping, memory.overlap, memory.gapWidth = "col", "percentStacked", 100, 40
-        memory.title, memory.height, memory.width = f"{day} memory: apps, system, unused", 8, 16
-        memory.y_axis.title, memory.x_axis.title = "Share of the nodes' memory", "Hour"
-        memory.add_data(Reference(sheet, min_col=left + 2 + block, max_col=left + 4 + block, min_row=top, max_row=last),
-                        titles_from_data=True)
-        for series, name, colour in zip(memory.series, ("Applications", "System pool", "Unused"),
-                                        ("4472C4", "C0504D", "D9D9D9")):
-            series.tx = SeriesLabel(v=name)
-            series.graphicalProperties.solidFill = colour
-            series.graphicalProperties.line.solidFill = colour
-        memory.set_categories(hours)
-        hour_axis(memory)
-        memory.y_axis.numFmt = NumFmt(formatCode="0%", sourceLinked=False)
-        sheet.add_chart(memory, f"AM{row_anchor}")
+        traffic += cpu
+        sheet.add_chart(traffic, anchor)
+    # Capacity of the nodes in office hours (weekday): what the "micro"-services request and what is used, as a share
+    # of what the nodes offer. Requests far above use: right-size the requests; requests far below 100%: too many nodes.
+    box = last + 3
+    sheet.cell(row=box - 1, column=left, value="Capacity in office hours, weekday (share of what the nodes offer)").font = BOLD
+    for offset, header in enumerate(["", "Requested by the \"micro\"-services", "Used, office average",
+                                      "Used, busiest hour"]):
+        sheet.cell(row=box, column=left + offset, value=header).font = BOLD
+    office = (top + 1 + 8, top + 1 + 19)  # 8:00 to 19:59
+    span = lambda column: f"{get_column_letter(column)}{office[0]}:{get_column_letter(column)}{office[1]}"
+    whole = lambda column: f"{get_column_letter(column)}{top + 1}:{get_column_letter(column)}{last}"
+    offered = lambda column: (
+        f'(IF({is_cluster},SUMIFS(UsageData[{column}],UsageData[cluster],$B$2,UsageData[day_type],"weekday",'
+        f'UsageData[hour],">=8",UsageData[hour],"<20"),SUMIFS(UsageData[{column}],UsageData[cod_app],$B$2,'
+        f'UsageData[day_type],"weekday",UsageData[hour],">=8",UsageData[hour],"<20"))/12)')
+    requested = lambda column: (
+        f"IF({is_cluster},SUMPRODUCT((Services[cluster]=$B$2)*Services[{column}]*Services[replicas_today_office]),"
+        f"SUMPRODUCT((Services[cod_app]=$B$2)*Services[{column}]*Services[replicas_today_office]))")
+    rows = [("CPU", requested("cpu_request_vcpu"), offered("cpu_allocatable"), f"AVERAGE({span(left + 1)})",
+             f"MAX({whole(left + 1)})"),
+            ("Memory", requested("mem_request_gib"), offered("mem_allocatable_gib"),
+             f"1-AVERAGE({span(left + 4)})", f"1-MIN({whole(left + 4)})")]
+    for offset, (label, asked, nodes, average, busiest) in enumerate(rows, start=1):
+        sheet.cell(row=box + offset, column=left, value=label)
+        for column, formula in ((1, f'IF({nodes}>0,{asked}/{nodes},"")'), (2, average), (3, busiest)):
+            sheet.cell(row=box + offset, column=left + column, value=f"=IFERROR({formula},\"\")").number_format = PCT
+    capacity_chart = BarChart()
+    capacity_chart.type, capacity_chart.grouping, capacity_chart.varyColors = "bar", "clustered", False
+    capacity_chart.title, capacity_chart.height, capacity_chart.width = "Capacity: requested and used", 8, 16
+    capacity_chart.y_axis.title = "Share of what the nodes offer"
+    capacity_chart.add_data(Reference(sheet, min_col=left + 1, max_col=left + 3, min_row=box, max_row=box + 2),
+                            titles_from_data=True)
+    for series, colour in zip(capacity_chart.series, ("A5A5A5", "4472C4", "C0504D")):
+        series.graphicalProperties.solidFill = colour
+        series.graphicalProperties.line.solidFill = colour
+    capacity_chart.set_categories(Reference(sheet, min_col=left, min_row=box + 1, max_row=box + 2))
+    capacity_chart.x_axis.delete = capacity_chart.y_axis.delete = False
+    capacity_chart.y_axis.numFmt = NumFmt(formatCode="0%", sourceLinked=False)
+    capacity_chart.y_axis.scaling.min, capacity_chart.y_axis.scaling.max, capacity_chart.y_axis.majorUnit = 0, 1, 0.25
+    capacity_chart.legend.position = "b"
+    sheet.add_chart(capacity_chart, "AM2")
+    # Memory by hour, weekday only: it does not follow the traffic (weekend looks the same).
+    memory = BarChart()
+    memory.type, memory.grouping, memory.overlap, memory.gapWidth = "col", "percentStacked", 100, 40
+    memory.title, memory.height, memory.width = "Weekday memory: apps, system, unused", 8, 16
+    memory.y_axis.title, memory.x_axis.title = "Share of the nodes' memory", "Hour"
+    memory.add_data(Reference(sheet, min_col=left + 2, max_col=left + 4, min_row=top, max_row=last),
+                    titles_from_data=True)
+    for series, name, colour in zip(memory.series, ("Applications", "System pool", "Unused"),
+                                    ("4472C4", "C0504D", "D9D9D9")):
+        series.tx = SeriesLabel(v=name)
+        series.graphicalProperties.solidFill = colour
+        series.graphicalProperties.line.solidFill = colour
+    memory.set_categories(hours)
+    hour_axis(memory)
+    memory.y_axis.numFmt = NumFmt(formatCode="0%", sourceLinked=False)
+    sheet.add_chart(memory, "AM20")
     for offset in range(len(headers)):
         sheet.column_dimensions[get_column_letter(left + offset)].width = 12
 
