@@ -86,12 +86,12 @@ HIDDEN_SHEETS = ["Latency", "Traffic", "Data", "TrafficData", "LatencyData", "La
                  "UsageData"]
 USAGE_COLUMNS = ["cluster", "cod_app", "day_type", "hour", "cpu_used_avg", "cpu_system_avg", "cpu_allocatable",
                  "mem_used_avg_gib", "mem_system_avg_gib", "mem_allocatable_gib"]
-USAGE_COLUMN = 40  # Calculator: column AN, the CPU and memory of each hour, right of their charts
+USAGE_COLUMN = 40  # Calculator: column AN, the CPU and memory of each hour, right of their charts (9 columns)
 TOP = 20  # rows of each Top costs table
 GREEN, AMBER = PatternFill("solid", fgColor="C6EFCE"), PatternFill("solid", fgColor="FFEB9C")
 BLOCK = 8  # Calculator: columns per day type (TPS min, average, peak, today, by peak, by busiest hour, by average,
 #            chosen)
-FIVE_MINUTES_COLUMN = 47  # Calculator: column AU, right of the CPU and memory table
+FIVE_MINUTES_COLUMN = 50  # Calculator: column AX, right of the CPU and memory table
 HOUR_LABEL_STEP = 4  # hours 0, 4, 8 ... 20 on the charts: office hours are 8:00 to 19:59
 LISTS = {"sizing_basis": '"PEAK,BUSIEST_HOUR,AVERAGE"', "capacity_from_today": '"NO,YES"',
          "size_from_usage": '"NO,YES"', "environment_fee": '"NO,YES"',
@@ -910,44 +910,68 @@ def write_calculator(sheet, default_scope):
 
 
 def write_usage(sheet, top, left=USAGE_COLUMN):
-    """CPU and memory the nodes use each hour, as a share of what they offer (weekday and weekend), with the system
-    pool's part of the memory, and a chart of each next to the TPS charts: traffic against use, hour by hour."""
+    """CPU and memory the nodes use each hour, as a share of what they offer (weekday and weekend), and two charts
+    next to the TPS ones: TPS against CPU (each on its own axis, since CPU moves in a few percent), and memory split
+    into applications, system pool and unused (it does not follow the traffic)."""
     sheet.cell(row=top - 1, column=left, value="CPU and memory used each hour (share of what the nodes offer)").font = BOLD
-    headers = ["Hour", "Weekday CPU", "Weekday memory", "Weekday memory, system", "Weekend CPU", "Weekend memory",
-               "Weekend memory, system"]
+    parts = ["CPU", "memory, applications", "memory, system", "memory, unused"]
+    headers = ["Hour"] + [f"Weekday {part}" for part in parts] + [f"Weekend {part}" for part in parts]
     for offset, header in enumerate(headers):
         sheet.cell(row=top, column=left + offset, value=header).font = BOLD
     is_cluster = 'COUNTIF(Criteria[cluster],$B$2)>0'
     for hour in range(24):
         row = top + 1 + hour
         sheet.cell(row=row, column=left, value=hour)
-        for block, day_type in ((0, "weekday"), (3, "weekend")):
+        for block, day_type in ((0, "weekday"), (4, "weekend")):
             # SUMIFS takes no IF for its range: one per scope (a cluster, or every cluster of an application)
             total = lambda column, day=day_type: (
                 f'IF({is_cluster},SUMIFS(UsageData[{column}],UsageData[cluster],$B$2,UsageData[day_type],"{day}",'
                 f'UsageData[hour],{hour}),SUMIFS(UsageData[{column}],UsageData[cod_app],$B$2,UsageData[day_type],'
                 f'"{day}",UsageData[hour],{hour}))')
-            shares = [(total("cpu_used_avg"), total("cpu_allocatable")),
-                      (total("mem_used_avg_gib"), total("mem_allocatable_gib")),
-                      (total("mem_system_avg_gib"), total("mem_allocatable_gib"))]
-            for offset, (used, offered) in enumerate(shares, start=1):
-                cell = sheet.cell(row=row, column=left + block + offset,
-                                  value=f'=IF({offered}>0,{used}/{offered},"")')
-                cell.number_format = PCT
+            share = lambda used, offered: f'IF({offered}>0,{used}/{offered},"")'
+            memory, system, offered = total("mem_used_avg_gib"), total("mem_system_avg_gib"), total("mem_allocatable_gib")
+            values = [share(total("cpu_used_avg"), total("cpu_allocatable")),
+                      share(f"MAX(0,{memory}-{system})", offered), share(system, offered),
+                      share(f"MAX(0,{offered}-{memory})", offered)]
+            for offset, value in enumerate(values, start=1):
+                sheet.cell(row=row, column=left + block + offset, value="=" + value).number_format = PCT
     last = top + 24
-    for block, title, anchor in ((0, "Weekday CPU and memory by hour", "AC2"), (3, "Weekend CPU and memory by hour", "AC20")):
-        chart = LineChart()
-        chart.title, chart.height, chart.width = title, 8, 16
-        chart.y_axis.title, chart.x_axis.title = "Share of the nodes", "Hour"
-        chart.y_axis.scaling.min, chart.y_axis.scaling.max, chart.y_axis.majorUnit = 0, 1, 0.25
-        chart.add_data(Reference(sheet, min_col=left + 1 + block, max_col=left + 3 + block, min_row=top, max_row=last),
-                       titles_from_data=True)
-        for series, name in zip(chart.series, ("CPU", "Memory", "Memory, system pool")):
+    hours = Reference(sheet, min_col=left, min_row=top + 1, max_row=last)
+    # TPS against CPU: CPU on the left axis at its own scale, the hour's TPS on the right one.
+    for block, tps_block, title, anchor in ((0, 0, "Weekday: TPS against CPU", "AC2"),
+                                            (4, BLOCK, "Weekend: TPS against CPU", "AC38")):
+        cpu = LineChart()
+        cpu.title, cpu.height, cpu.width = title, 8, 16
+        cpu.y_axis.title, cpu.x_axis.title = "CPU used", "Hour"
+        cpu.add_data(Reference(sheet, min_col=left + 1 + block, min_row=top, max_row=last), titles_from_data=True)
+        cpu.series[0].tx = SeriesLabel(v="CPU used")
+        cpu.set_categories(hours)
+        hour_axis(cpu)
+        cpu.y_axis.numFmt = NumFmt(formatCode="0%", sourceLinked=False)  # after hour_axis, which sets "0"
+        cpu.y_axis.scaling.min = 0
+        tps = LineChart()
+        tps.add_data(Reference(sheet, min_col=3 + tps_block, max_col=4 + tps_block, min_row=top, max_row=last),
+                     titles_from_data=True)
+        for series, name in zip(tps.series, ("TPS average", "TPS peak")):
             series.tx = SeriesLabel(v=name)
-        chart.set_categories(Reference(sheet, min_col=left, min_row=top + 1, max_row=last))
-        hour_axis(chart)
-        chart.y_axis.numFmt = NumFmt(formatCode="0%", sourceLinked=False)  # after hour_axis, which sets "0"
-        sheet.add_chart(chart, anchor)
+        tps.y_axis.axId, tps.y_axis.title, tps.y_axis.crosses = 200, "TPS", "max"
+        tps.y_axis.majorGridlines, tps.y_axis.delete = None, False
+        tps.y_axis.numFmt = NumFmt(formatCode="0", sourceLinked=False)
+        cpu += tps
+        sheet.add_chart(cpu, anchor)
+    # Memory: applications, system pool and unused, stacked to 100% of what the nodes offer.
+    memory = BarChart()
+    memory.type, memory.grouping, memory.overlap = "col", "percentStacked", 100
+    memory.title, memory.height, memory.width = "Weekday memory: apps, system, unused", 8, 16
+    memory.y_axis.title, memory.x_axis.title = "Share of the nodes' memory", "Hour"
+    memory.add_data(Reference(sheet, min_col=left + 2, max_col=left + 4, min_row=top, max_row=last),
+                    titles_from_data=True)
+    for series, name in zip(memory.series, ("Applications", "System pool", "Unused")):
+        series.tx = SeriesLabel(v=name)
+    memory.set_categories(hours)
+    hour_axis(memory)
+    memory.y_axis.numFmt = NumFmt(formatCode="0%", sourceLinked=False)
+    sheet.add_chart(memory, "AC20")
     for offset in range(len(headers)):
         sheet.column_dimensions[get_column_letter(left + offset)].width = 12
 
